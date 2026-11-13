@@ -93,6 +93,239 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /v1/lookups/{lookup_id}:
+    get:
+      summary: Retrieve stored alternatives behind a quote's need_ref
+      operationId: get_lookup_v1_lookups__lookup_id__get
+      parameters:
+      - name: lookup_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lookup Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LookupResult'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/policy:
+    get:
+      summary: Read effective procurement policy and known warning codes
+      operationId: get_policy_v1_policy_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResource'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      summary: Persist policy for subsequent operations and audit changed fields
+      operationId: put_policy_v1_policy_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyUpdateRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResource'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/policy/reset:
+    post:
+      summary: Restore committed policy defaults with a human audit event
+      operationId: reset_policy_v1_policy_reset_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyResetRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyResource'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/stats:
+    get:
+      summary: Operator metrics from persisted evidence; no upstream calls
+      operationId: stats_v1_stats_get
+      parameters:
+      - name: since
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Since
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
   /v1/products/{id}:
     get:
       summary: Product
@@ -614,6 +847,23 @@ paths:
           description: Service Unavailable
 components:
   schemas:
+    AgentStats:
+      properties:
+        actor:
+          type: string
+          title: Actor
+          description: 'Distinct agent audit actor, including the agent: prefix.'
+        order_count:
+          type: integer
+          title: Order Count
+          description: Orders created by this agent in the window, regardless of current
+            status.
+      additionalProperties: false
+      type: object
+      required:
+      - actor
+      - order_count
+      title: AgentStats
     ApprovalItem:
       properties:
         order:
@@ -626,6 +876,32 @@ components:
       - order
       - quote
       title: ApprovalItem
+    ApprovalPolicy:
+      properties:
+        max_auto_total_eur:
+          type: number
+          minimum: 0.0
+          title: Max Auto Total Eur
+          description: Net EUR ceiling for automatic confirmation.
+        min_fit_probability:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Min Fit Probability
+          description: Minimum fit probability for automatic confirmation.
+        warnings_need_approval:
+          items:
+            type: string
+          type: array
+          title: Warnings Need Approval
+          description: Known warning codes requiring human review.
+      additionalProperties: false
+      type: object
+      required:
+      - max_auto_total_eur
+      - min_fit_probability
+      - warnings_need_approval
+      title: ApprovalPolicy
     ApprovalRequest:
       properties:
         approver:
@@ -727,6 +1003,24 @@ components:
       - enough
       - coverage
       title: Availability
+    AverageLiveCalls:
+      properties:
+        price:
+          type: number
+          title: Price
+          description: Actual price requests divided by lookups in the window; zero
+            without lookups.
+        availability:
+          type: number
+          title: Availability
+          description: Actual availability requests divided by lookups in the window;
+            zero without lookups.
+      additionalProperties: false
+      type: object
+      required:
+      - price
+      - availability
+      title: AverageLiveCalls
     ErrorResponse:
       properties:
         code:
@@ -756,6 +1050,22 @@ components:
       - status
       - catalog_rows
       title: Health
+    HumanDecisions:
+      properties:
+        approved:
+          type: integer
+          title: Approved
+          description: Successful human APPROVE audit events in the window.
+        rejected:
+          type: integer
+          title: Rejected
+          description: Successful human REJECT audit events in the window.
+      additionalProperties: false
+      type: object
+      required:
+      - approved
+      - rejected
+      title: HumanDecisions
     LiveCalls:
       properties:
         price:
@@ -1096,6 +1406,54 @@ components:
       required:
       - quote_id
       title: OrderRequest
+    PolicyResetRequest:
+      properties:
+        updated_by:
+          type: string
+          minLength: 1
+          title: Updated By
+          description: Name of the human changing the policy.
+      additionalProperties: false
+      type: object
+      required:
+      - updated_by
+      title: PolicyResetRequest
+    PolicyResource:
+      properties:
+        approval:
+          $ref: '#/components/schemas/ApprovalPolicy'
+        reject:
+          $ref: '#/components/schemas/RejectPolicy'
+        ranking_weights:
+          $ref: '#/components/schemas/RankingWeights'
+        shortlist:
+          $ref: '#/components/schemas/ShortlistPolicy'
+        updated_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Updated At
+          description: Last runtime update in UTC; null for committed defaults.
+        updated_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updated By
+          description: Human responsible for the last runtime update.
+        known_warning_codes:
+          items:
+            type: string
+          type: array
+          title: Known Warning Codes
+          description: All warning codes the lookup engine can emit; server supplied.
+      additionalProperties: false
+      type: object
+      required:
+      - approval
+      - reject
+      - ranking_weights
+      title: PolicyResource
     PolicyResult:
       properties:
         outcome:
@@ -1116,6 +1474,29 @@ components:
       - outcome
       - hits
       title: PolicyResult
+    PolicyUpdateRequest:
+      properties:
+        updated_by:
+          type: string
+          minLength: 1
+          title: Updated By
+          description: Name of the human changing the policy.
+        policy:
+          $ref: '#/components/schemas/PolicyResource'
+          description: Editable policy sections. Response metadata may be echoed;
+            the server replaces it.
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+          description: Optional reason for the policy change.
+      additionalProperties: false
+      type: object
+      required:
+      - updated_by
+      - policy
+      title: PolicyUpdateRequest
     Product:
       properties:
         id:
@@ -1380,6 +1761,71 @@ components:
       - deliver_by
       - lines
       title: QuoteRequest
+    RankingWeights:
+      properties:
+        price:
+          type: number
+          minimum: 0.0
+          title: Price
+        coverage:
+          type: number
+          minimum: 0.0
+          title: Coverage
+        reliability:
+          type: number
+          minimum: 0.0
+          title: Reliability
+        co2:
+          type: number
+          minimum: 0.0
+          title: Co2
+        fit:
+          type: number
+          minimum: 0.0
+          title: Fit
+      additionalProperties: false
+      type: object
+      required:
+      - price
+      - coverage
+      - reliability
+      - co2
+      - fit
+      title: RankingWeights
+    RejectPolicy:
+      properties:
+        on_hard_constraint_violation:
+          type: boolean
+          title: On Hard Constraint Violation
+          description: Reject when catalog hard constraints fail.
+        'on':
+          items:
+            type: string
+          type: array
+          title: 'On'
+          description: Known warning codes causing rejection.
+      additionalProperties: false
+      type: object
+      required:
+      - on_hard_constraint_violation
+      - 'on'
+      title: RejectPolicy
+    RuleCount:
+      properties:
+        rule:
+          type: string
+          title: Rule
+          description: Placement policy rule identifier.
+        count:
+          type: integer
+          title: Count
+          description: Rule-hit occurrences in PLACE_ORDER audit events.
+      additionalProperties: false
+      type: object
+      required:
+      - rule
+      - count
+      title: RuleCount
     RuleHit:
       properties:
         rule:
@@ -1394,6 +1840,100 @@ components:
       - rule
       - detail
       title: RuleHit
+    ShortlistPolicy:
+      properties:
+        catalog_pool:
+          type: integer
+          maximum: 100.0
+          minimum: 10.0
+          title: Catalog Pool
+          description: Catalog candidates screened before live Valio calls.
+      additionalProperties: false
+      type: object
+      required:
+      - catalog_pool
+      title: ShortlistPolicy
+    Stats:
+      properties:
+        since:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Since
+          description: Inclusive UTC lower bound; naive input is interpreted as UTC.
+            Null means all history.
+        lookups:
+          type: integer
+          title: Lookups
+          description: LOOKUP audit events in the window.
+        orders_by_status:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Orders By Status
+          description: Current statuses of orders created in the window, including
+            zero counts.
+        placement_outcomes:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Placement Outcomes
+          description: Original CONFIRMED/PENDING_APPROVAL/REJECTED outcomes from
+            PLACE_ORDER events in the window; retries excluded.
+        human_decisions:
+          $ref: '#/components/schemas/HumanDecisions'
+          description: Successful human decisions by event time, even for older orders.
+        confirmed_spend_total_eur:
+          type: number
+          title: Confirmed Spend Total Eur
+          description: Net EUR total of currently CONFIRMED orders created in the
+            window.
+        average_live_calls_per_lookup:
+          $ref: '#/components/schemas/AverageLiveCalls'
+          description: Lookup-only outbound Valio request averages; quote and order
+            checks excluded.
+        total_decisions_calls:
+          type: integer
+          title: Total Decisions Calls
+          description: Actual Decisions HTTP requests recorded in audit events in
+            the window.
+        top_warning_codes:
+          items:
+            $ref: '#/components/schemas/WarningCount'
+          type: array
+          title: Top Warning Codes
+          description: Top five offer warning codes in lookups in the window; count
+            descending, code ascending on ties.
+        top_rule_hits:
+          items:
+            $ref: '#/components/schemas/RuleCount'
+          type: array
+          title: Top Rule Hits
+          description: Top five placement rule hits; count descending, rule ascending
+            on ties.
+        agents_seen:
+          items:
+            $ref: '#/components/schemas/AgentStats'
+          type: array
+          title: Agents Seen
+          description: Agent actors seen in audit events in the window, sorted by
+            actor, with order counts.
+      additionalProperties: false
+      type: object
+      required:
+      - since
+      - lookups
+      - orders_by_status
+      - placement_outcomes
+      - human_decisions
+      - confirmed_spend_total_eur
+      - average_live_calls_per_lookup
+      - total_decisions_calls
+      - top_warning_codes
+      - top_rule_hits
+      - agents_seen
+      title: Stats
     Warning:
       properties:
         code:
@@ -1410,3 +1950,19 @@ components:
       - code
       - text
       title: Warning
+    WarningCount:
+      properties:
+        code:
+          type: string
+          title: Code
+          description: Warning code found on a stored lookup offer.
+        count:
+          type: integer
+          title: Count
+          description: Occurrences across offers, excluding lookup-level duplicates.
+      additionalProperties: false
+      type: object
+      required:
+      - code
+      - count
+      title: WarningCount

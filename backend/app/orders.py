@@ -169,6 +169,7 @@ class Orders:
             self._reserve(conn, order)
             audit.append(conn, f"agent:{agent_id}", "PLACE_ORDER", f"Order {order.status} at the locked total of {order.total:.2f} EUR.",
                          order_id=order.id, quote_id=quote.id, data={"inputs": {"idempotency_key": key},
+                         "outcome": order.status,
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
                          "live_calls": counter.live().model_dump()})
             return order

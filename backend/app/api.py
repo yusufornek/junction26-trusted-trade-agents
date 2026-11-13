@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import FastAPI, Header, Request
@@ -9,7 +10,9 @@ from fastapi.exceptions import RequestValidationError
 from .db import DomainError
 from .models import (ApprovalItem, ApprovalRequest, AuditEntry, ErrorResponse, Health,
                      LookupResult, NeedSpec, Order, OrderRequest, Product, Quote, QuoteRequest)
+from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .service import Gateway
+from .stats import read_stats
 
 
 def create_app(gateway=None):
@@ -49,6 +52,28 @@ def create_app(gateway=None):
     @app.post("/v1/offers", response_model=LookupResult, summary="Shortlist catalog matches, then fetch live offers")
     def offers(need: NeedSpec, request: Request):
         return svc(request).find_offers(need)
+
+    @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
+    def get_lookup(lookup_id: str, request: Request):
+        return svc(request).lookup.get(lookup_id)
+
+    @app.get("/v1/policy", response_model=PolicyResource, summary="Read effective procurement policy and known warning codes")
+    def get_policy(request: Request):
+        return svc(request).policy.get()
+
+    @app.put("/v1/policy", response_model=PolicyResource, summary="Persist policy for subsequent operations and audit changed fields")
+    def put_policy(body: PolicyUpdateRequest, request: Request):
+        return svc(request).policy.update(body)
+
+    @app.post("/v1/policy/reset", response_model=PolicyResource, summary="Restore committed policy defaults with a human audit event")
+    def reset_policy(body: PolicyResetRequest, request: Request):
+        return svc(request).policy.update(body, reset=True)
+
+    @app.get("/v1/stats", response_model=Stats, summary="Operator metrics from persisted evidence; no upstream calls")
+    def stats(request: Request, since: datetime | None = None):
+        service = svc(request)
+        service.orders.expire()
+        return read_stats(service.db, since)
 
     @app.get("/v1/products/{id}", response_model=Product)
     def product(id: str, request: Request):

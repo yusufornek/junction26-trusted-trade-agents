@@ -133,6 +133,16 @@ Structured attributes inside `synkkaData` (better than matching on names):
 - `units[]` maps each unit (`ST`, `KI`, `PAL`, ...) to `sizeInBaseUnits` (e.g. 462775: KI = 12 ST, PAL = 576 ST).
 - Also: `ingredients`, `keyIngredients`, `storageInstructions`, `brand`, `producers`, min/max temperature.
 
+## Valio Aimo today: A.I.mo (observed 2026-11-13 in My Aimo, logged in)
+- A.I.mo is Valio Aimo's own AI assistant for human customers inside My Aimo (minunaimo.valioaimo.fi); My Aimo
+  also has purchase reports, carbon footprint of purchases, recipes with margin, customer-service messaging.
+- Asked the challenge's sample request ("1,000 L lactose-free milk by Monday … price and availability"), it
+  returned three product search lists (online-store product codes) mixing drinking milk with sour/curdled milk and
+  2 cl portion packs — no quantity conversion, prices, stock, delivery date, choice or order.
+- What our gateway adds on top: structured need → hard filters → litres-to-packs → live price/stock for the
+  shortlist → ranked choice → fixed-price quote → order under policy with human sign-off and audit trail.
+  Pitch: A.I.mo and outside buyer agents can both use the same governed gateway.
+
 ## Mentors
 - Marketplace / commercial: Hanna Forsström, Pirjo Kaartinen
 - Online sales: Minni Ruhtinas

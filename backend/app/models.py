@@ -204,3 +204,109 @@ class ErrorResponse(Model):
 class Health(Model):
     status: str
     catalog_rows: int
+
+
+class ApprovalPolicy(Model):
+    max_auto_total_eur: float = Field(ge=0, description="Net EUR ceiling for automatic confirmation.")
+    min_fit_probability: float = Field(ge=0, le=1, description="Minimum fit probability for automatic confirmation.")
+    warnings_need_approval: list[str] = Field(description="Known warning codes requiring human review.")
+
+
+class RejectPolicy(Model):
+    on_hard_constraint_violation: bool = Field(description="Reject when catalog hard constraints fail.")
+    on: list[str] = Field(description="Known warning codes causing rejection.")
+
+
+class RankingWeights(Model):
+    price: float = Field(ge=0)
+    coverage: float = Field(ge=0)
+    reliability: float = Field(ge=0)
+    co2: float = Field(ge=0)
+    fit: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def positive_sum(self):
+        if sum(self.model_dump().values()) <= 0:
+            raise ValueError("ranking_weights must have a sum greater than zero")
+        return self
+
+
+class ShortlistPolicy(Model):
+    catalog_pool: int = Field(ge=10, le=100, description="Catalog candidates screened before live Valio calls.")
+
+
+class PolicyDocument(Model):
+    approval: ApprovalPolicy
+    reject: RejectPolicy
+    ranking_weights: RankingWeights
+    shortlist: ShortlistPolicy = Field(default_factory=lambda: ShortlistPolicy(catalog_pool=40))
+
+    @model_validator(mode="after")
+    def known_codes(self):
+        from .lookup import WARNING_TEXT
+
+        unknown = set(self.approval.warnings_need_approval + self.reject.on) - WARNING_TEXT.keys()
+        if unknown:
+            raise ValueError(f"Unknown warning codes: {', '.join(sorted(unknown))}")
+        return self
+
+
+class PolicyResource(PolicyDocument):
+    updated_at: datetime | None = Field(default=None, description="Last runtime update in UTC; null for committed defaults.")
+    updated_by: str | None = Field(default=None, description="Human responsible for the last runtime update.")
+    known_warning_codes: list[str] = Field(default_factory=list, description="All warning codes the lookup engine can emit; server supplied.")
+
+
+class PolicyResetRequest(Model):
+    updated_by: str = Field(min_length=1, description="Name of the human changing the policy.")
+
+    @model_validator(mode="after")
+    def named_human(self):
+        self.updated_by = self.updated_by.strip()
+        if not self.updated_by:
+            raise ValueError("updated_by must contain a human name")
+        return self
+
+
+class PolicyUpdateRequest(PolicyResetRequest):
+    policy: PolicyResource = Field(description="Editable policy sections. Response metadata may be echoed; the server replaces it.")
+    comment: str | None = Field(default=None, description="Optional reason for the policy change.")
+
+
+class AverageLiveCalls(Model):
+    price: float = Field(description="Actual price requests divided by lookups in the window; zero without lookups.")
+    availability: float = Field(description="Actual availability requests divided by lookups in the window; zero without lookups.")
+
+
+class HumanDecisions(Model):
+    approved: int = Field(description="Successful human APPROVE audit events in the window.")
+    rejected: int = Field(description="Successful human REJECT audit events in the window.")
+
+
+class WarningCount(Model):
+    code: str = Field(description="Warning code found on a stored lookup offer.")
+    count: int = Field(description="Occurrences across offers, excluding lookup-level duplicates.")
+
+
+class RuleCount(Model):
+    rule: str = Field(description="Placement policy rule identifier.")
+    count: int = Field(description="Rule-hit occurrences in PLACE_ORDER audit events.")
+
+
+class AgentStats(Model):
+    actor: str = Field(description="Distinct agent audit actor, including the agent: prefix.")
+    order_count: int = Field(description="Orders created by this agent in the window, regardless of current status.")
+
+
+class Stats(Model):
+    since: datetime | None = Field(description="Inclusive UTC lower bound; naive input is interpreted as UTC. Null means all history.")
+    lookups: int = Field(description="LOOKUP audit events in the window.")
+    orders_by_status: dict[str, int] = Field(description="Current statuses of orders created in the window, including zero counts.")
+    placement_outcomes: dict[str, int] = Field(description="Original CONFIRMED/PENDING_APPROVAL/REJECTED outcomes from PLACE_ORDER events in the window; retries excluded.")
+    human_decisions: HumanDecisions = Field(description="Successful human decisions by event time, even for older orders.")
+    confirmed_spend_total_eur: float = Field(description="Net EUR total of currently CONFIRMED orders created in the window.")
+    average_live_calls_per_lookup: AverageLiveCalls = Field(description="Lookup-only outbound Valio request averages; quote and order checks excluded.")
+    total_decisions_calls: int = Field(description="Actual Decisions HTTP requests recorded in audit events in the window.")
+    top_warning_codes: list[WarningCount] = Field(description="Top five offer warning codes in lookups in the window; count descending, code ascending on ties.")
+    top_rule_hits: list[RuleCount] = Field(description="Top five placement rule hits; count descending, rule ascending on ties.")
+    agents_seen: list[AgentStats] = Field(description="Agent actors seen in audit events in the window, sorted by actor, with order counts.")

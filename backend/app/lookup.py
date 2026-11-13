@@ -167,6 +167,13 @@ class Lookup:
     def __init__(self, db, catalog, valio, decisions, policy):
         self.db, self.catalog, self.valio, self.decisions, self.policy = db, catalog, valio, decisions, policy
 
+    def get(self, lookup_id):
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT data FROM lookups WHERE id=?", (lookup_id,)).fetchone()
+        if not row:
+            raise DomainError("LOOKUP_NOT_FOUND", "Lookup was not found", 404)
+        return LookupResult.model_validate_json(row["data"])
+
     def find_offers(self, need, actor="agent:external"):
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         pool_size = max(need.max_candidates, self.policy.catalog_pool)

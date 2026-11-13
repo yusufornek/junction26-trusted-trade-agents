@@ -1,7 +1,7 @@
 # Trusted Trade Agents backend MVP
 
-One Python core serves FastAPI and the MCP 2.3 server. It searches the local catalog, shortlists at
-most ten products, checks Valio price/availability and Decisions fit, locks fixed-price quotes, then
+One Python core serves FastAPI and the MCP 2.3 server. It searches the local catalog, screens a
+40-product pool with Decisions, checks live Valio price/availability for at most ten products, locks fixed-price quotes, then
 runs the approval policy. The upstream mock has no search or order endpoint: quotes, orders,
 approvals and reservations exist only in this gateway.
 
@@ -79,6 +79,35 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
 
 The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each → 2,600 EUR quote →
 `PENDING_APPROVAL` → human approval → `CONFIRMED`, over both REST and MCP core tools.
+
+## Frontend control plane
+
+- `GET /v1/lookups/{lookup_id}` returns the original stored `LookupResult`, including alternatives;
+  use a quote's `need_ref`. Unknown IDs return `404 LOOKUP_NOT_FOUND`. No upstream calls are made.
+- `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `updated_at`,
+  `updated_by`, and `known_warning_codes`. The last three fields are server supplied; initial
+  committed defaults have null update metadata. `PUT /v1/policy` accepts
+  `{"policy": <editable sections>, "updated_by": "Ada", "comment": "Budget review"}` and returns
+  the effective resource. Echoing the GET response as `policy` also works; its metadata is replaced.
+  Thresholds/weights must be nonnegative, fit must be 0–1, weights must sum above zero, catalog pool
+  must be 10–100, and warning codes must be known. Invalid requests return `422 VALIDATION_ERROR`.
+- `POST /v1/policy/reset` with `{"updated_by": "Ada"}` restores committed defaults and returns
+  the effective resource with new update metadata. Both writes append `POLICY_UPDATED` by
+  `human:<name>`; `data.diff` maps changed dotted field paths to `{before, after}` and also records
+  the optional comment and whether the operation was a reset.
+- Effective policy is loaded from gitignored `backend/var/policy.yaml` before `backend/policy.yaml`.
+  Writes atomically replace the runtime file; committed defaults remain unchanged. REST and MCP
+  reread it for subsequent operations without restart. With a custom database path, the runtime
+  policy lives beside that database so independent gateway instances stay isolated.
+- `GET /v1/stats?since=<ISO datetime>` returns described Pydantic metrics in the OpenAPI contract.
+  `since` is inclusive, normalized to UTC (naive timestamps mean UTC). Current order counts and
+  confirmed spend use **order creation time**; lookups, placement outcomes, human decisions and
+  agent sightings use **audit event time**. Placement outcomes exclude retries and remain unchanged
+  by later approval/rejection. Older placement audit rows use their recorded summary outcome.
+  Live-call averages include lookups only, including cached zero-call lookups; Decisions totals
+  count actual HTTP requests. Warning counts count offer occurrences, excluding lookup-level
+  duplicates; rule counts count placement hits. Top-five ties sort by code/rule. Empty averages
+  are zero. Stats refresh local expirations and make no upstream calls.
 
 ## Evidence, policy and lifecycle
 

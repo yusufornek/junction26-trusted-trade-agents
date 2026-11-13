@@ -16,7 +16,7 @@ class Gateway:
         self.catalog = Catalog(self.db)
         self.valio = ValioClient(self.settings.valio_api_base, self.settings.valio_api_key)
         self.decisions = OpenAIDecisions(self.settings.openai_api_key)
-        self.policy = Policy(self.settings.policy_path)
+        self.policy = Policy(self.settings.policy_path, self.settings.db_path.parent / "policy.yaml", self.db)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy)
         self.orders = Orders(self.db, self.catalog, self.valio, self.policy)
 
