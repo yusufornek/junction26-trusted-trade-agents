@@ -44,4 +44,13 @@ to the other side.
 - **Frontend:** chosen by the frontend owner; talks to the backend only through `contracts/openapi.yaml`.
 
 ## Commands
-_Filled in once `backend/` and `frontend/` are scaffolded (install, dev, build, test, lint, deploy)._
+Backend (from `backend/`, venv at `backend/.venv`, deps in `requirements.txt`; secrets in repo-root `.env.local`):
+```
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
+.venv/bin/python -m app.catalog build                  # data/ → var/app.db (~2 s)
+.venv/bin/python -m uvicorn app.api:app --port 8000    # REST API, docs at /docs
+.venv/bin/python -m app.mcp_server                     # MCP over stdio (--http --port 8001 for HTTP)
+.venv/bin/python -m pytest tests -q                    # tests, no network
+.venv/bin/python scripts/export_openapi.py             # refresh contracts/openapi.yaml
+```
+Frontend: _filled in by the frontend owner._

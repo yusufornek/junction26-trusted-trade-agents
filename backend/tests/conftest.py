@@ -1,0 +1,131 @@
+import gzip
+import json
+import sys
+from datetime import timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app import audit
+from app.catalog import build
+from app.config import BACKEND, Settings
+from app.models import NeedSpec, QuoteLineRequest, QuoteRequest
+from app.service import Gateway
+
+
+def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None, sales="KI", base="ST", multiplier=10):
+    conversion = {"synkkaPackagingType": "BASE_UNIT_OR_EACH"}
+    if volume is not None:
+        conversion["volume"] = {"unit": "LTR", "value": volume}
+    if weight is not None:
+        conversion["netWeight"] = {"unit": "GRM", "value": weight}
+    return {
+        "id": pid, "salesUnit": sales, "baseUnit": base, "category": "10400", "allowedLotSize": 0.01,
+        "vendorName": "Fixture dairy", "countryOfOrigin": "fi", "temperatureCondition": 4,
+        "units": [{"unitId": sales, "sizeInBaseUnits": multiplier}],
+        "synkkaData": {"names": [{"language": "en", "value": name}, {"language": "fi", "value": "maito " + name}],
+            "brand": "Fixture", "keyIngredients": [{"language": "en", "value": "milk"}],
+            "marketingTexts": [{"language": "en", "value": "coffee and breakfast"}],
+            "classifications": [
+                {"name": "nutritionalClaim", "values": [{"id": "FREE_FROM_LACTOSE"}] if lactose else []},
+                {"name": "allergen", "values": [{"id": "AM", "unit": "CONTAINS"}]
+                 + ([{"id": "AE", "unit": "CONTAINS"}] if egg else [])},
+                {"name": "nonAllergen", "values": [{"id": "ML", "unit": "FREE_FROM"}]},
+                {"name": "packagingMarkedLabel", "values": [{"id": "ORGANIC"}]}],
+            "unitConversions": [conversion]},
+    }
+
+
+@pytest.fixture
+def gateway(tmp_path):
+    source = tmp_path / "products.json.gz"
+    rows = [raw_product("1", "Milk 5 dl lactose free"),
+            raw_product("2", "Milk conventional", lactose=False),
+            raw_product("3", "Milk egg mix", egg=True),
+            raw_product("4", "Milk catalog 1L", volume=1),
+            raw_product("5", "Milk powder 500 g", weight=500),
+            raw_product("6", "Milk unknown size"),
+            raw_product("7", "Milk bulk", sales="KG", base="KG", multiplier=1)]
+    with gzip.open(source, "wt") as f:
+        json.dump(rows, f)
+    reliability = tmp_path / "reliability.csv"
+    reliability.write_text("productId,deliveryReliability\n1,0.97\n")
+    carbon = tmp_path / "carbon.csv"
+    carbon.write_text("productId,AVG kg CO2-eq/kg\n1,1.2\n")
+    service = Gateway(Settings(db_path=tmp_path / "app.db", policy_path=BACKEND / "policy.yaml",
+                               valio_api_base="https://valio.test", valio_api_key="test-key", openai_api_key="test-key"))
+    build(service.db, source, reliability, carbon)
+    yield service
+    service.close()
+
+
+@pytest.fixture
+def need():
+    return NeedSpec(intent="lactose-free milk", search_terms=["milk"], required_claims=["FREE_FROM_LACTOSE"],
+                    exclude_allergens=["AE"], quantity={"value": 1000, "unit": "L"},
+                    deliver_by=audit.utcnow().date() + timedelta(days=3))
+
+
+class Upstream:
+    def __init__(self, need):
+        self.need = need
+        self.price_calls = []
+        self.availability_calls = []
+        self.decision_calls = []
+        self.amount = 999999
+        self.model = "Terminal"
+        self.shift = 0
+        self.cutoff = audit.utcnow() + timedelta(hours=1)
+        self.sales_block = False
+        self.unknown = False
+        self.fit = 0.91
+        self.price = 13.0
+        self.price_error = False
+
+    def price_response(self, request):
+        body = json.loads(request.content)
+        assert all(isinstance(p, str) for p in body["products"])
+        assert request.headers["X-API-Key"] == "test-key"
+        self.price_calls.append(body)
+        return httpx.Response(200, json={"currency": "EUR", "products": [
+            {"productId": pid, "quantity": 1.0, "catalogPrice": {
+                "value": self.price, "valueWithTax": self.price * 1.135, "currency": "EUR",
+                "validFrom": "2020-01-01T00:00:00+0000", "validTo": "9999-12-31T00:00:00+0200"},
+             "comparisonPrice": {"value": 2.6}, "comparisonUnit": "L", "netPriceFound": False, "error": self.price_error}
+            for pid in body["products"]]})
+
+    def availability_response(self, request):
+        body = json.loads(request.content)
+        assert all(isinstance(p, str) for p in body["products"])
+        self.availability_calls.append(body)
+        delivery = (self.need.deliver_by + timedelta(days=self.shift)).isoformat()
+        return httpx.Response(200, json={"timeNow": audit.utcnow().isoformat(), "products": [
+            {"productId": pid, "closingTime": self.cutoff.isoformat(), "salesBlock": self.sales_block,
+             "logisticModel": self.model, "scheduleLines": [] if self.unknown else [
+                 {"availableAmount": self.amount, "availableDate": delivery, "salesUnit": "KI", "salesBlock": False}]}
+            for pid in body["products"]]})
+
+    def decisions_response(self, request):
+        body = json.loads(request.content)
+        self.decision_calls.append(body)
+        return httpx.Response(200, json={"answers": [
+            {"type": "predicate", "name": q["name"], "probability": self.fit} for q in body["questions"]]})
+
+
+@pytest.fixture
+def upstream(respx_mock, need):
+    state = Upstream(need)
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=state.price_response)
+    respx_mock.post("https://valio.test/api/availability").mock(side_effect=state.availability_response)
+    respx_mock.post("https://api.openai.com/v1/decisions").mock(side_effect=state.decisions_response)
+    # Each test calls only the subset needed for that operation.
+    respx_mock.assert_all_called = False
+    return state
+
+
+def quote_request(need, *, qty=200, need_ref=None, product_id="1"):
+    return QuoteRequest(customer_id=need.customer_id, deliver_by=need.deliver_by, need_ref=need_ref,
+                        lines=[QuoteLineRequest(product_id=product_id, quantity_sales_units=qty)])

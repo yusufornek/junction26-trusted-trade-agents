@@ -1,0 +1,1412 @@
+openapi: 3.1.0
+info:
+  title: Valio Aimo Trusted Trade Agents
+  description: MVP fixed-price gateway. REST and MCP share one core. Local quotes/orders
+    and one human approver role; development only, no authentication.
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/offers:
+    post:
+      summary: Shortlist catalog matches, then fetch live offers
+      operationId: offers_v1_offers_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NeedSpec'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LookupResult'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/products/{id}:
+    get:
+      summary: Product
+      operationId: product_v1_products__id__get
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/quotes:
+    post:
+      summary: Recheck live price/stock and lock fixed prices
+      operationId: create_quote_v1_quotes_post
+      parameters:
+      - name: x-agent-id
+        in: header
+        required: false
+        schema:
+          type: string
+          default: external
+          title: X-Agent-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/quotes/{id}:
+    get:
+      summary: Get Quote
+      operationId: get_quote_v1_quotes__id__get
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/orders:
+    post:
+      summary: Accept an unexpired quote; policy may require approval
+      operationId: place_order_v1_orders_post
+      parameters:
+      - name: idempotency-key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          description: 'Retry key: same quote and agent returns the same order.'
+          title: Idempotency-Key
+        description: 'Retry key: same quote and agent returns the same order.'
+      - name: x-agent-id
+        in: header
+        required: false
+        schema:
+          type: string
+          default: external
+          title: X-Agent-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+    get:
+      summary: Orders
+      operationId: orders_v1_orders_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+                title: Response Orders V1 Orders Get
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/orders/{id}:
+    get:
+      summary: Get Order
+      operationId: get_order_v1_orders__id__get
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/approvals:
+    get:
+      summary: Pending approval inbox with quote evidence and all rule hits
+      operationId: approvals_v1_approvals_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ApprovalItem'
+                type: array
+                title: Response Approvals V1 Approvals Get
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/approvals/{order_id}/approve:
+    post:
+      summary: Approve
+      operationId: approve_v1_approvals__order_id__approve_post
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/approvals/{order_id}/reject:
+    post:
+      summary: Reject
+      operationId: reject_v1_approvals__order_id__reject_post
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+  /v1/audit:
+    get:
+      summary: Audit
+      operationId: audit_v1_audit_get
+      parameters:
+      - name: order_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Order Id
+      - name: quote_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quote Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'
+                title: Response Audit V1 Audit Get
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+components:
+  schemas:
+    ApprovalItem:
+      properties:
+        order:
+          $ref: '#/components/schemas/Order'
+        quote:
+          $ref: '#/components/schemas/Quote'
+      additionalProperties: false
+      type: object
+      required:
+      - order
+      - quote
+      title: ApprovalItem
+    ApprovalRequest:
+      properties:
+        approver:
+          type: string
+          minLength: 1
+          title: Approver
+          description: 'Human approver name (MVP: one role, no authentication).'
+        comment:
+          type: string
+          title: Comment
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - approver
+      title: ApprovalRequest
+    AuditEntry:
+      properties:
+        id:
+          type: integer
+          title: Id
+        ts:
+          type: string
+          format: date-time
+          title: Ts
+        actor:
+          type: string
+          title: Actor
+        action:
+          type: string
+          title: Action
+        order_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Order Id
+        quote_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quote Id
+        summary:
+          type: string
+          title: Summary
+        data:
+          additionalProperties: true
+          type: object
+          title: Data
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - ts
+      - actor
+      - action
+      - order_id
+      - quote_id
+      - summary
+      - data
+      title: AuditEntry
+    Availability:
+      properties:
+        available_amount:
+          type: number
+          title: Available Amount
+          description: Sales units deliverable by the deadline, after local Stock
+            reservations.
+        logistic_model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Logistic Model
+        closing_time:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Closing Time
+        available_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Available Date
+          description: Earliest unblocked upstream delivery date.
+        enough:
+          type: boolean
+          title: Enough
+        coverage:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Coverage
+          description: Fraction of requested sales units covered by on-time stock.
+      additionalProperties: false
+      type: object
+      required:
+      - available_amount
+      - enough
+      - coverage
+      title: Availability
+    ErrorResponse:
+      properties:
+        code:
+          type: string
+          title: Code
+          description: Stable domain error code, e.g. EXPIRED_QUOTE.
+        message:
+          type: string
+          title: Message
+      additionalProperties: false
+      type: object
+      required:
+      - code
+      - message
+      title: ErrorResponse
+    Health:
+      properties:
+        status:
+          type: string
+          title: Status
+        catalog_rows:
+          type: integer
+          title: Catalog Rows
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      - catalog_rows
+      title: Health
+    LiveCalls:
+      properties:
+        price:
+          type: integer
+          title: Price
+          description: Actual outbound price HTTP requests, including failed attempts.
+          default: 0
+        availability:
+          type: integer
+          title: Availability
+          description: Actual outbound availability HTTP requests.
+          default: 0
+      additionalProperties: false
+      type: object
+      title: LiveCalls
+    LookupResult:
+      properties:
+        lookup_id:
+          type: string
+          title: Lookup Id
+          description: Server-side need reference; pass as need_ref when quoting to
+            preserve fit and constraints.
+        need:
+          $ref: '#/components/schemas/NeedSpec'
+        offers:
+          items:
+            $ref: '#/components/schemas/OfferCard'
+          type: array
+          title: Offers
+        excluded_count:
+          type: integer
+          title: Excluded Count
+          description: FTS matches removed by hard catalog filters, before shortlist
+            truncation.
+        live_calls:
+          $ref: '#/components/schemas/LiveCalls'
+        decision_calls:
+          type: integer
+          title: Decision Calls
+        warnings:
+          items:
+            $ref: '#/components/schemas/Warning'
+          type: array
+          title: Warnings
+      additionalProperties: false
+      type: object
+      required:
+      - lookup_id
+      - need
+      - offers
+      - excluded_count
+      - live_calls
+      - decision_calls
+      title: LookupResult
+    NeedSpec:
+      properties:
+        customer_id:
+          type: string
+          minLength: 1
+          title: Customer Id
+          description: Valio customer identifier.
+          default: '1'
+        intent:
+          type: string
+          minLength: 1
+          title: Intent
+          description: Buyer need; the outside agent structures this request.
+        search_terms:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Search Terms
+          description: Optional FTS terms, combined with AND.
+        required_claims:
+          items:
+            type: string
+          type: array
+          title: Required Claims
+          description: All must exist as catalog nutritionalClaim IDs.
+        exclude_allergens:
+          items:
+            type: string
+          type: array
+          title: Exclude Allergens
+          description: Exclude products whose catalog allergen CONTAINS includes any
+            ID.
+        quantity:
+          $ref: '#/components/schemas/Quantity'
+        deliver_by:
+          type: string
+          format: date
+          title: Deliver By
+          description: Latest acceptable delivery date.
+        max_candidates:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Max Candidates
+          description: Maximum shortlisted products sent to live APIs.
+          default: 10
+      additionalProperties: false
+      type: object
+      required:
+      - intent
+      - quantity
+      - deliver_by
+      title: NeedSpec
+    OfferCard:
+      properties:
+        product_id:
+          type: string
+          title: Product Id
+        name:
+          type: string
+          title: Name
+        sales_unit:
+          type: string
+          title: Sales Unit
+        size_per_sales_unit:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Size Per Sales Unit
+          description: Quantity unit per sales unit; null when conversion is unknown.
+        size_unit:
+          type: string
+          enum:
+          - L
+          - KG
+          - SALES_UNIT
+          title: Size Unit
+        size_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Size Source
+          description: price_ratio, catalog, name_parse, base_unit or sales_unit.
+        units_needed:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Units Needed
+          description: Whole sales units; KG sales quantities are rounded to the allowed
+            lot step.
+        unit_price:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Unit Price
+          description: Net catalog price per sales unit, fixed on quote creation.
+        unit_price_with_tax:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Unit Price With Tax
+        price_per_l_or_kg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Price Per L Or Kg
+        total:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Total
+          description: Net line total in currency.
+        currency:
+          type: string
+          title: Currency
+          default: EUR
+        valid_from:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid From
+        valid_to:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid To
+        net_price_found:
+          type: boolean
+          title: Net Price Found
+          default: false
+        availability:
+          $ref: '#/components/schemas/Availability'
+        warnings:
+          items:
+            $ref: '#/components/schemas/Warning'
+          type: array
+          title: Warnings
+        delivery_reliability:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Delivery Reliability
+        co2_kg_per_kg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Co2 Kg Per Kg
+        labels:
+          items:
+            type: string
+          type: array
+          title: Labels
+        matched_because:
+          items:
+            type: string
+          type: array
+          title: Matched Because
+        fit:
+          anyOf:
+          - type: number
+            maximum: 1.0
+            minimum: 0.0
+          - type: 'null'
+          title: Fit
+          description: Decisions predicate probability; never inferred from a name
+            alone.
+        fit_question:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fit Question
+        provenance:
+          additionalProperties:
+            $ref: '#/components/schemas/Provenance'
+          type: object
+          title: Provenance
+        score:
+          type: number
+          title: Score
+          default: 0
+        rank_label:
+          anyOf:
+          - type: string
+            enum:
+            - best
+            - better
+            - good
+          - type: 'null'
+          title: Rank Label
+      additionalProperties: false
+      type: object
+      required:
+      - product_id
+      - name
+      - sales_unit
+      - size_unit
+      - availability
+      - provenance
+      title: OfferCard
+    Order:
+      properties:
+        id:
+          type: string
+          title: Id
+        quote_id:
+          type: string
+          title: Quote Id
+        agent_id:
+          type: string
+          title: Agent Id
+        idempotency_key:
+          type: string
+          title: Idempotency Key
+        status:
+          type: string
+          enum:
+          - CONFIRMED
+          - PENDING_APPROVAL
+          - REJECTED
+          - EXPIRED
+          - CANCELLED
+          title: Status
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        total:
+          type: number
+          title: Total
+        currency:
+          type: string
+          title: Currency
+        lines:
+          items:
+            $ref: '#/components/schemas/OfferCard'
+          type: array
+          title: Lines
+        policy:
+          $ref: '#/components/schemas/PolicyResult'
+        live_calls:
+          $ref: '#/components/schemas/LiveCalls'
+        approver:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Approver
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - quote_id
+      - agent_id
+      - idempotency_key
+      - status
+      - created_at
+      - expires_at
+      - total
+      - currency
+      - lines
+      - policy
+      - live_calls
+      title: Order
+    OrderRequest:
+      properties:
+        quote_id:
+          type: string
+          title: Quote Id
+          description: An unexpired OPEN fixed-price quote.
+      additionalProperties: false
+      type: object
+      required:
+      - quote_id
+      title: OrderRequest
+    PolicyResult:
+      properties:
+        outcome:
+          type: string
+          enum:
+          - CONFIRMED
+          - PENDING_APPROVAL
+          - REJECTED
+          title: Outcome
+        hits:
+          items:
+            $ref: '#/components/schemas/RuleHit'
+          type: array
+          title: Hits
+      additionalProperties: false
+      type: object
+      required:
+      - outcome
+      - hits
+      title: PolicyResult
+    Product:
+      properties:
+        id:
+          type: string
+          title: Id
+        name_en:
+          type: string
+          title: Name En
+        name_fi:
+          type: string
+          title: Name Fi
+          default: ''
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+        sales_unit:
+          type: string
+          title: Sales Unit
+        base_unit:
+          type: string
+          title: Base Unit
+        allowed_lot_size:
+          type: number
+          title: Allowed Lot Size
+          default: 1
+        vendor_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Vendor Name
+        brand:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Brand
+        country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Country
+        temperature_condition:
+          anyOf:
+          - type: integer
+          - type: string
+          - type: 'null'
+          title: Temperature Condition
+        units:
+          additionalProperties:
+            type: number
+          type: object
+          title: Units
+          description: unitId to sizeInBaseUnits.
+        claims:
+          items:
+            type: string
+          type: array
+          title: Claims
+        allergens_contains:
+          items:
+            type: string
+          type: array
+          title: Allergens Contains
+        free_from:
+          items:
+            type: string
+          type: array
+          title: Free From
+        labels:
+          items:
+            type: string
+          type: array
+          title: Labels
+        base_volume_l:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Base Volume L
+        base_net_weight_kg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Base Net Weight Kg
+        delivery_reliability:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Delivery Reliability
+        co2_kg_per_kg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Co2 Kg Per Kg
+          description: Product-group average, not an individual product measurement.
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - name_en
+      - sales_unit
+      - base_unit
+      title: Product
+    Provenance:
+      properties:
+        source:
+          type: string
+          title: Source
+          description: Upstream endpoint or catalog source.
+        fetched_at:
+          type: string
+          format: date-time
+          title: Fetched At
+          description: Upstream timeNow when supplied; otherwise local UTC receipt
+            time.
+        valid_to:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid To
+      additionalProperties: false
+      type: object
+      required:
+      - source
+      - fetched_at
+      title: Provenance
+    Quantity:
+      properties:
+        value:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Value
+          description: Requested positive quantity.
+        unit:
+          type: string
+          enum:
+          - L
+          - KG
+          - SALES_UNIT
+          title: Unit
+          description: Litres, kilograms or product sales units.
+      additionalProperties: false
+      type: object
+      required:
+      - value
+      - unit
+      title: Quantity
+    Quote:
+      properties:
+        id:
+          type: string
+          title: Id
+        customer_id:
+          type: string
+          title: Customer Id
+        deliver_by:
+          type: string
+          format: date
+          title: Deliver By
+        need_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Need Ref
+        status:
+          type: string
+          enum:
+          - OPEN
+          - ACCEPTED
+          - EXPIRED
+          title: Status
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: Earliest price validity, future cutoff or 30 minutes after
+            creation.
+        lines:
+          items:
+            $ref: '#/components/schemas/OfferCard'
+          type: array
+          title: Lines
+          description: Fixed-price lines; units_needed is the quoted sales quantity.
+        total:
+          type: number
+          title: Total
+        currency:
+          type: string
+          title: Currency
+        hard_constraint_violations:
+          items:
+            type: string
+          type: array
+          title: Hard Constraint Violations
+        live_calls:
+          $ref: '#/components/schemas/LiveCalls'
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - customer_id
+      - deliver_by
+      - status
+      - created_at
+      - expires_at
+      - lines
+      - total
+      - currency
+      - live_calls
+      title: Quote
+    QuoteLineRequest:
+      properties:
+        product_id:
+          type: string
+          minLength: 1
+          title: Product Id
+        quantity_sales_units:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Quantity Sales Units
+          description: Explicit sales quantity; KG follows allowedLotSize, others
+            are whole sales units.
+      additionalProperties: false
+      type: object
+      required:
+      - product_id
+      - quantity_sales_units
+      title: QuoteLineRequest
+    QuoteRequest:
+      properties:
+        customer_id:
+          type: string
+          minLength: 1
+          title: Customer Id
+          default: '1'
+        deliver_by:
+          type: string
+          format: date
+          title: Deliver By
+        lines:
+          items:
+            $ref: '#/components/schemas/QuoteLineRequest'
+          type: array
+          maxItems: 10
+          minItems: 1
+          title: Lines
+        need_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Need Ref
+          description: lookup_id to carry verified fit scores and hard constraints
+            into policy.
+      additionalProperties: false
+      type: object
+      required:
+      - deliver_by
+      - lines
+      title: QuoteRequest
+    RuleHit:
+      properties:
+        rule:
+          type: string
+          title: Rule
+        detail:
+          type: string
+          title: Detail
+      additionalProperties: false
+      type: object
+      required:
+      - rule
+      - detail
+      title: RuleHit
+    Warning:
+      properties:
+        code:
+          type: string
+          title: Code
+          description: Stable machine-readable warning code.
+        text:
+          type: string
+          title: Text
+          description: Human-readable explanation.
+      additionalProperties: false
+      type: object
+      required:
+      - code
+      - text
+      title: Warning

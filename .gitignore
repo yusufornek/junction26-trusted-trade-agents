@@ -24,3 +24,6 @@ build/
 .vercel/
 .claude/settings.local.json
 *.log
+
+# Backend runtime
+backend/var/
