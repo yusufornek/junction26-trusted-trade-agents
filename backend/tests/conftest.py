@@ -6,13 +6,15 @@ from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import audit
 from app.catalog import build
 from app.config import BACKEND, Settings
-from app.models import NeedSpec, QuoteLineRequest, QuoteRequest
+from app.models import NeedSpec, PolicyDocument, QuoteLineRequest, QuoteRequest
+from app.policy import Policy
 from app.service import Gateway
 
 
@@ -40,7 +42,13 @@ def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None,
 
 
 @pytest.fixture
-def gateway(tmp_path):
+def registered_agents(request):
+    """Explicit test-only mandates; production and mandate tests keep unregistered callers untrusted."""
+    return getattr(request, "param", ())
+
+
+@pytest.fixture
+def gateway(tmp_path, registered_agents):
     source = tmp_path / "products.json.gz"
     rows = [raw_product("1", "Milk 5 dl lactose free"),
             raw_product("2", "Milk conventional", lactose=False),
@@ -55,7 +63,15 @@ def gateway(tmp_path):
     reliability.write_text("productId,deliveryReliability\n1,0.97\n")
     carbon = tmp_path / "carbon.csv"
     carbon.write_text("productId,AVG kg CO2-eq/kg\n1,1.2\n")
-    service = Gateway(Settings(db_path=tmp_path / "app.db", policy_path=BACKEND / "policy.yaml",
+    policy_path = BACKEND / "policy.yaml"
+    if registered_agents:
+        defaults = Policy._load(policy_path).model_dump(mode="json", include=set(PolicyDocument.model_fields))
+        for agent_id in registered_agents:
+            defaults["agents"][agent_id] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 5000,
+                                            "note": "Explicit fixture mandate for existing lifecycle tests."}
+        policy_path = tmp_path / "defaults.yaml"
+        policy_path.write_text(yaml.safe_dump(defaults))
+    service = Gateway(Settings(db_path=tmp_path / "app.db", policy_path=policy_path,
                                valio_api_base="https://valio.test", valio_api_key="test-key", openai_api_key="test-key"))
     build(service.db, source, reliability, carbon)
     yield service

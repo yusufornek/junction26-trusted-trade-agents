@@ -5,12 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.mcp_server import create_server
 
 
+@pytest.mark.parametrize("registered_agents", [("hotel-agent",)], indirect=True)
 def test_full_rest_flow_1000_l(gateway, need, upstream):
     with TestClient(create_app(gateway)) as client:
         result = client.post("/v1/offers", json=need.model_dump(mode="json"))

@@ -32,6 +32,7 @@ def test_policy_all_hits(gateway, need, upstream, total, fit, warnings, violatio
     assert {h.rule for h in result.hits} == rules
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_idempotency_concurrent_retries_and_fixed_price(gateway, need, upstream):
     quote = fitted_quote(gateway, need)
     upstream.price = 50
@@ -71,6 +72,7 @@ def test_expired_quote_persists_and_audits(gateway, need, upstream, monkeypatch)
 
 
 @pytest.mark.parametrize("approve,status", [(True, "CONFIRMED"), (False, "REJECTED")])
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_approval_transitions(gateway, need, upstream, approve, status):
     quote = fitted_quote(gateway, need, qty=200)
     order = gateway.orders.place_order(quote.id, "review")
@@ -86,6 +88,7 @@ def test_approval_transitions(gateway, need, upstream, approve, status):
     assert gateway.audit(order_id=order.id)[-2].actor == "human:Ada"
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_stock_reservations_and_release(gateway, need, upstream):
     upstream.model, upstream.amount = "Stock", 10
     quote = fitted_quote(gateway, need, qty=6)
@@ -101,6 +104,7 @@ def test_stock_reservations_and_release(gateway, need, upstream):
         assert conn.execute("SELECT count(*) FROM reservations").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_pending_expiry_releases_stock(gateway, need, upstream, monkeypatch):
     upstream.model = "Stock"
     quote = fitted_quote(gateway, need, qty=200)
@@ -112,6 +116,7 @@ def test_pending_expiry_releases_stock(gateway, need, upstream, monkeypatch):
     assert gateway.orders.place_order(quote.id, "pending").id == order.id
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_no_fit_needs_approval_and_no_override_of_sale_block(gateway, need, upstream):
     quote = gateway.orders.create_quote(quote_request(need, qty=1))
     order = gateway.orders.place_order(quote.id, "no-fit")
@@ -152,6 +157,7 @@ def test_audit_is_append_only(gateway, need, upstream):
             conn.execute("UPDATE audit SET actor='changed'")
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_concurrent_stock_orders_do_not_both_auto_confirm(gateway, need, upstream):
     upstream.model, upstream.amount = "Stock", 10
     first_quote = fitted_quote(gateway, need, qty=6)
@@ -181,6 +187,7 @@ def test_quote_expiry_earliest_bound(gateway, need, upstream, respx_mock, price_
     assert abs((quote.expires_at - (now + timedelta(minutes=expected_minutes))).total_seconds()) < 1
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_stock_recheck_changes_policy_after_quote(gateway, need, upstream):
     quote = fitted_quote(gateway, need, qty=10)
     upstream.amount = 2
@@ -191,6 +198,7 @@ def test_stock_recheck_changes_policy_after_quote(gateway, need, upstream):
     assert order.total == quote.total
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_multiline_quote_sums_and_reserves_each_line(gateway, need, upstream):
     from app.models import QuoteLineRequest
     upstream.model = "Stock"

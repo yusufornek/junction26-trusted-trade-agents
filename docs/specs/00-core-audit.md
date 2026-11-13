@@ -6,9 +6,9 @@ Living document: update the status column when a spec is built.
 ## Core — "your solution must enable"
 | Requirement (challenge text) | Where it is met | Evidence | Status |
 |---|---|---|---|
-| **Lookup:** structured way for an external agent to search and retrieve what is available and at what price | MCP `search_products`, `find_offers`; REST `/v1/offers`, `/v1/products/{id}`, `/v1/lookups/{id}` | [01](01-lookup.md), live run 13.11 | met · precision gap → [05](05-size-reconciliation.md) |
-| **Request, then order:** from inquiry to commitment at fixed prices | MCP `create_quote`, `place_order`, `get_order_status`; REST `/v1/quotes`, `/v1/orders` | [02](02-quote-order.md), live REST + MCP demo | met · undo step → [04](04-order-cancel.md) |
-| **Permission & human approval:** what the agent decides alone, what goes to a human | Policy (`/v1/policy`), approval inbox (`/v1/approvals`), audit (`/v1/audit`) | [03](03-permissions-approval.md), live policy change | met · per-agent authority → [06](06-agent-mandate.md) |
+| **Lookup:** structured way for an external agent to search and retrieve what is available and at what price | MCP `search_products`, `find_offers`; REST `/v1/offers`, `/v1/products/{id}`, `/v1/lookups/{id}` | [01](01-lookup.md), live run 13.11 | met · exact pack counts [05](05-size-reconciliation.md), stable best price [09](09-price-complete-shortlist.md) |
+| **Request, then order:** from inquiry to commitment at fixed prices | MCP `create_quote`, `place_order`, `get_order_status`; REST `/v1/quotes`, `/v1/orders` | [02](02-quote-order.md), live REST + MCP demo | met · incl. cancellation [04](04-order-cancel.md) |
+| **Permission & human approval:** what the agent decides alone, what goes to a human | Policy (`/v1/policy`), approval inbox (`/v1/approvals`), audit (`/v1/audit`) | [03](03-permissions-approval.md), live policy change | met · per-agent mandates and cumulative limit [06](06-agent-mandate.md) |
 
 ## Example request from the brief
 "1,000 litres of lactose-free milk by Monday … based on price and availability" — run end to end by Claude as an
@@ -27,8 +27,8 @@ every step audited (`backend/demo/run_buyer_agent.sh`).
 | Criterion | Weight | Where we stand | Next lever |
 |---|---|---|---|
 | Working end-to-end demo | 30% | REST + MCP flows run live; console shows them | demo video as backup |
-| Solving the user need | 20% | Right product, quantity, price; sour milk screened out | [05](05-size-reconciliation.md) exact pack counts |
-| Autonomy and controls | 20% | Editable policy, approval inbox, append-only audit | [06](06-agent-mandate.md), [04](04-order-cancel.md) |
+| Solving the user need | 20% | Right product, exact pack counts, stable cheapest suitable offer; sour milk screened out | preferences ([08](08-exceptions.md)) |
+| Autonomy and controls | 20% | Editable policy, per-agent mandates, cumulative limit, approval inbox, cancellation, append-only audit, order timeline | signed mandate, approver roles |
 | Robustness to exceptions | 15% | Warnings for partial stock, date shift, cut-off; agent explains alternatives | [08](08-exceptions.md) split orders, substitutes, policy preview |
 | Openness & path to production | 15% | MCP + OpenAPI contract, documented assumptions | signed quotes, Peppol mapping, verifiable mandate |
 
@@ -37,4 +37,4 @@ every step audited (`backend/demo/run_buyer_agent.sh`).
 |---|---|
 | Delivery time & sustainability comparison | reliability, CO2 and labels on every offer and in ranking |
 | Substitution & exception handling | warnings + ranked alternatives; automatic split / substitution not yet |
-| Traceability & explainability | audit trail, rule hits, fit scores, provenance · full story per order → [07](07-order-timeline.md) |
+| Traceability & explainability | audit trail, rule hits, fit scores, provenance · full story per order [07](07-order-timeline.md) |

@@ -14,6 +14,15 @@ approval:
 reject:
   on_hard_constraint_violation: true
   on: [SALES_BLOCK, UNKNOWN_PRODUCT]
-# Catalog candidates screened by Decisions (no Valio calls) before the top max_candidates go to live APIs.
-shortlist: {catalog_pool: 40}
+# Fit gates live pricing; rank all suitable candidates before returning max_candidates offers.
+shortlist: {catalog_pool: 40, live_max: 25}
 ranking_weights: {price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1}
+agents:
+  hotel-chain-agent:
+    customer_ids: ["1"]
+    max_auto_daily_total_eur: 5000
+    note: "Demo hotel-chain procurement mandate."
+  web-console:
+    customer_ids: ["1"]
+    max_auto_daily_total_eur: 5000
+    note: "Operator console buyer-flow mandate."

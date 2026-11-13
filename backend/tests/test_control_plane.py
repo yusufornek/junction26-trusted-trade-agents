@@ -28,6 +28,7 @@ def test_lookup_fetch_and_not_found(gateway, need, upstream):
         assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
     defaults_bytes = gateway.settings.policy_path.read_bytes()
     with TestClient(create_app(gateway)) as client:
@@ -140,6 +141,7 @@ def test_policy_applies_shortlist_and_ranking(gateway, need, upstream, monkeypat
     assert all(o.score == 0 for o in result.offers[1:])
 
 
+@pytest.mark.parametrize("registered_agents", [("hotel",)], indirect=True)
 def test_stats_small_flow_and_since(gateway, need, upstream):
     with TestClient(create_app(gateway)) as client:
         empty = client.get("/v1/stats").json()
@@ -168,7 +170,8 @@ def test_stats_small_flow_and_since(gateway, need, upstream):
         warning_counts = Counter(w.code for lookup in [result, second_lookup] for o in lookup.offers for w in o.warnings)
         assert stats["top_warning_codes"] == [{"code": k, "count": v} for k, v in sorted(warning_counts.items(), key=lambda x: (-x[1], x[0]))[:5]]
         assert stats["top_rule_hits"] == [{"rule": "max_auto_total_eur", "count": 1}]
-        assert stats["agents_seen"] == [{"actor": "agent:hotel", "order_count": 2}, {"actor": "agent:observer", "order_count": 0}]
+        assert stats["agents_seen"] == [{"actor": "agent:hotel", "order_count": 2, "registered": True},
+                                        {"actor": "agent:observer", "order_count": 0, "registered": False}]
         assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
         window = client.get("/v1/stats", params={"since": decision_time.isoformat()}).json()
         assert window["human_decisions"] == {"approved": 1, "rejected": 0}

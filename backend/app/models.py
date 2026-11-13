@@ -21,7 +21,7 @@ class NeedSpec(Model):
     exclude_allergens: list[str] = Field(default_factory=list, description="Exclude products whose catalog allergen CONTAINS includes any ID.")
     quantity: Quantity
     deliver_by: date = Field(description="Latest acceptable delivery date.")
-    max_candidates: int = Field(default=10, ge=1, le=10, description="Maximum shortlisted products sent to live APIs.")
+    max_candidates: int = Field(default=10, ge=1, le=10, description="Maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.")
 
 
 class Warning(Model):
@@ -107,6 +107,8 @@ class LookupResult(Model):
     need: NeedSpec
     offers: list[OfferCard]
     excluded_count: int = Field(description="FTS matches removed by hard catalog filters, before shortlist truncation.")
+    priced_count: int = Field(default=0, ge=0, description="Shortlisted products checked for live prices, including cached evidence.")
+    screened_count: int = Field(default=0, ge=0, description="Catalog pool size submitted for Decisions screening.")
     live_calls: LiveCalls
     decision_calls: int
     warnings: list[Warning] = Field(default_factory=list)
@@ -270,6 +272,20 @@ class RankingWeights(Model):
 
 class ShortlistPolicy(Model):
     catalog_pool: int = Field(ge=10, le=100, description="Catalog candidates screened before live Valio calls.")
+    live_max: int = Field(default=25, ge=10, le=40, description="Maximum suitable candidates priced before returning the top offers.")
+
+
+class AgentMandate(Model):
+    customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
+    max_auto_total_eur: float | None = Field(default=None, ge=0, description="Optional per-order ceiling; the lower of this and the global ceiling applies.")
+    max_auto_daily_total_eur: float = Field(ge=0, description="Rolling 24-hour autonomous EUR ceiling; cancelled and human-approved orders are excluded.")
+    note: str = Field(default="", description="Free-text record of who granted the mandate.")
+
+    @model_validator(mode="after")
+    def named_customers(self):
+        if any(not customer.strip() for customer in self.customer_ids):
+            raise ValueError("customer_ids must contain non-blank customer identifiers")
+        return self
 
 
 class PolicyDocument(Model):
@@ -277,6 +293,7 @@ class PolicyDocument(Model):
     reject: RejectPolicy
     ranking_weights: RankingWeights
     shortlist: ShortlistPolicy = Field(default_factory=lambda: ShortlistPolicy(catalog_pool=40))
+    agents: dict[str, AgentMandate] = Field(default_factory=dict, description="Agent identity to mandate; unregistered agents always require human approval.")
 
     @model_validator(mode="after")
     def known_codes(self):
@@ -285,6 +302,8 @@ class PolicyDocument(Model):
         unknown = set(self.approval.warnings_need_approval + self.reject.on) - WARNING_TEXT.keys()
         if unknown:
             raise ValueError(f"Unknown warning codes: {', '.join(sorted(unknown))}")
+        if any(not agent.strip() for agent in self.agents):
+            raise ValueError("agents must have non-blank identifiers")
         return self
 
 
@@ -333,6 +352,7 @@ class RuleCount(Model):
 class AgentStats(Model):
     actor: str = Field(description="Distinct agent audit actor, including the agent: prefix.")
     order_count: int = Field(description="Orders created by this agent in the window, regardless of current status.")
+    registered: bool = Field(description="Whether the agent currently has a mandate in the effective policy.")
 
 
 class Stats(Model):

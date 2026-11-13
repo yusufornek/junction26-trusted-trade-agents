@@ -17,7 +17,9 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 13 | Order cancel over REST + MCP (`POST /v1/orders/{id}/cancel`, tool `cancel_order`) | Backend | done | spec `docs/specs/04-order-cancel.md`, [issue #1](https://github.com/yusufornek/junction26-trusted-trade-agents/issues/1); verified live 13.11 |
 | 14 | Spec-driven core: audit + specs 01–03 as built (`docs/specs/`) | Backend | done | reviewed one by one after the MVP |
 | 15 | Size reconciliation — exact pack counts | Backend | done | spec `docs/specs/05-size-reconciliation.md` |
-| 16 | Agent mandate — per-agent authority, cumulative limit | Backend | todo | spec `docs/specs/06-agent-mandate.md` |
+| 16 | Agent mandate — per-agent authority, cumulative limit | Backend | done | spec `docs/specs/06-agent-mandate.md` |
 | 17 | Order timeline endpoint (`GET /v1/orders/{id}/timeline`) | Backend | done | spec `docs/specs/07-order-timeline.md` |
+| 18 | Price-complete shortlist — stable best offer | Backend | done | spec `docs/specs/09-price-complete-shortlist.md` |
+| 19 | Exceptions — fulfilment plans, policy preview, substitutes | Backend | todo | spec draft `docs/specs/08-exceptions.md` |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

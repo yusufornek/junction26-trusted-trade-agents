@@ -1,6 +1,6 @@
 # 05 — Size reconciliation (Core 1 quality)
 
-Status: built (verified live 2026-11-14: sizes 5 / 20 / 12 L, 200 / 50 / 84 units) · Found in the frontend review on 2026-11-14.
+Status: built (verified live 2026-11-14: sizes 5 / 20 / 12 L, 200 / 50 / 84 units) · R-7, R-8 added after the independent review and built · Found in the frontend review on 2026-11-14.
 
 ## Purpose
 "1,000 litres" must become the right number of packs. Today the size per sales unit comes first from the live
@@ -19,6 +19,12 @@ screen. Judged under "Solving the user need" (20%): how precisely the answer mat
   price ratio (it reflects what is actually invoiced) and add warning `SIZE_MISMATCH` with both values in the
   text. `SIZE_MISMATCH` is a known warning code and is in the default `warnings_need_approval`.
 - **R-5 Ratio only:** with no exact source, keep the price ratio as today.
+- **R-7 Sold by weight is 1 kg per unit:** when the sales unit is `KG` and the request is in `KG`, the size is
+  1.0 by definition (`size_source: base_unit`); the piece weight in the catalog or name ("ca 2,4 kg") never
+  overrides it. `size_confirmed_by_price` is true when the price ratio is within 3 % of 1.
+- **R-8 Pack count in the name:** a size written as "N x size" ("55x100g", "72 x 32g") counts N packs when the
+  sales-unit multiplier is 1; when the multiplier already carries the count ("5 x … 1 L" with multiplier 5) the
+  multiplier is used and N is ignored.
 - **R-6 No silent change elsewhere:** `units_needed`, totals and coverage follow the reconciled size; quotes keep
   their explicit `quantity_sales_units`.
 
@@ -32,4 +38,8 @@ screen. Judged under "Solving the user need" (20%): how precisely the answer mat
 - **AC-5** No catalog volume and no size in the name → price ratio used, no new warning (unchanged behaviour).
 - **AC-6** No price ratio (price error) but a name size → name size used, `size_confirmed_by_price` false.
 - **AC-7** `GET /v1/policy` lists `SIZE_MISMATCH` in `known_warning_codes`; the contract is regenerated.
+- **AC-9** KG-sold product with catalog net weight 2.4 kg and "2,4 kg" in the name, request in KG → size 1.0
+  from `base_unit`, units needed = requested kg, no `SIZE_MISMATCH`, with and without a price ratio.
+- **AC-10** Name "Bun 55x100g", multiplier 1, price ratio 5.5 → size 5.5 kg from `name_parse`, confirmed, no
+  `SIZE_MISMATCH`; name "5 x Milk 1 L" with multiplier 5 still gives 5.0.
 - **AC-8** Live check: the 1,000 L milk lookup shows whole sizes (5, 20, 12 L) and 200 / 50 / 84 units.

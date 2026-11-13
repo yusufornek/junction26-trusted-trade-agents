@@ -11,7 +11,7 @@ ORDER_STATUSES = ("CONFIRMED", "PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCE
 PLACEMENT_STATUSES = ORDER_STATUSES[:3]
 
 
-def read_stats(db, since=None):
+def read_stats(db, since=None, *, registered_agents=()):
     if since is not None:
         since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since.astimezone(timezone.utc)
     with db.connect() as conn:
@@ -62,5 +62,6 @@ def read_stats(db, since=None):
         total_decisions_calls=sum(e.data.get("decision_calls", 0) for e in events),
         top_warning_codes=[{"code": code, "count": n} for code, n in sorted(warnings.items(), key=lambda x: (-x[1], x[0]))[:5]],
         top_rule_hits=[{"rule": rule, "count": n} for rule, n in sorted(rules.items(), key=lambda x: (-x[1], x[0]))[:5]],
-        agents_seen=[{"actor": actor, "order_count": agent_orders[actor]} for actor in agents],
+        agents_seen=[{"actor": actor, "order_count": agent_orders[actor],
+                      "registered": actor.removeprefix("agent:") in registered_agents} for actor in agents],
     )

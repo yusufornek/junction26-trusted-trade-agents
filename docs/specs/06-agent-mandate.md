@@ -1,6 +1,6 @@
 # 06 — Agent mandate (Core 3: what each agent may decide alone)
 
-Status: draft → in progress · Found in the core audit on 2026-11-14.
+Status: built (verified live 2026-11-14) · defaults await the team review · Found in the core audit on 2026-11-14.
 
 ## Purpose
 Today one policy applies to every caller and the spend limit is per order. Two gaps follow: an unknown agent has
@@ -12,7 +12,7 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
   `customer_ids` (list of customers it may act for), `max_auto_total_eur` (optional, per order; the effective
   limit is the lower of this and `approval.max_auto_total_eur`), `max_auto_daily_total_eur` (cumulative, see R-3)
   and `note` (free text, who granted it). Defaults in `backend/policy.yaml` register `hotel-chain-agent` and
-  `buyer-console` for customer `"1"` with a daily limit of 5,000 EUR.
+  `web-console` (the operator console's own buyer flow) for customer `"1"` with a daily limit of 5,000 EUR.
 - **R-2 Unregistered agents can look and quote, a human decides their orders:** an order from an agent without
   a mandate always goes to `PENDING_APPROVAL` with rule hit `unregistered_agent`.
 - **R-3 Cumulative limit:** when the sum of this agent's orders that were confirmed without a human in the last
@@ -28,8 +28,8 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
 - **R-7 Identity:** REST `X-Agent-Id` (default `external`, which has no mandate); MCP identity from `--agent-id`.
   `POST /v1/offers` also accepts `X-Agent-Id` so lookups are attributed to the agent in the audit trail.
 - **R-8 Stats:** `agents_seen` marks each agent as registered or not.
-- **R-9 Console:** the operator console sends `X-Agent-Id: buyer-console` for its own buyer flow (one line in
-  `frontend/src/api.ts`), so console orders are attributed and governed like any other agent.
+- **R-9 Console:** the operator console already sends `X-Agent-Id: web-console` for its buyer flow; that id is
+  registered in the default mandates, so console orders are attributed and governed like any other agent.
 
 ## Acceptance criteria
 - **AC-1** Registered agent, order within all limits → `CONFIRMED`, no hits (unchanged behaviour).
@@ -45,7 +45,7 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
 - **AC-8** `PUT /v1/policy` without `agents` keeps mandates; with a changed mandate the audit diff shows the
   field; invalid mandates → `422`.
 - **AC-9** Over MCP the identity from `--agent-id` is the one checked (registered vs. not).
-- **AC-10** Console flow: an order placed from the buyer page is recorded as `agent:buyer-console`.
+- **AC-10** Console flow: an order placed from the buyer page is recorded as `agent:web-console` and confirms within its mandate.
 
 ## For the review
 Defaults chosen tonight and easy to change in `policy.yaml`: unregistered agents may quote but never

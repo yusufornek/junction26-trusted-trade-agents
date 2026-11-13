@@ -1,11 +1,21 @@
 import os
+from decimal import Decimal
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import yaml
 
 from . import audit
+from .db import DomainError
 from .models import PolicyDocument, PolicyResource, PolicyResult, RuleHit
+
+
+class PolicyLoader(yaml.SafeLoader):
+    # Preserve the key 'on' while retaining safe YAML null/list/number handling.
+    yaml_implicit_resolvers = {
+        key: [(tag, regex) for tag, regex in resolvers if tag != "tag:yaml.org,2002:bool"]
+        for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
 
 
 class Policy:
@@ -16,14 +26,19 @@ class Policy:
         self.get()  # Validate configuration at startup.
 
     @staticmethod
-    def _load(path):
-        # BaseLoader keeps YAML's 'on' key a string (safe_load interprets it as boolean).
-        return PolicyResource.model_validate(yaml.load(path.read_text(), Loader=yaml.BaseLoader))
+    def _load(path, defaults=None):
+        data = yaml.load(path.read_text(), Loader=PolicyLoader)
+        if defaults is not None:
+            data.setdefault("shortlist", {})
+            data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
+            data.setdefault("agents", {key: value.model_dump() for key, value in defaults.agents.items()})
+        return PolicyResource.model_validate(data)
 
     def get(self):
         from .lookup import WARNING_TEXT
 
-        resource = self._load(self.runtime_path if self.runtime_path.exists() else self.path)
+        defaults = self._load(self.path)
+        resource = self._load(self.runtime_path, defaults) if self.runtime_path.exists() else defaults
         resource.known_warning_codes = sorted(WARNING_TEXT)
         return resource
 
@@ -42,12 +57,13 @@ class Policy:
     @staticmethod
     def _diff(before, after, prefix=""):
         changes = {}
-        for key, value in after.items():
+        for key in sorted(before.keys() | after.keys()):
+            old, value = before.get(key), after.get(key)
             field = f"{prefix}.{key}" if prefix else key
-            if isinstance(value, dict):
-                changes.update(Policy._diff(before[key], value, field))
-            elif value != before[key]:
-                changes[field] = {"before": before[key], "after": value}
+            if isinstance(old, dict) and isinstance(value, dict):
+                changes.update(Policy._diff(old, value, field))
+            elif value != old:
+                changes[field] = {"before": old, "after": value}
         return changes
 
     def _replace(self, content):
@@ -72,6 +88,10 @@ class Policy:
                 previous = self.runtime_path.read_text() if self.runtime_path.exists() else None
                 before = self._editable(self.get())
                 after = self._editable(self._load(self.path) if reset else request.policy)
+                if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
+                    after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
+                if not reset and "agents" not in request.policy.model_fields_set:
+                    after["agents"] = before["agents"]
                 resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
                 audit.append(conn, f"human:{request.updated_by}", "POLICY_UPDATED",
                              "Restored default policy." if reset else "Updated procurement policy.",
@@ -89,17 +109,35 @@ class Policy:
             raise
         return self.get()
 
-    def evaluate(self, total, lines, hard_violations=()):
-        policy = self.get()
+    def check_customer(self, agent_id, customer_id, policy=None):
+        mandate = (policy or self.get()).agents.get(agent_id)
+        if mandate is not None and customer_id not in mandate.customer_ids:
+            raise DomainError("CUSTOMER_NOT_IN_MANDATE", f"Agent {agent_id} has no mandate for customer {customer_id}", 403)
+
+    def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, autonomous_total=Decimal(0), policy=None):
+        policy = policy or self.get()
         max_total = policy.approval.max_auto_total_eur
+        source = "global policy"
+        mandate = policy.agents.get(agent_id)
+        if mandate is not None and mandate.max_auto_total_eur is not None and mandate.max_auto_total_eur <= max_total:
+            max_total = mandate.max_auto_total_eur
+            source = f"mandate for {agent_id}"
         min_fit = policy.approval.min_fit_probability
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
         hits, rejected, approval = [], False, False
+        if agent_id is not None and mandate is None:
+            hits.append(RuleHit(rule="unregistered_agent", detail=f"Agent {agent_id} has no mandate; human approval is required."))
+            approval = True
+        if mandate is not None and autonomous_total + Decimal(str(total)) > Decimal(str(mandate.max_auto_daily_total_eur)):
+            hits.append(RuleHit(rule="max_auto_daily_total_eur", detail=(
+                f"Agent {agent_id}: {autonomous_total:.2f} + {total:.2f} exceeds "
+                f"{mandate.max_auto_daily_total_eur:.2f} EUR in the rolling 24-hour autonomous window.")))
+            approval = True
         for violation in hard_violations:
             hits.append(RuleHit(rule="hard_constraint_violation", detail=violation))
             rejected |= policy.reject.on_hard_constraint_violation
         if total > max_total:
-            hits.append(RuleHit(rule="max_auto_total_eur", detail=f"Net total {total:.2f} exceeds {max_total:.2f} EUR"))
+            hits.append(RuleHit(rule="max_auto_total_eur", detail=f"Net total {total:.2f} exceeds {max_total:.2f} EUR ({source})"))
             approval = True
         for line in lines:
             if line.fit is not None and line.fit < min_fit:

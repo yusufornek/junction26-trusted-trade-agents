@@ -75,6 +75,7 @@ class Orders:
                          lambda counter: self._create_quote(request, actor, counter))
 
     def _create_quote(self, request, actor, counter):
+        self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
         lookup = None
         if request.need_ref:
             with self.db.connect() as conn:
@@ -100,6 +101,8 @@ class Orders:
         fit_by_id = {o.product_id: {"probability": o.fit, "question": o.fit_question or ""}
                      for o in lookup.offers if o.fit is not None} if lookup else {}
         with self.db.connect(write=True) as conn:
+            # Recheck after taking the same lock used by policy updates.
+            self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in request.lines:
                 p = products[line.product_id]
@@ -149,6 +152,8 @@ class Orders:
                              data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump()})
                 return order
             quote = self._quote(conn, quote_id)
+            policy = self.policy.get()
+            self.policy.check_customer(agent_id, quote.customer_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired; create a new quote before ordering")
             if quote.status != "OPEN":
@@ -159,9 +164,11 @@ class Orders:
                 raise DomainError("EXPIRED_QUOTE", "Quote expired while checking stock; create a new quote")
             lines = self._refresh_stock(conn, quote.lines, quote.deliver_by, stock)
             # Re-read catalog hard facts as well as preserving original quote violations.
-            result = self.policy.evaluate(quote.total, lines, self._violations(conn, quote))
+            now = audit.utcnow()
+            result = self.policy.evaluate(quote.total, lines, self._violations(conn, quote), agent_id=agent_id,
+                                          autonomous_total=self._autonomous_total(conn, agent_id, now), policy=policy)
             order = Order(id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
-                          status=result.outcome, created_at=audit.utcnow(), expires_at=quote.expires_at,
+                          status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, policy=result, live_calls=counter.live())
             conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
@@ -173,6 +180,19 @@ class Orders:
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
                          "live_calls": counter.live().model_dump()})
             return order
+
+    @staticmethod
+    def _autonomous_total(conn, agent_id, now):
+        # The caller holds BEGIN IMMEDIATE through this read and the new order insert.
+        # Parse timestamps instead of comparing ISO strings with potentially different offsets.
+        start = now - timedelta(hours=24)
+        total = Decimal(0)
+        for row in conn.execute("SELECT data FROM orders WHERE status='CONFIRMED'"):
+            order = Order.model_validate_json(row["data"])
+            if (order.agent_id == agent_id and order.approver is None and order.currency == "EUR"
+                    and start <= order.created_at <= now):
+                total += Decimal(str(order.total))
+        return total
 
     def _violations(self, conn, quote):
         violations = list(quote.hard_constraint_violations)

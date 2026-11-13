@@ -1,7 +1,7 @@
 # Trusted Trade Agents backend MVP
 
 One Python core serves FastAPI and the MCP 2.3 server. It searches the local catalog, screens a
-40-product pool with Decisions, checks live Valio price/availability for at most ten products, locks fixed-price quotes, then
+40-product pool with Decisions, checks live Valio price/availability for suitable candidates (up to 25 by default), locks fixed-price quotes, then
 runs the approval policy. The upstream mock has no search or order endpoint: quotes, orders,
 approvals and reservations exist only in this gateway.
 
@@ -72,8 +72,10 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    `quantity_sales_units` set to `units_needed`. Multiple explicit lines are supported. The gateway
    stores lookups and retrieves fit/constraints itself; clients cannot inject a trusted fit score.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
-   header `Idempotency-Key`, and optional `X-Agent-Id` (default `external`). Fixed prices remain the
-   quoted prices. Repeated keys return the existing order; reuse with another quote/agent is a conflict.
+   header `Idempotency-Key`, and optional `X-Agent-Id` (default `external`, unregistered and always
+   requiring human approval). Use a registered identity such as `hotel-chain-agent` for autonomous
+   purchases. Fixed prices remain the quoted prices. Repeated keys return the existing order;
+   reuse with another quote/agent is a conflict.
 4. If `PENDING_APPROVAL`, inspect `GET /v1/approvals`. A human calls
    `POST /v1/approvals/{order_id}/approve` or `/reject`, body
    `{"approver":"Ada","comment":"Reviewed delivery and budget"}`.
@@ -97,13 +99,15 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   for unknown orders. MCP `get_order_status` continues to return the existing order model.
 - `GET /v1/lookups/{lookup_id}` returns the original stored `LookupResult`, including alternatives;
   use a quote's `need_ref`. Unknown IDs return `404 LOOKUP_NOT_FOUND`. No upstream calls are made.
-- `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `updated_at`,
+- `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `agents`, `updated_at`,
   `updated_by`, and `known_warning_codes`. The last three fields are server supplied; initial
   committed defaults have null update metadata. `PUT /v1/policy` accepts
   `{"policy": <editable sections>, "updated_by": "Ada", "comment": "Budget review"}` and returns
   the effective resource. Echoing the GET response as `policy` also works; its metadata is replaced.
   Thresholds/weights must be nonnegative, fit must be 0–1, weights must sum above zero, catalog pool
-  must be 10–100, and warning codes must be known. Invalid requests return `422 VALIDATION_ERROR`.
+  must be 10–100, live shortlist cap must be 10–40, and warning codes must be known. Mandate IDs and
+  customer IDs must be non-blank, each mandate needs at least one customer, and limits must be finite
+  and nonnegative. Invalid requests return `422 VALIDATION_ERROR`.
 - `POST /v1/policy/reset` with `{"updated_by": "Ada"}` restores committed defaults and returns
   the effective resource with new update metadata. Both writes append `POLICY_UPDATED` by
   `human:<name>`; `data.diff` maps changed dotted field paths to `{before, after}` and also records
@@ -112,6 +116,9 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   Writes atomically replace the runtime file; committed defaults remain unchanged. REST and MCP
   reread it for subsequent operations without restart. With a custom database path, the runtime
   policy lives beside that database so independent gateway instances stay isolated.
+  PUTs omitting `agents` or `shortlist.live_max` keep the current values, including older frontend
+  request shapes. Older runtime files missing those fields inherit the committed defaults; an
+  explicit `agents: {}` removes all mandates. Reset restores the committed mandates and limits.
 - `GET /v1/stats?since=<ISO datetime>` returns described Pydantic metrics in the OpenAPI contract.
   `since` is inclusive, normalized to UTC (naive timestamps mean UTC). Current order counts and
   confirmed spend use **order creation time**; lookups, placement outcomes, human decisions and
@@ -120,7 +127,32 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   Live-call averages include lookups only, including cached zero-call lookups; Decisions totals
   count actual HTTP requests. Warning counts count offer occurrences, excluding lookup-level
   duplicates; rule counts count placement hits. Top-five ties sort by code/rule. Empty averages
-  are zero. Stats refresh local expirations and make no upstream calls.
+  are zero. Each `agents_seen` entry includes `registered`, based on the effective policy at read time.
+  Stats refresh local expirations and make no upstream calls.
+
+## Agent mandates
+
+`policy.yaml` registers `hotel-chain-agent` and `web-console` for customer `"1"`, each with a
+5,000 EUR rolling 24-hour autonomous limit. `agents` maps each identity to `customer_ids`, optional
+`max_auto_total_eur`, required `max_auto_daily_total_eur`, and a free-text `note` recording its grant.
+REST uses `X-Agent-Id` (also accepted by `POST /v1/offers` for lookup audit attribution). MCP fixes
+identity using `--agent-id` at launch; tools cannot change it per call. The frontend buyer flow
+should send `X-Agent-Id: web-console`.
+
+Unregistered agents may search and quote, but their orders always require human approval with
+`unregistered_agent`; hard rejection rules still take precedence. Registered agents may quote or
+order only for their listed customers; violations return `403 CUSTOMER_NOT_IN_MANDATE`, audit a
+failed attempt, and do not commit an order. Scope is rechecked at placement under the current policy.
+
+The effective per-order ceiling is the lower of global `approval.max_auto_total_eur` and the
+mandate's optional ceiling; `max_auto_total_eur` hits name the amount and its source. A registered
+agent's currently confirmed autonomous EUR orders created in the inclusive rolling 24-hour window
+are summed before adding the new total. Exceeding the daily ceiling adds `max_auto_daily_total_eur`
+with the prior spend, new total and ceiling. Cancelled, pending, rejected, expired and human-approved
+orders do not consume that budget. Equal-to-limit totals pass. This check and insertion share the
+SQLite writer lock across REST/MCP instances, so concurrent split orders cannot bypass the ceiling.
+Idempotent replays retain their existing result and never add spend. A human may approve an order
+held for a missing mandate or spend limit through the normal inbox.
 
 ## Evidence, policy and lifecycle
 
@@ -128,6 +160,17 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   using AND tokens; `search_terms` avoids incidental words in the buyer's natural-language intent.
   Required claims and excluded `CONTAINS` allergens are hard filters before shortlisting. Absence from
   the contains list is catalog evidence, not certification that an allergen is absent.
+- Decisions screens `shortlist.catalog_pool` (default 40). Every candidate at or above
+  `approval.min_fit_probability` is priced, highest fit first, up to `shortlist.live_max` (default 25,
+  validated 10–40). If too few pass, the next best fits fill up to `max_candidates`; without fit scores,
+  the first catalog candidates are used and carry `NO_FIT_SCORE`. All live candidates share one price
+  and one availability batch (cached evidence can reduce actual calls). Ranking runs before returning
+  the top `max_candidates` (at most 10). `priced_count` counts live-price candidates including cache hits.
+  Fit's ranking contribution is capped at the suitability floor so noise above it cannot reorder
+  suitable products; response and approval checks retain the original probabilities.
+  `screened_count` reports the catalog screening pool. Older stored lookups default both counts to zero.
+  Policy updates omitting `shortlist.live_max` retain its current value; older runtime files inherit
+  the committed default.
 - Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
   multiplier, and the live catalog/comparison price ratio. Among exact sources confirmed by price,
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
@@ -182,7 +225,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
 
 This local development gateway has one named human approver role and no authentication.
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
-Signed quotes, credentials/mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
+Signed quotes, verifiable-credential mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
 automatic splitting/substitution, payments, deployment and separate buyer-agent code are deferred.
 The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}`.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.

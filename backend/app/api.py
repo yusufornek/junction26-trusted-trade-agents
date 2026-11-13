@@ -34,7 +34,7 @@ def create_app(gateway=None):
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
                   description="MVP fixed-price gateway. REST and MCP share one core. Local quotes/orders and one human approver role; development only, no authentication.",
-                  responses={code: {"model": ErrorResponse} for code in (404, 409, 422, 502, 503)})
+                  responses={code: {"model": ErrorResponse} for code in (403, 404, 409, 422, 502, 503)})
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.exception_handler(DomainError)
@@ -78,8 +78,8 @@ def create_app(gateway=None):
         return Health(status="ok" if count else "catalog_empty", catalog_rows=count)
 
     @app.post("/v1/offers", response_model=LookupResult, summary="Shortlist catalog matches, then fetch live offers")
-    def offers(need: NeedSpec, request: Request):
-        return svc(request).find_offers(need)
+    def offers(need: NeedSpec, request: Request, x_agent_id: Annotated[str, Header()] = "external"):
+        return svc(request).find_offers(need, actor=f"agent:{x_agent_id}")
 
     @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
     def get_lookup(lookup_id: str, request: Request):
@@ -101,7 +101,7 @@ def create_app(gateway=None):
     def stats(request: Request, since: datetime | None = None):
         service = svc(request)
         service.orders.expire()
-        return read_stats(service.db, since)
+        return read_stats(service.db, since, registered_agents=set(service.policy.get().agents))
 
     @app.get("/v1/products/{id}", response_model=Product)
     def product(id: str, request: Request):

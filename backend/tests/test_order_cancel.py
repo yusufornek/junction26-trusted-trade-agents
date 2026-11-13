@@ -35,6 +35,7 @@ def call_counts(upstream):
 
 
 @pytest.mark.parametrize("reason", [None, "Agent selected the wrong product"])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac1_human_confirmed_order(client, gateway, need, upstream, reason):
     order = place_order(gateway, need)
     assert order.status == "CONFIRMED"
@@ -56,6 +57,7 @@ def test_cancel_ac1_human_confirmed_order(client, gateway, need, upstream, reaso
 
 
 @pytest.mark.parametrize("missing_ids", [{"1"}, {"1", "4"}])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac1_missing_cutoffs_do_not_block(client, gateway, need, upstream, respx_mock, missing_ids):
     def availability_response(request):
         body = upstream.availability_response(request).json()
@@ -70,6 +72,7 @@ def test_cancel_ac1_missing_cutoffs_do_not_block(client, gateway, need, upstream
     assert client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Ada"}).status_code == 200
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac2_stock_reservation_released(client, gateway, need, upstream):
     upstream.model, upstream.amount = "Stock", 10
     order = place_order(gateway, need, product_ids=("1", "4"))
@@ -84,6 +87,7 @@ def test_cancel_ac2_stock_reservation_released(client, gateway, need, upstream):
 
 
 @pytest.mark.parametrize("seconds_after", [0, 1])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac3_cutoff_passed(client, gateway, need, upstream, respx_mock, monkeypatch, seconds_after):
     # Only the second line has reached its cutoff; checking just the first is insufficient.
     first_cutoff = upstream.cutoff + timedelta(hours=1)
@@ -111,6 +115,7 @@ def test_cancel_ac3_cutoff_passed(client, gateway, need, upstream, respx_mock, m
 
 
 @pytest.mark.parametrize("status", ["PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCELLED"])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac4_invalid_transition(client, gateway, need, upstream, monkeypatch, status):
     order = place_order(gateway, need, qty=200 if status != "CANCELLED" else 6)
     if status == "REJECTED":
@@ -138,6 +143,7 @@ def test_cancel_ac5_unknown_order(client, gateway):
 
 
 @pytest.mark.parametrize("body", [{"cancelled_by": ""}, {"cancelled_by": " \t\n "}, {}, {"cancelled_by": None}])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     order = place_order(gateway, need)
     response = client.post(f"/v1/orders/{order.id}/cancel", json=body)
@@ -155,6 +161,7 @@ def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     assert event.data["inputs"]["order_id"] == order.id
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, monkeypatch):
     order = place_order(gateway, need)
     body = {"cancelled_by": "Ada", "reason": "Wrong product"}
@@ -182,6 +189,7 @@ def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, m
     assert event["quote_id"] == other.quote_id
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
     owner = create_server(gateway, agent_id="buyer")
     other = create_server(gateway, agent_id="other")
@@ -219,6 +227,7 @@ def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac8_mcp_transport_exposes_owner_error(gateway, need, upstream):
     order = place_order(gateway, need)
     server = create_server(gateway, agent_id="other")
@@ -234,6 +243,7 @@ def test_cancel_ac8_mcp_transport_exposes_owner_error(gateway, need, upstream):
     assert gateway.orders.get_order(order.id) == order
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_cancel_ac9_stats_exclude_cancelled_spend(client, gateway, need, upstream):
     order = place_order(gateway, need)
     retained = place_order(gateway, need)

@@ -1,6 +1,6 @@
 # 09 — Price-complete shortlist (Core 1 quality)
 
-Status: draft → in progress · Found in a live check on 2026-11-14.
+Status: built (verified live 2026-11-14: three runs, same best offer 1,010 €, 13 priced of 40 screened, 1 + 1 calls) · Found in a live check on 2026-11-14.
 
 ## Purpose
 The lookup screens a catalog pool with Decisions and sends only the ten highest fit scores to the live price

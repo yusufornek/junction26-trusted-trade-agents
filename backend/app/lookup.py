@@ -62,6 +62,11 @@ def reconcile_size(product, price, requested_unit):
     ratio = None
     if not price.get("error") and price.get("comparisonUnit") == requested_unit and net and net > 0 and comparison and comparison > 0:
         ratio = net / comparison
+    if product.sales_unit == requested_unit == "KG":
+        # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
+        # ("ca 2,4 kg") describes the item, not the sales unit.
+        confirmed = ratio is not None and abs(ratio - 1) <= 0.03
+        return 1.0, "base_unit", confirmed, []
     multiplier = product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None)
     exact = {}
     if multiplier is not None and multiplier > 0:
@@ -70,13 +75,16 @@ def reconcile_size(product, price, requested_unit):
             exact["catalog"] = content * multiplier
         # Compute the name source too, even when structured catalog content exists.
         # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
-        pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+        # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
+        # multiplier does not already carry it ("5 x Milk 1 L" with multiplier 5 stays 5 x 1 L).
+        pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
         factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
         for name in (product.name_en, product.name_fi):
             for match in re.finditer(pattern, name, re.IGNORECASE):
-                value, unit = float(match[1].replace(",", ".")), match[2].lower()
+                count = int(match[1]) if match[1] else 1
+                value, unit = float(match[2].replace(",", ".")), match[3].lower()
                 if unit in factors and value > 0:
-                    exact["name_parse"] = value * factors[unit] * multiplier
+                    exact["name_parse"] = value * factors[unit] * (count if multiplier == 1 and count > 0 else multiplier)
                     break
             if "name_parse" in exact:
                 break
@@ -96,8 +104,6 @@ def reconcile_size(product, price, requested_unit):
         return ratio, "price_ratio", False, [mismatch]
     if ratio is not None:
         return ratio, "price_ratio", False, []
-    if product.sales_unit == requested_unit == "KG":
-        return 1.0, "base_unit", False, []
     return None, None, False, []
 
 
@@ -174,10 +180,12 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     )
 
 
-def rank(offers, weights):
+def rank(offers, weights, fit_floor=None):
     metrics = {"price": lambda o: o.price_per_l_or_kg if o.size_unit != "SALES_UNIT" else o.unit_price,
                "coverage": lambda o: o.availability.coverage, "reliability": lambda o: o.delivery_reliability,
-               "co2": lambda o: o.co2_kg_per_kg, "fit": lambda o: o.fit}
+               "co2": lambda o: o.co2_kg_per_kg,
+               # Above the suitability gate, fit noise must not change the commercial ranking.
+               "fit": lambda o: min(o.fit, fit_floor) if o.fit is not None and fit_floor is not None else o.fit}
     for key, value in metrics.items():
         known = [value(o) for o in offers if value(o) is not None]
         low, high = (min(known), max(known)) if known else (0, 0)
@@ -205,17 +213,21 @@ class Lookup:
 
     def find_offers(self, need, actor="agent:external"):
         query = " ".join(need.search_terms) if need.search_terms else need.intent
-        pool_size = max(need.max_candidates, self.policy.catalog_pool)
+        policy = self.policy.get()
+        pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
         pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
                                              max_limit=pool_size)
         counter = RequestCounter()
-        # Screen the whole local pool with Decisions first (no Valio calls), so a broad agent query like "milk"
-        # does not lose good candidates that rank low on text match; only the top max_candidates go live.
+        # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
+        screened_count = len(pool)
         if fits:
             order = {p.id: i for i, p in enumerate(pool)}
             pool = sorted(pool, key=lambda p: (-(fits.get(p.id) or {}).get("probability", -1), order[p.id]))
-        candidates = pool[:need.max_candidates]
+            passing = sum((fits.get(p.id) or {}).get("probability", -1) >= policy.approval.min_fit_probability for p in pool)
+            candidates = pool[:min(policy.shortlist.live_max, max(passing, need.max_candidates))]
+        else:
+            candidates = pool[:need.max_candidates]
         ids = [p.id for p in candidates]
         price, stock, global_warnings = {}, {}, []
         for endpoint, target in (("price", price), ("availability", stock)):
@@ -228,13 +240,15 @@ class Lookup:
         with self.db.connect(write=True) as conn:
             offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
                                 (fits or {}).get(p.id), reserved_amount=reserved(conn, p.id)) for p in candidates]
-            rank(offers, self.policy.weights)
-            result = LookupResult(lookup_id=str(uuid4()), need=need, offers=offers, excluded_count=excluded,
+            rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability)
+            result = LookupResult(lookup_id=str(uuid4()), need=need, offers=offers[:need.max_candidates], excluded_count=excluded,
+                                  priced_count=len(candidates), screened_count=screened_count,
                                   live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
-            audit.append(conn, actor, "LOOKUP", f"Shortlisted {len(offers)} offers and excluded {excluded} hard-filter failures.",
+            audit.append(conn, actor, "LOOKUP", f"Priced {len(candidates)} candidates, returned {len(result.offers)} offers and excluded {excluded} hard-filter failures.",
                          data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id,
                                "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": len(pool) if fits else 0,
+                               "priced_count": result.priced_count, "screened_count": result.screened_count,
                                "live_calls": counter.live().model_dump(),
                                "decision_calls": counter.decision_calls, "warnings": [w.model_dump() for w in global_warnings]})
         return result

@@ -81,6 +81,7 @@ def test_size_conflicting_exact_sources_resolved_by_price(gateway, need, upstrea
 
 
 @pytest.mark.parametrize("ratio", [2.5, 4.8499, 5.1501])
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_size_ac4_mismatch_visible_and_requires_approval(gateway, need, upstream, ratio):
     product_size(gateway, name="Milk 1 L", multiplier=5)
     upstream.price = ratio * 2.6
@@ -132,3 +133,33 @@ def test_size_ac7_policy_and_generated_contract(gateway):
     field = schema["components"]["schemas"]["OfferCard"]["properties"]["size_confirmed_by_price"]
     assert field["type"] == "boolean" and field["default"] is False
     assert field["description"]
+
+
+def kg_price(ratio):
+    return {"catalogPrice": {"value": ratio * 4.0}, "comparisonPrice": {"value": 4.0}, "comparisonUnit": "KG"}
+
+
+@pytest.mark.parametrize("price,confirmed", [({}, False), (kg_price(1.0), True)])
+def test_size_ac9_kg_sold_is_one_kg_per_unit(gateway, price, confirmed):
+    from app.lookup import reconcile_size
+    product = gateway.catalog.get("7").model_copy(update={
+        "name_en": "Liver pate appr 2,4 kg", "name_fi": "Maksapasteija n 2,4 kg", "base_net_weight_kg": 2.4})
+    assert product.sales_unit == "KG"
+    assert reconcile_size(product, price, "KG") == (1.0, "base_unit", confirmed, [])
+
+
+def test_size_ac10_pack_count_in_name(gateway):
+    from app.lookup import reconcile_size
+    base = gateway.catalog.get("1")
+    bun = base.model_copy(update={"name_en": "Bun 55x100g", "name_fi": "Pulla 55x100g", "units": {"KI": 1},
+                                  "base_volume_l": None, "base_net_weight_kg": None})
+    size, source, confirmed, warnings = reconcile_size(bun, kg_price(5.5), "KG")
+    assert (round(size, 6), source, confirmed, warnings) == (5.5, "name_parse", True, [])
+    spaced = bun.model_copy(update={"name_en": "Flatbread 72 x 32 g", "name_fi": "Rieska 72 x 32 g"})
+    assert round(reconcile_size(spaced, {}, "KG")[0], 6) == 2.304
+    milk = base.model_copy(update={"name_en": "5 x Milk 1 L", "name_fi": "5 x Maito 1 L", "units": {"KI": 5},
+                                   "base_volume_l": None, "base_net_weight_kg": None})
+    assert reconcile_size(milk, {}, "L")[:2] == (5.0, "name_parse")
+    portion = base.model_copy(update={"name_en": "Portion milk 100x2 cl", "name_fi": "Annosmaito 100x2 cl",
+                                      "units": {"KI": 1}, "base_volume_l": None, "base_net_weight_kg": None})
+    assert round(reconcile_size(portion, {}, "L")[0], 6) == 2.0
