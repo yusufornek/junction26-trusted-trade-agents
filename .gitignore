@@ -1,0 +1,20 @@
+# Challenge veri dosyaları (86 MB, portaldan indirilir)
+data/
+*.json.gz
+valio_aimo_junction26_*.json
+valio_aimo_junction26_*.csv
+
+# Gizli
+.env
+.env.local
+
+# Bağımlılıklar / build
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+
+# OS
+.DS_Store
