@@ -56,6 +56,7 @@ and every step is explained and recorded.*
 - Desktop first (demo on a laptop/projector); readable at 1280 px.
 
 ## Demo flow (≈3 min) the UI must support
+0. Opening: the same sentence goes to A.I.mo (My Aimo) and to our agent; our UI then shows what our agent did.
 1. Terminal/Claude on the left: the buyer agent receives "1,000 L lactose-free milk by Monday".
 2. Our UI on the right: the order appears in the inbox (or as CONFIRMED in the order list), open the card, approve.
 3. Timeline shows every step with actors and reasons.

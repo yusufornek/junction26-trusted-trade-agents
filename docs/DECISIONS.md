@@ -2,6 +2,11 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-13 — **Pitch opening: A.I.mo vs our agent, side by side.** Give the challenge's exact sentence ("1,000 L
+  lactose-free milk by Monday …") first to A.I.mo in My Aimo, then to our buyer agent. A.I.mo returns product lists
+  (drinking milk mixed with sour/curdled milk, no quantity, price, stock or order); our agent returns 1,000 × 1 L
+  Valio Eila for 1,010 €, live price and stock, auto-approved under policy, every step in the audit trail. The
+  contrast shows the gap we close in seconds. Record both runs on video as a backup for the live demo.
 - 2026-11-13 — **Positioning: an agent-commerce governance layer** — governance for outside agents buying from
   Valio Aimo.
   Pitch line: "Valio Aimo's agent gateway — outside AI agents can buy, but with a mandate, policy, human sign-off
