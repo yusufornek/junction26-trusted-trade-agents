@@ -169,8 +169,17 @@ class Lookup:
 
     def find_offers(self, need, actor="agent:external"):
         query = " ".join(need.search_terms) if need.search_terms else need.intent
-        candidates, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, need.max_candidates)
+        pool_size = max(need.max_candidates, self.policy.catalog_pool)
+        pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
+                                             max_limit=pool_size)
         counter = RequestCounter()
+        # Screen the whole local pool with Decisions first (no Valio calls), so a broad agent query like "milk"
+        # does not lose good candidates that rank low on text match; only the top max_candidates go live.
+        fits = self.decisions.ask(need, pool, counter)
+        if fits:
+            order = {p.id: i for i, p in enumerate(pool)}
+            pool = sorted(pool, key=lambda p: (-(fits.get(p.id) or {}).get("probability", -1), order[p.id]))
+        candidates = pool[:need.max_candidates]
         ids = [p.id for p in candidates]
         price, stock, global_warnings = {}, {}, []
         for endpoint, target in (("price", price), ("availability", stock)):
@@ -178,8 +187,7 @@ class Lookup:
                 target.update(self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError:
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
-        fits = self.decisions.ask(need, candidates, counter)
-        if candidates and (not fits or len(fits) != len(candidates)):
+        if candidates and (not fits or any(p.id not in fits for p in candidates)):
             global_warnings.append(warning("NO_FIT_SCORE"))
         with self.db.connect(write=True) as conn:
             offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
@@ -190,6 +198,7 @@ class Lookup:
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             audit.append(conn, actor, "LOOKUP", f"Shortlisted {len(offers)} offers and excluded {excluded} hard-filter failures.",
                          data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id,
-                               "fit_scores": {o.product_id: o.fit for o in offers}, "live_calls": counter.live().model_dump(),
+                               "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": len(pool) if fits else 0,
+                               "live_calls": counter.live().model_dump(),
                                "decision_calls": counter.decision_calls, "warnings": [w.model_dump() for w in global_warnings]})
         return result

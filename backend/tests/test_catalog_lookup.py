@@ -123,3 +123,22 @@ def test_cache_key_date_customer_and_expiry(gateway, need, upstream):
     gateway.valio.ttl = 0
     fetch("price", "1", need.deliver_by, ["1"], counter)
     assert counter.price == 4
+
+
+def test_decisions_screen_pool_before_live_calls(gateway, need, upstream):
+    """A product ranked low by text match still reaches the live shortlist when Decisions rates it best."""
+    upstream.decisions_response = None  # replaced below
+    def answers(request):
+        import json as _json
+        body = _json.loads(request.content)
+        upstream.decision_calls.append(body)
+        return httpx.Response(200, json={"answers": [
+            {"type": "predicate", "name": q["name"], "probability": 0.99 if q["name"] == "fit_7" else 0.2}
+            for q in body["questions"]]})
+    import respx
+    respx.post("https://api.openai.com/v1/decisions").mock(side_effect=answers)
+    result = gateway.find_offers(need.model_copy(update={"max_candidates": 1}))
+    assert len(upstream.decision_calls) == 1
+    assert len(upstream.decision_calls[0]["questions"]) == 5  # whole hard-filtered pool screened
+    assert [o.product_id for o in result.offers] == ["7"]
+    assert upstream.price_calls[0]["products"] == ["7"]  # live calls only for the shortlist

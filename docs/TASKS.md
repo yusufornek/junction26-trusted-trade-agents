@@ -12,7 +12,7 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 6 | Quote → order, policy YAML, approval endpoints, audit log | Backend (Claude → Codex) | done | |
 | 7 | MCP server over the same core (search, offers, quote, order, status) | Backend (Claude → Codex) | done | |
 | 8 | End-to-end demo: Claude as MCP client runs the 1,000 L milk request | Gökalp + Claude | done | `backend/demo/run_buyer_agent.sh`; verified live 13.11 |
-| 12 | Better shortlist: score more catalog candidates with Decisions before live calls (agent searching only "milk" missed cheaper Valio Eila 1 L) | Backend | todo | found in MCP demo |
+| 12 | Better shortlist: score more catalog candidates with Decisions before live calls (agent searching only "milk" missed cheaper Valio Eila 1 L) | Backend | done | demo now picks 1,010 € auto-confirmed option instead of 1,708 € |
 | 9 | Frontend: approval inbox + order/audit view | Frontend | todo | against `contracts/openapi.yaml` |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

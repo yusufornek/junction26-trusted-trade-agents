@@ -13,6 +13,7 @@ class Policy:
         self.reject_codes = set(raw["reject"]["on"])
         self.reject_hard = raw["reject"]["on_hard_constraint_violation"].lower() == "true"
         self.weights = {k: float(v) for k, v in raw["ranking_weights"].items()}
+        self.catalog_pool = int((raw.get("shortlist") or {}).get("catalog_pool", 40))
 
     def evaluate(self, total, lines, hard_violations=()):
         hits, rejected, approval = [], False, False

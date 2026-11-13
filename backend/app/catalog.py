@@ -109,9 +109,9 @@ class Catalog:
         with self.db.connect() as conn:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
-    def search(self, query, required_claims=None, exclude_allergens=None, limit=10):
-        if not 1 <= limit <= 10:
-            raise DomainError("INVALID_LIMIT", "limit must be between 1 and 10", 422)
+    def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10):
+        if not 1 <= limit <= max_limit:
+            raise DomainError("INVALID_LIMIT", f"limit must be between 1 and {max_limit}", 422)
         tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
         if not tokens:
             return [], 0
