@@ -7,8 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
+from . import audit as audit_log
 from .db import DomainError
-from .models import (ApprovalItem, ApprovalRequest, AuditEntry, ErrorResponse, Health,
+from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, ErrorResponse, Health,
                      LookupResult, NeedSpec, Order, OrderRequest, Product, Quote, QuoteRequest)
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .service import Gateway
@@ -39,6 +40,14 @@ def create_app(gateway=None):
     async def validation_error(request, error):
         # Omit input values from errors, retaining the field location and explanation.
         message = "; ".join(f"{'.'.join(str(v) for v in e['loc'])}: {e['msg']}" for e in error.errors())
+        if getattr(request.scope.get("route"), "path", None) == "/v1/orders/{order_id}/cancel":
+            body = error.body if isinstance(error.body, dict) else {}
+            order_id = request.path_params["order_id"]
+            with svc(request).db.connect(write=True) as conn:
+                row = conn.execute("SELECT quote_id FROM orders WHERE id=?", (order_id,)).fetchone()
+                audit_log.append(conn, f"human:{body.get('cancelled_by', '')}", "CANCEL_FAILED", message,
+                                 order_id=order_id, quote_id=row["quote_id"] if row else None,
+                                 data={"error": "VALIDATION_ERROR", "live_calls": {"price": 0, "availability": 0}})
         return JSONResponse(status_code=422, content={"code": "VALIDATION_ERROR", "message": message})
 
     def svc(request):
@@ -100,6 +109,11 @@ def create_app(gateway=None):
     @app.get("/v1/orders/{id}", response_model=Order)
     def get_order(id: str, request: Request):
         return svc(request).orders.get_order(id)
+
+    @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
+              summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
+    def cancel_order(order_id: str, body: CancelRequest, request: Request):
+        return svc(request).orders.cancel(order_id, actor=f"human:{body.cancelled_by}", reason=body.reason)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
     def approvals(request: Request):

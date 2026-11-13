@@ -11,7 +11,7 @@ change or extend.
 | 01 | [Lookup](01-lookup.md) | Core 1 — product, price, availability | built |
 | 02 | [Quote → order](02-quote-order.md) | Core 2 — inquiry to fixed-price commitment | built |
 | 03 | [Permissions & approval](03-permissions-approval.md) | Core 3 — what the agent decides alone, what a human signs | built |
-| 04 | [Order cancellation](04-order-cancel.md) | Human or agent undoes a confirmed order before the cut-off | in progress |
+| 04 | [Order cancellation](04-order-cancel.md) | Human or agent undoes a confirmed order before the cut-off | built |
 | 05 | [Size reconciliation](05-size-reconciliation.md) | Exact pack counts: catalog / name size confirmed by the live price ratio | draft |
 | 06 | [Agent mandate](06-agent-mandate.md) | Per-agent authority, cumulative spend limit, unregistered agents | draft |
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | draft |

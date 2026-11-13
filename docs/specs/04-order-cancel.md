@@ -1,6 +1,6 @@
 # 04 — Order cancellation
 
-Status: in progress · Source: [issue #1](https://github.com/yusufornek/junction26-trusted-trade-agents/issues/1) · Owner: backend
+Status: built (81 tests, verified live 2026-11-13) · Source: [issue #1](https://github.com/yusufornek/junction26-trusted-trade-agents/issues/1) · Owner: backend
 
 ## Purpose
 A human can approve or reject an order before the commitment. Cancellation is the step after it: a person (or the

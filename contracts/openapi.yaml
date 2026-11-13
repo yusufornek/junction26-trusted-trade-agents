@@ -632,6 +632,61 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Service Unavailable
+  /v1/orders/{order_id}/cancel:
+    post:
+      summary: Cancel a confirmed order before every known cutoff; fixed prices remain
+        unchanged
+      operationId: cancel_order_v1_orders__order_id__cancel_post
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
   /v1/approvals:
     get:
       summary: Pending approval inbox with quote evidence and all rule hits
@@ -1021,6 +1076,22 @@ components:
       - price
       - availability
       title: AverageLiveCalls
+    CancelRequest:
+      properties:
+        cancelled_by:
+          type: string
+          minLength: 1
+          title: Cancelled By
+          description: Non-blank human name responsible for cancellation.
+        reason:
+          type: string
+          title: Reason
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - cancelled_by
+      title: CancelRequest
     ErrorResponse:
       properties:
         code:
@@ -1379,6 +1450,18 @@ components:
           - type: string
           - type: 'null'
           title: Comment
+        cancelled_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cancelled By
+          description: Human name or placing agent ID responsible for cancellation.
+        cancel_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cancel Reason
+          description: Reason supplied when the order was cancelled.
       additionalProperties: false
       type: object
       required:

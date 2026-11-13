@@ -269,18 +269,29 @@ class Orders:
                                "live_calls": counter.live().model_dump()})
             return order
 
-    def cancel(self, order_id, actor="system"):
+    def cancel(self, order_id, actor="system", reason=""):
         """Core transition for a local confirmed order, before any known cutoff."""
+        inputs = {"order_id": order_id, "reason": reason}
+        return self._run("CANCEL", actor, inputs,
+                         lambda counter: self._cancel(order_id, actor, reason, inputs, counter))
+
+    def _cancel(self, order_id, actor, reason, inputs, counter):
         with self.db.connect(write=True) as conn:
             order = self._order(conn, order_id)
+            inputs["quote_id"] = order.quote_id
+            if actor.startswith("agent:") and order.agent_id != actor.removeprefix("agent:"):
+                raise DomainError("NOT_ORDER_OWNER", "An agent can cancel only orders it placed", 403)
             if order.status != "CONFIRMED":
                 raise DomainError("INVALID_TRANSITION", "Only CONFIRMED orders can be cancelled")
             cutoffs = [o.availability.closing_time for o in order.lines if o.availability.closing_time]
             if any(c <= audit.utcnow() for c in cutoffs):
                 raise DomainError("CUTOFF_PASSED", "Cancellation cutoff has passed")
             order.status = "CANCELLED"
+            order.cancelled_by = actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor
+            order.cancel_reason = reason
             self._save_order(conn, order)
             self._reserve(conn, order)
             audit.append(conn, actor, "CANCEL", "Confirmed order cancelled; local reservations released.",
-                         order_id=order.id, quote_id=order.quote_id)
+                         order_id=order.id, quote_id=order.quote_id,
+                         data={"reason": reason, "live_calls": counter.live().model_dump()})
             return order

@@ -53,7 +53,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 
     async def run():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status"}
+        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "cancel_order"}
         assert all(t.input_schema and t.output_schema for t in tools)
         result = await server.call_tool("search_products", {"query": "milk", "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"]})
         assert not result.is_error
@@ -84,7 +84,7 @@ def test_streamable_http_transport(gateway):
         assert initialized.json()["result"]["serverInfo"]["name"] == "Valio Aimo Trusted Trade Agents"
         listed = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert listed.status_code == 200
-        assert len(listed.json()["result"]["tools"]) == 5
+        assert len(listed.json()["result"]["tools"]) == 6
 
 
 def test_stdio_transport(gateway):
@@ -119,7 +119,7 @@ finally:
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        assert len(tools["result"]["tools"]) == 5
+        assert len(tools["result"]["tools"]) == 6
         search = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "search_products", "arguments": {"query": "milk", "limit": 2}}})
         assert not search["result"].get("isError", False)
@@ -139,7 +139,7 @@ def test_contract_all_routes_have_response_schema():
     assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/approvals", "/v1/approvals/{order_id}/approve",
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
-                                    "/v1/policy", "/v1/policy/reset", "/v1/stats"}
+                                    "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel"}
     for path in schema["paths"].values():
         for operation in path.values():
             assert operation["responses"]["200"]["content"]["application/json"]["schema"]

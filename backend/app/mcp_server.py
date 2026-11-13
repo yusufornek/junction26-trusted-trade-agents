@@ -1,7 +1,10 @@
 import argparse
+import json
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
+from .db import DomainError
 from .models import LookupResult, NeedSpec, Order, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
 
@@ -43,6 +46,14 @@ def create_server(gateway, agent_id="mcp-agent"):
     @server.tool(description="Read current local order state, fixed-price lines, warnings and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
         return gateway.orders.get_order(order_id)
+
+    @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. NOT_ORDER_OWNER rejects another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
+    def cancel_order(order_id: str, reason: str = "") -> Order:
+        try:
+            return gateway.orders.cancel(order_id, actor=f"agent:{agent_id}", reason=reason)
+        except DomainError as error:
+            # Expected refusals must retain their public code instead of becoming SDK crash errors.
+            raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
     return server
 

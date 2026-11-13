@@ -44,7 +44,10 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server"]`, and working directory to the absolute `backend/` path.
-Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`.
+Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`.
+`cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
+before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
+reservations, preserves fixed prices, and records the actor and reason without upstream calls.
 The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the installed 2.x API.
 
 ## Demo flow
@@ -136,8 +139,18 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   normalized across candidates. CO2 is a product-group average. Top three labels: best/better/good.
 - `OPEN` quotes become `ACCEPTED` or `EXPIRED`. Each quote can create only one order.
   `PENDING_APPROVAL` orders become `CONFIRMED`, `REJECTED`, or `EXPIRED`; their approval window is the
-  quote expiry. Expiration is evaluated on requests (no background worker). The core also supports
-  `Orders.cancel` for `CONFIRMED` → `CANCELLED` before known cutoffs; no MVP REST/MCP cancellation tool.
+  quote expiry. Expiration is evaluated on requests (no background worker).
+  `POST /v1/orders/{order_id}/cancel` accepts `{"cancelled_by":"Ada","reason":"Wrong product"}`;
+  the human name is required and non-blank, while `reason` defaults to `""`. REST and MCP share
+  `Orders.cancel`: only `CONFIRMED` → `CANCELLED` is allowed, and every known line `closing_time`
+  must still be in the future. Missing cutoffs do not block; a cutoff equal to now has passed.
+  Fixed prices and quote evidence remain unchanged. The order stores `cancelled_by` (human name or
+  placing agent ID) and `cancel_reason`; older/uncancelled orders return null for both fields.
+  Successful cancellation records one `CANCEL` audit event by `human:<name>` or `agent:<id>` with
+  the reason, order ID and quote ID. Refused attempts record `CANCEL_FAILED` with the error code.
+  Errors: `404 ORDER_NOT_FOUND`, `409 INVALID_TRANSITION`, `409 CUTOFF_PASSED`,
+  `403 NOT_ORDER_OWNER` (MCP agent ownership), and `422 VALIDATION_ERROR` (invalid request).
+  Cancelled orders count under stats `orders_by_status.CANCELLED` and leave confirmed spend.
 - Stock reservations are local because mock stock never decreases. Both pending and confirmed orders
   reserve the **full requested** quantity, conservatively across all delivery dates. Availability
   subtracts reservations and clamps at zero; approval excludes its own reservation from rechecks.

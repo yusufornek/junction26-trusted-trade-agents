@@ -173,6 +173,20 @@ class Order(Model):
     live_calls: LiveCalls
     approver: str | None = None
     comment: str | None = None
+    cancelled_by: str | None = Field(default=None, description="Human name or placing agent ID responsible for cancellation.")
+    cancel_reason: str | None = Field(default=None, description="Reason supplied when the order was cancelled.")
+
+
+class CancelRequest(Model):
+    cancelled_by: str = Field(min_length=1, description="Non-blank human name responsible for cancellation.")
+    reason: str = ""
+
+    @model_validator(mode="after")
+    def named_human(self):
+        self.cancelled_by = self.cancelled_by.strip()
+        if not self.cancelled_by:
+            raise ValueError("cancelled_by must contain a human name")
+        return self
 
 
 class ApprovalRequest(Model):
