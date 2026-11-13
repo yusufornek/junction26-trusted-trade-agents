@@ -11,6 +11,10 @@ Valio Aimo challenge'ı için hazırlık dokümanları ve 24 saatlik uygulama pl
 | [PROJECT.md](PROJECT.md) | **Ana doküman.** Challenge kapsamı, mock API referansı, doğrulanmış API davranışları, veri alanları |
 | [VALIO-AIMO-CHALLENGE-TR.md](VALIO-AIMO-CHALLENGE-TR.md) | Valio Aimo challenge brief'i — Türkçe |
 | [data/](data/) | Challenge veri dosyaları (ürün kataloğu, teslim güvenilirliği, karbon ayak izi) |
+| [AGENTS.md](AGENTS.md) | Kod ajanları (Codex, Claude) için kurallar, ekip/klasör sahipliği, stack |
+| [docs/CHALLENGE.md](docs/CHALLENGE.md) | Challenge özeti (EN): brief, puanlama, deadline'lar, teslim formu, API notları |
+| [docs/DECISIONS.md](docs/DECISIONS.md) · [docs/TASKS.md](docs/TASKS.md) | Kararlar ve görev listesi |
+| `backend/` · `frontend/` · `contracts/` | Backend + AI · Frontend · ortak OpenAPI sözleşmesi |
 
 ## Seçilen challenge
 

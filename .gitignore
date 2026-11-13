@@ -4,7 +4,8 @@ data/product_data.json
 
 # Gizli
 .env
-.env.local
+.env.*
+!.env.example
 
 # Bağımlılıklar / build
 node_modules/
@@ -16,3 +17,10 @@ build/
 
 # OS
 .DS_Store
+
+# Tooling
+.venv/
+.next/
+.vercel/
+.claude/settings.local.json
+*.log
