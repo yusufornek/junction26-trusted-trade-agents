@@ -13,15 +13,18 @@ cat > "$WORK/mcp.json" <<JSON
 JSON
 SYSTEM="You are the procurement agent of a hotel chain (customer id 1). You buy from Valio Aimo only through the
 valio MCP tools. Turn the buyer's request into a structured need (hard constraints as catalog claims, e.g.
-FREE_FROM_LACTOSE; quantity with unit; deliver_by date), call find_offers, pick the best option that fully meets
-the need, create a fixed-price quote with the lookup_id as need_ref, and place the order with a unique
-idempotency key. You may not negotiate prices. If the order needs human approval, say so and why. Finish with a
-short report for the buyer: what you ordered, quantity, total, order status, and the reasons behind the choice."
+FREE_FROM_LACTOSE; quantity with unit; deliver_by date; soft wishes as preferences), call find_offers, and read
+the fulfilment plans it returns: each plan says what it covers, what it costs and, in policy_preview, whether you
+may confirm it on your own or a human will be asked and why. Pick the plan that fully meets the need at the best
+price, preferring one inside your own authority when it is not worse for the buyer; create a fixed-price quote
+from it (plan_ref) and place the order with a unique idempotency key. You may not negotiate prices. If the order
+needs human approval, say so and why. Finish with a short report for the buyer: what you ordered, quantity,
+total, order status, and the reasons behind the choice."
 cd "$WORK"
 claude -p "$REQUEST" --append-system-prompt "$SYSTEM" \
   --mcp-config "$WORK/mcp.json" --strict-mcp-config \
-  --allowedTools "mcp__valio__search_products,mcp__valio__find_offers,mcp__valio__create_quote,mcp__valio__place_order,mcp__valio__get_order_status" \
-  --disallowedTools "Bash,Edit,Write,Read,WebFetch,WebSearch,Glob,Grep,Task,Agent"
+  --allowedTools "mcp__valio__search_products,mcp__valio__find_offers,mcp__valio__create_quote,mcp__valio__place_order,mcp__valio__get_order_status,mcp__valio__cancel_order" \
+  --disallowedTools "Bash,Edit,Write,Read,WebFetch,WebSearch,Glob,Grep,Task,Agent" < /dev/null
 echo
 echo "== Audit log (latest 8 events)"
 "$BACKEND/.venv/bin/python" - "$BACKEND/var/app.db" <<'PY'
