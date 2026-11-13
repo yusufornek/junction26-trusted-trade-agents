@@ -16,12 +16,8 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   (guardrails 20% + openness 15% are what set us apart). In the pitch say "aligned with the EU AI Act principles of
   human oversight and record-keeping" — an accurate claim for a procurement agent.
 - 2026-11-13 — **UI = a control plane for the humans** who watch, approve and set rules for agents (the agent's
-  interface is MCP). Screens in priority order: (1) approval inbox + decision card (request, agent's choice,
-  good/better/best alternatives, rule hits in plain language, fit scores, provenance; approve / reject / pick
-  alternative); (2) order timeline = audit trail per order; (3) policy page showing `policy.yaml` with editable
-  thresholds (demo: lower the limit, re-run, outcome changes); (4) optional Valio operator stats as a few charts on
-  `GET /v1/stats`. Calm B2B look; navy + orange accent from the brief, presented as "a prototype for Valio Aimo"
-  with our own project name. Backend adds `GET /v1/lookups/{id}`, `GET`/`PUT /v1/policy`, `GET /v1/stats`.
+  interface is MCP). The frontend owner designs the screens; the backend provides the data for approvals, order
+  history/audit, policy and stats and shares what it observes in `docs/FRONTEND.md`.
 - 2026-11-13 — **MVP first, ship fast.** Build the thinnest working end-to-end flow now; every design decision
   above is revisited one by one *after* the MVP runs — the demo is 30% of the score and time is short.
   Deferred to after the MVP: signed quotes (JWS), mandate as a verifiable credential, UBL/Peppol mapping,

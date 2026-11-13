@@ -1,67 +1,47 @@
-# Frontend brief — human control plane
+# Backend notes for the frontend
 
-Owner: frontend teammate. Folder: `frontend/` (stack is your choice). Contract: `contracts/openapi.yaml`
-(live docs at `http://localhost:8000/docs` when the backend runs). Background: `docs/CHALLENGE.md`,
-`docs/DECISIONS.md` (see "Positioning" and "UI = a control plane").
+Written from the backend side for the frontend/UX owner: what the API offers and what we noticed while testing
+it end to end. Screens, flow and look are the frontend owner's call — use whatever here is useful.
 
-## What we are building
-Outside AI buyer agents (e.g. a hotel chain's agent) buy from Valio Aimo through our MCP gateway. The agent has no
-screen. Our UI is for the **humans** around it: they see what agents did and why, approve what the policy sends to
-them, and set the rules. The message the UI carries: *agents can buy on their own, inside rules that people set,
-and every step is explained and recorded.*
+Contract: `contracts/openapi.yaml` (live docs at `http://localhost:8000/docs` when the backend runs).
+Background: `docs/CHALLENGE.md`, `docs/DECISIONS.md`.
 
-## Screens (priority order)
+## What the backend exposes for people (the agent itself uses MCP)
+| Need | Endpoint |
+|---|---|
+| Orders waiting for a human | `GET /v1/approvals` → `{order, quote}` with `order.status = PENDING_APPROVAL` |
+| Approve / reject | `POST /v1/approvals/{order_id}/approve` or `/reject` with `{approver, comment}` |
+| The agent's search behind a quote, incl. alternatives | `GET /v1/lookups/{quote.need_ref}` → `need`, `offers[]` |
+| Orders | `GET /v1/orders`, `GET /v1/orders/{id}` |
+| Step-by-step history | `GET /v1/audit?order_id=…` / `?quote_id=…` → `{ts, actor, action, summary, data}` |
+| Rules the agent runs under | `GET /v1/policy`, `PUT /v1/policy` `{policy, updated_by, comment}`, `POST /v1/policy/reset` |
+| Overview numbers | `GET /v1/stats` (optional `?since=`) |
 
-### 1. Approval inbox + decision card — must have
-- **Inbox:** `GET /v1/approvals` → list of `{order, quote}` with `order.status = PENDING_APPROVAL`. Show agent
-  (`order.agent_id`), product, quantity, total, time left (`order.expires_at`), number of rule hits. Poll every
-  2–3 s so a new order appears live during the demo.
-- **Decision card** (one order):
-  - The request: `GET /v1/lookups/{quote.need_ref}` → `need.intent`, quantity, `deliver_by`.
-  - The agent's choice: `order.lines[]` — name, `units_needed` × `sales_unit`, `unit_price`, `price_per_l_or_kg`,
-    `total`, availability (`available_amount`, `available_date`, `closing_time`), `delivery_reliability`,
-    `co2_kg_per_kg`, `labels`.
-  - **Why it needs you:** `order.policy.hits[]` — each `{rule, detail}` as one plain-language line
-    (e.g. `max_auto_total_eur` → "Above the 1,500 € auto-approval limit").
-  - Why it matched: `matched_because[]`, `fit` (show as % with the question in a tooltip: `fit_question`).
-  - Alternatives: the other `offers[]` of the lookup with `rank_label` best / better / good, price, warnings.
-  - Data source: `provenance.price` / `provenance.availability` (source, fetched at, valid until).
-  - Actions: **Approve** / **Reject** with approver name + comment →
-    `POST /v1/approvals/{order_id}/approve|reject` `{approver, comment}`. Alternatives are shown as context in the
-    MVP; picking one comes after the MVP.
+## Observed while testing the backend
+- **Why an order needs a human** is in `order.policy.hits[]` as `{rule, detail}`, e.g. `max_auto_total_eur` →
+  "Net total 1708.00 exceeds 1500.00 EUR", `CUTOFF_PASSED` → order cut-off already passed. This was the most
+  useful information when judging an order by hand.
+- **Pending orders expire**: `order.expires_at` is at most 30 minutes after the quote (fixed-price lock). In our
+  runs the remaining time mattered for whoever approves.
+- **Every offer explains itself**: `matched_because[]` (e.g. "FREE_FROM_LACTOSE from catalog nutritionalClaim"),
+  `fit` (0–1 from OpenAI Decisions, the question in `fit_question`), `warnings[]` with `code` + plain `text`,
+  and `provenance` (which Valio endpoint, fetched at, valid until).
+- **Alternatives exist for every order**: the lookup behind a quote keeps up to 10 ranked offers with
+  `rank_label` best / better / good — handy when someone wants to see what else the agent considered.
+- **Actors in the audit log** are `agent:<id>` (e.g. `agent:hotel-chain-agent`), `human:<name>` and `system`;
+  `data.live_calls` shows how few Valio calls a request needed (typically 1 price + 1 availability).
+- **Policy changes take effect immediately** and are audited as `POLICY_UPDATED` with a before/after diff.
+  Lowering `max_auto_total_eur` from 1,500 to 1,000 turned the same 1,010 € order from CONFIRMED into
+  PENDING_APPROVAL — a clear way to show that people set the agent's limits.
+- **Common warnings in real data**: `CUTOFF_PASSED` appears on most Terminal products (meaning still to be
+  confirmed with a mentor), `PARTIAL_STOCK` on some Stock products, `SIZE_UNKNOWN` on items without litre data.
+- **Status values**: `CONFIRMED`, `PENDING_APPROVAL`, `REJECTED`, `EXPIRED`, `CANCELLED`.
+- **Timing**: a lookup with live calls + Decisions takes a few seconds; approvals and audit reads are instant.
+  There are no push events yet — polling every few seconds is what we used while testing.
 
-### 2. Order timeline (audit trail) — must have
-- `GET /v1/orders` (list) and `GET /v1/orders/{id}`.
-- `GET /v1/audit?order_id=…` and `GET /v1/audit?quote_id=…` → events `{ts, actor, action, summary, data}`.
-  Render as a vertical timeline: request/lookup → quote (price locked until …) → order → policy check → human
-  decision. Actor badge: `agent:…`, `human:…`, `system`. Show `data.live_calls` ("2 Valio API calls") and
-  Decisions calls — they prove the agent queries live data only when needed.
-- Status badges: CONFIRMED (green), PENDING_APPROVAL (amber), REJECTED (red), EXPIRED / CANCELLED (grey).
-
-### 3. Policy page — the strongest demo moment
-- `GET /v1/policy` → thresholds, warning codes that need approval or reject, ranking weights, `known_warning_codes`.
-- Edit form → `PUT /v1/policy` `{policy, updated_by, comment}`; `POST /v1/policy/reset` `{updated_by}`.
-- Show "last changed by … at …" and link the `POLICY_UPDATED` audit events.
-- Demo: lower `max_auto_total_eur` from 1,500 to 1,000 → the agent re-runs the same request → the order now lands
-  in the inbox instead of being confirmed automatically.
-
-### 4. Operator overview — when 1–3 are done
-- `GET /v1/stats` → a few charts/tiles: auto-confirmed vs sent to a human vs rejected, confirmed spend, average
-  Valio calls per lookup, top warnings and rule hits, agents seen.
-
-## Look and feel
-- Calm, trustworthy B2B tool: dense but readable tables, clear status badges, generous whitespace on the card.
-- Colours: navy + orange accent (as on the challenge flyer). Our own project name, presented as "a prototype for
-  Valio Aimo".
-- Desktop first (demo on a laptop/projector); readable at 1280 px.
-
-## Demo flow (≈3 min) the UI must support
-0. Opening: the same sentence goes to A.I.mo (My Aimo) and to our agent; our UI then shows what our agent did.
-1. Terminal/Claude on the left: the buyer agent receives "1,000 L lactose-free milk by Monday".
-2. Our UI on the right: the order appears in the inbox (or as CONFIRMED in the order list), open the card, approve.
-3. Timeline shows every step with actors and reasons.
-4. Policy page: lower the limit, re-run, outcome changes.
-5. An exception: partial stock or a passed order cut-off, shown as a warning with the agent's alternatives.
+## Demo context (from `docs/DECISIONS.md`)
+The pitch opens by giving the challenge sentence ("1,000 L lactose-free milk by Monday …") to A.I.mo in My Aimo
+and then to our agent; what our agent did is then shown through the UI.
 
 ## Running the backend locally
 ```
@@ -71,4 +51,5 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 .venv/bin/python -m uvicorn app.api:app --port 8000
 ```
 Needs the repo-root `.env.local` (VALIO_API_KEY, OPENAI_API_KEY — ask Gökalp). CORS allows `http://localhost:*`.
-Sample data: run `backend/demo/run_buyer_agent.sh` (Claude as buyer agent) or create quotes/orders via `/docs`.
+Sample data: `backend/demo/run_buyer_agent.sh` (Claude as buyer agent) or quotes/orders via `/docs`.
+Need another field or endpoint? Ask the backend side — it is quick to add.
