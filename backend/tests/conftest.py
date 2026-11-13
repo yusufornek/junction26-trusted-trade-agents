@@ -18,7 +18,7 @@ from app.policy import Policy
 from app.service import Gateway
 
 
-def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None, sales="KI", base="ST", multiplier=10):
+def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None, sales="KI", base="ST", multiplier=10, brand="Fixture"):
     conversion = {"synkkaPackagingType": "BASE_UNIT_OR_EACH"}
     if volume is not None:
         conversion["volume"] = {"unit": "LTR", "value": volume}
@@ -29,7 +29,7 @@ def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None,
         "vendorName": "Fixture dairy", "countryOfOrigin": "fi", "temperatureCondition": 4,
         "units": [{"unitId": sales, "sizeInBaseUnits": multiplier}],
         "synkkaData": {"names": [{"language": "en", "value": name}, {"language": "fi", "value": "maito " + name}],
-            "brand": "Fixture", "keyIngredients": [{"language": "en", "value": "milk"}],
+            "brand": brand, "keyIngredients": [{"language": "en", "value": "milk"}],
             "marketingTexts": [{"language": "en", "value": "coffee and breakfast"}],
             "classifications": [
                 {"name": "nutritionalClaim", "values": [{"id": "FREE_FROM_LACTOSE"}] if lactose else []},
@@ -48,17 +48,21 @@ def registered_agents(request):
 
 
 @pytest.fixture
-def gateway(tmp_path, registered_agents):
-    source = tmp_path / "products.json.gz"
-    rows = [raw_product("1", "Milk 5 dl lactose free"),
+def product_rows():
+    return [raw_product("1", "Milk 5 dl lactose free"),
             raw_product("2", "Milk conventional", lactose=False),
             raw_product("3", "Milk egg mix", egg=True),
             raw_product("4", "Milk catalog 1L", volume=1),
             raw_product("5", "Milk powder 500 g", weight=500),
             raw_product("6", "Milk unknown size"),
             raw_product("7", "Milk bulk", sales="KG", base="KG", multiplier=1)]
+
+
+@pytest.fixture
+def gateway(tmp_path, registered_agents, product_rows):
+    source = tmp_path / "products.json.gz"
     with gzip.open(source, "wt") as f:
-        json.dump(rows, f)
+        json.dump(product_rows, f)
     reliability = tmp_path / "reliability.csv"
     reliability.write_text("productId,deliveryReliability\n1,0.97\n")
     carbon = tmp_path / "carbon.csv"
@@ -100,6 +104,11 @@ class Upstream:
         self.fit = 0.91
         self.price = 13.0
         self.price_error = False
+        self.amounts = {}
+        self.prices = {}
+        self.sizes = {}
+        self.fits = {}
+        self.shifts = {}
 
     def price_response(self, request):
         body = json.loads(request.content)
@@ -108,10 +117,11 @@ class Upstream:
         self.price_calls.append(body)
         return httpx.Response(200, json={"currency": "EUR", "products": [
             {"productId": pid, "quantity": 1.0, "catalogPrice": {
-                "value": self.price, "valueWithTax": self.price * 1.135, "currency": "EUR",
+                "value": self.prices.get(pid, self.price), "valueWithTax": self.prices.get(pid, self.price) * 1.135, "currency": "EUR",
                 "validFrom": "2020-01-01T00:00:00+0000", "validTo": "9999-12-31T00:00:00+0200"},
              # Product 4 has 10 L of catalog content; keep ordinary lifecycle fixtures consistent.
-             "comparisonPrice": {"value": self.price / 10 if pid == "4" else 2.6},
+             "comparisonPrice": {"value": self.prices.get(pid, self.price) / self.sizes[pid] if pid in self.sizes
+                                 else self.price / 10 if pid == "4" else 2.6},
              "comparisonUnit": "L", "netPriceFound": False, "error": self.price_error}
             for pid in body["products"]]})
 
@@ -123,14 +133,16 @@ class Upstream:
         return httpx.Response(200, json={"timeNow": audit.utcnow().isoformat(), "products": [
             {"productId": pid, "closingTime": self.cutoff.isoformat(), "salesBlock": self.sales_block,
              "logisticModel": self.model, "scheduleLines": [] if self.unknown else [
-                 {"availableAmount": self.amount, "availableDate": delivery, "salesUnit": "KI", "salesBlock": False}]}
+                 {"availableAmount": self.amounts.get(pid, self.amount),
+                  "availableDate": (self.need.deliver_by + timedelta(days=self.shifts[pid])).isoformat() if pid in self.shifts else delivery,
+                  "salesUnit": "KI", "salesBlock": False}]}
             for pid in body["products"]]})
 
     def decisions_response(self, request):
         body = json.loads(request.content)
         self.decision_calls.append(body)
         return httpx.Response(200, json={"answers": [
-            {"type": "predicate", "name": q["name"], "probability": self.fit} for q in body["questions"]]})
+            {"type": "predicate", "name": q["name"], "probability": self.fits.get(q["name"][4:], self.fit)} for q in body["questions"]]})
 
 
 @pytest.fixture

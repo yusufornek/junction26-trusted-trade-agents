@@ -29,12 +29,12 @@ every step audited (`backend/demo/run_buyer_agent.sh`).
 | Working end-to-end demo | 30% | REST + MCP flows run live; console shows them | demo video as backup |
 | Solving the user need | 20% | Right product, exact pack counts, stable cheapest suitable offer; sour milk screened out | preferences ([08](08-exceptions.md)) |
 | Autonomy and controls | 20% | Editable policy, per-agent mandates, cumulative limit, approval inbox, cancellation, append-only audit, order timeline | signed mandate, approver roles |
-| Robustness to exceptions | 15% | Warnings for partial stock, date shift, cut-off; agent explains alternatives | [08](08-exceptions.md) split orders, substitutes, policy preview |
+| Robustness to exceptions | 15% | Warnings for partial stock, date shift, cut-off; fulfilment plans (single / split / partial) with policy preview; substitutes outside preferences need sign-off ([08](08-exceptions.md)) | recipe-aware substitution, stock-out after confirmation |
 | Openness & path to production | 15% | MCP + OpenAPI contract, documented assumptions | signed quotes, Peppol mapping, verifiable mandate |
 
 ## Optional directions
 | Direction | Status |
 |---|---|
 | Delivery time & sustainability comparison | reliability, CO2 and labels on every offer and in ranking |
-| Substitution & exception handling | warnings + ranked alternatives; automatic split / substitution not yet |
+| Substitution & exception handling | warnings, ranked alternatives, split / partial plans, marked substitutes ([08](08-exceptions.md)) |
 | Traceability & explainability | audit trail, rule hits, fit scores, provenance · full story per order [07](07-order-timeline.md) |

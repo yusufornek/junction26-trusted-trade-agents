@@ -16,6 +16,6 @@ change or extend.
 | 06 | [Agent mandate](06-agent-mandate.md) | Per-agent authority, cumulative spend limit, unregistered agents | built |
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | built |
 | 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
-| 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | draft |
+| 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | built |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

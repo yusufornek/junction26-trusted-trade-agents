@@ -6,7 +6,7 @@ from . import audit
 from .catalog import hard_violations
 from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
-from .models import LiveCalls, LookupResult, NeedSpec, Order, OrderTimeline, Quantity, Quote, TimelineStep
+from .models import LiveCalls, LookupResult, NeedSpec, Order, OrderTimeline, Quantity, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
 
 
@@ -85,8 +85,16 @@ class Orders:
             lookup = LookupResult.model_validate_json(row["data"])
             if lookup.need.customer_id != request.customer_id or lookup.need.deliver_by != request.deliver_by:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
-        products = {line.product_id: self.catalog.get(line.product_id) for line in request.lines}
-        for line in request.lines:
+        plan = None
+        requested_lines = request.lines
+        if request.plan_ref:
+            if request.plan_ref.plan_index >= len(lookup.plans):
+                raise DomainError("INVALID_PLAN_INDEX", "plan_index is outside the stored lookup's plans", 422)
+            plan = lookup.plans[request.plan_ref.plan_index]
+            requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units)
+                               for line in plan.lines]
+        products = {line.product_id: self.catalog.get(line.product_id) for line in requested_lines}
+        for line in requested_lines:
             p = products[line.product_id]
             step = Decimal(str(p.allowed_lot_size if p.sales_unit == "KG" else 1))
             if Decimal(str(line.quantity_sales_units)) % step:
@@ -104,7 +112,7 @@ class Orders:
             # Recheck after taking the same lock used by policy updates.
             self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
-            for line in request.lines:
+            for line in requested_lines:
                 p = products[line.product_id]
                 offer = offer_for(p, need, price[p.id], stock[p.id], fit_by_id.get(p.id),
                                   sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id))
@@ -119,7 +127,9 @@ class Orders:
                 violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens))
                 lines.append(offer)
             quote = Quote(id=str(uuid4()), customer_id=request.customer_id, deliver_by=request.deliver_by,
-                          need_ref=request.need_ref, status="OPEN", created_at=now, expires_at=min(expiries),
+                          need_ref=request.need_ref, plan_ref=request.plan_ref,
+                          warnings=[w for w in plan.warnings if w.code == "PARTIAL_STOCK"] if plan else [],
+                          status="OPEN", created_at=now, expires_at=min(expiries),
                           lines=lines, total=round(sum(o.total for o in lines), 2), currency="EUR",
                           hard_constraint_violations=violations, live_calls=counter.live())
             if quote.expires_at <= audit.utcnow():
@@ -165,8 +175,8 @@ class Orders:
             lines = self._refresh_stock(conn, quote.lines, quote.deliver_by, stock)
             # Re-read catalog hard facts as well as preserving original quote violations.
             now = audit.utcnow()
-            result = self.policy.evaluate(quote.total, lines, self._violations(conn, quote), agent_id=agent_id,
-                                          autonomous_total=self._autonomous_total(conn, agent_id, now), policy=policy)
+            result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
+                                                agent_id=agent_id, policy=policy, warnings=quote.warnings)
             order = Order(id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, policy=result, live_calls=counter.live())
@@ -180,19 +190,6 @@ class Orders:
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
                          "live_calls": counter.live().model_dump()})
             return order
-
-    @staticmethod
-    def _autonomous_total(conn, agent_id, now):
-        # The caller holds BEGIN IMMEDIATE through this read and the new order insert.
-        # Parse timestamps instead of comparing ISO strings with potentially different offsets.
-        start = now - timedelta(hours=24)
-        total = Decimal(0)
-        for row in conn.execute("SELECT data FROM orders WHERE status='CONFIRMED'"):
-            order = Order.model_validate_json(row["data"])
-            if (order.agent_id == agent_id and order.approver is None and order.currency == "EUR"
-                    and start <= order.created_at <= now):
-                total += Decimal(str(order.total))
-        return total
 
     def _violations(self, conn, quote):
         violations = list(quote.hard_constraint_violations)
@@ -293,7 +290,10 @@ class Orders:
                                          [o.product_id for o in order.lines], counter, fresh=True)
                 order.lines = self._refresh_stock(conn, order.lines, quote.deliver_by, stock, order.id)
                 # Human review may accept delivery warnings, but never hard violations or unverifiable stock.
-                evaluation = self.policy.evaluate(order.total, order.lines, self._violations(conn, quote))
+                # Evaluate as the placing agent so the audit keeps the mandate rules the human signs off
+                # (unregistered agent, per-order and daily limits); only REJECTED blocks an approval.
+                evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
+                                                        agent_id=order.agent_id, warnings=quote.warnings)
                 if evaluation.outcome == "REJECTED":
                     raise DomainError("HARD_CONSTRAINT_VIOLATION", "Approval cannot override hard constraints or sales blocks",
                                       data={"rule_hits": [h.model_dump() for h in evaluation.hits]})

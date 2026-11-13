@@ -13,6 +13,24 @@ class Quantity(Model):
     unit: Literal["L", "KG", "SALES_UNIT"] = Field(description="Litres, kilograms or product sales units.")
 
 
+class PackSizePreference(Model):
+    min: float | None = Field(default=None, gt=0)
+    max: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def ordered_bounds(self):
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("pack_size.min must not exceed pack_size.max")
+        return self
+
+
+class Preferences(Model):
+    brands: list[str] = Field(default_factory=list)
+    max_price_per_unit: float | None = Field(default=None, ge=0, description="Maximum net EUR per L or KG.")
+    pack_size: PackSizePreference | None = Field(default=None, description="L or KG per sales unit.")
+    labels: list[str] = Field(default_factory=list, description="Preferred catalog packaging label IDs.")
+
+
 class NeedSpec(Model):
     customer_id: str = Field(default="1", min_length=1, description="Valio customer identifier.")
     intent: str = Field(min_length=1, description="Buyer need; the outside agent structures this request.")
@@ -22,6 +40,7 @@ class NeedSpec(Model):
     quantity: Quantity
     deliver_by: date = Field(description="Latest acceptable delivery date.")
     max_candidates: int = Field(default=10, ge=1, le=10, description="Maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.")
+    preferences: Preferences = Field(default_factory=Preferences, description="Soft preferences; differences mark substitutes and require approval by default.")
 
 
 class Warning(Model):
@@ -102,10 +121,43 @@ class OfferCard(Model):
     rank_label: Literal["best", "better", "good"] | None = None
 
 
+class CoveredQuantity(Model):
+    value: float = Field(ge=0)
+    unit: Literal["L", "KG", "SALES_UNIT"]
+
+
+class PlanLine(Model):
+    product_id: str
+    units: int = Field(gt=0, description="Whole sales units, never exceeding on-time stock.")
+    covers: CoveredQuantity
+
+
+class RuleHit(Model):
+    rule: str
+    detail: str
+
+
+class PolicyResult(Model):
+    outcome: Literal["CONFIRMED", "PENDING_APPROVAL", "REJECTED"]
+    hits: list[RuleHit]
+
+
+class FulfilmentPlan(Model):
+    kind: Literal["single", "split", "partial"]
+    lines: list[PlanLine] = Field(min_length=1, max_length=4)
+    total: float = Field(ge=0, description="Sum of fixed net EUR line totals at lookup time.")
+    coverage: CoveredQuantity = Field(description="Sum of line covers in the need's unit; whole packs may over-cover.")
+    uncovered: CoveredQuantity = Field(description="Requested quantity still missing by the deadline; zero for a complete plan.")
+    warnings: list[Warning] = Field(default_factory=list)
+    policy_preview: PolicyResult = Field(description="Side-effect-free current policy evaluation for the caller, including mandate and daily limits. Stock and policy may change before placement; the order result is authoritative.")
+
+
 class LookupResult(Model):
     lookup_id: str = Field(description="Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.")
     need: NeedSpec
     offers: list[OfferCard]
+    plans: list[FulfilmentPlan] = Field(default_factory=list, description="Single, split or partial plans from this lookup's returned priced offers only; no extra upstream calls.")
+    no_match_reason: str | None = Field(default=None, description="Explains empty catalog results, including how many candidates each hard constraint removed.")
     excluded_count: int = Field(description="FTS matches removed by hard catalog filters, before shortlist truncation.")
     priced_count: int = Field(default=0, ge=0, description="Shortlisted products checked for live prices, including cached evidence.")
     screened_count: int = Field(default=0, ge=0, description="Catalog pool size submitted for Decisions screening.")
@@ -119,15 +171,28 @@ class QuoteLineRequest(Model):
     quantity_sales_units: float = Field(gt=0, description="Explicit sales quantity; KG follows allowedLotSize, others are whole sales units.")
 
 
+class PlanRef(Model):
+    lookup_id: str = Field(min_length=1)
+    plan_index: int = Field(ge=0, description="Zero-based index in the stored lookup's plans.")
+
+
 class QuoteRequest(Model):
     customer_id: str = Field(default="1", min_length=1)
     deliver_by: date
-    lines: list[QuoteLineRequest] = Field(min_length=1, max_length=10)
+    lines: list[QuoteLineRequest] | None = Field(default=None, min_length=1, max_length=10)
+    plan_ref: PlanRef | None = Field(default=None, description="Alternative to explicit lines; recheck a stored plan live. Exactly one of lines or plan_ref is required.")
     need_ref: str | None = Field(default=None, description="lookup_id to carry verified fit scores and hard constraints into policy.")
 
     @model_validator(mode="after")
     def unique_lines(self):
-        if len({x.product_id for x in self.lines}) != len(self.lines):
+        if (self.lines is None) == (self.plan_ref is None):
+            raise ValueError("Exactly one of lines or plan_ref is required")
+        if self.plan_ref:
+            if self.need_ref is None:
+                self.need_ref = self.plan_ref.lookup_id
+            elif self.need_ref != self.plan_ref.lookup_id:
+                raise ValueError("need_ref must match plan_ref.lookup_id")
+        if self.lines and len({x.product_id for x in self.lines}) != len(self.lines):
             raise ValueError("Duplicate products must be combined into one line")
         return self
 
@@ -137,6 +202,8 @@ class Quote(Model):
     customer_id: str
     deliver_by: date
     need_ref: str | None = None
+    plan_ref: PlanRef | None = None
+    warnings: list[Warning] = Field(default_factory=list, description="Plan-level risks, including an uncovered part of the original need; retained through ordering.")
     status: Literal["OPEN", "ACCEPTED", "EXPIRED"]
     created_at: datetime
     expires_at: datetime = Field(description="Earliest price validity, future cutoff or 30 minutes after creation.")
@@ -145,16 +212,6 @@ class Quote(Model):
     currency: str
     hard_constraint_violations: list[str] = Field(default_factory=list)
     live_calls: LiveCalls
-
-
-class RuleHit(Model):
-    rule: str
-    detail: str
-
-
-class PolicyResult(Model):
-    outcome: Literal["CONFIRMED", "PENDING_APPROVAL", "REJECTED"]
-    hits: list[RuleHit]
 
 
 class OrderRequest(Model):

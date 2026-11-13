@@ -109,7 +109,7 @@ class Catalog:
         with self.db.connect() as conn:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
-    def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10):
+    def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10, removed_by=None):
         if not 1 <= limit <= max_limit:
             raise DomainError("INVALID_LIMIT", f"limit must be between 1 and {max_limit}", 422)
         tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
@@ -125,6 +125,15 @@ class Catalog:
                 p = Product.model_validate_json(row["data"])
                 if hard_violations(p, required_claims or [], exclude_allergens or []):
                     excluded += 1
+                    if removed_by is not None:
+                        for claim in required_claims or []:
+                            if claim not in p.claims:
+                                key = f"required_claims.{claim}"
+                                removed_by[key] = removed_by.get(key, 0) + 1
+                        for allergen in exclude_allergens or []:
+                            if allergen in p.allergens_contains:
+                                key = f"exclude_allergens.{allergen}"
+                                removed_by[key] = removed_by.get(key, 0) + 1
                 elif len(offers) < limit:
                     offers.append(p)
         return offers, excluded

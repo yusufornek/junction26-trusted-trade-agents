@@ -146,3 +146,9 @@ def test_contract_all_routes_have_response_schema():
     for path in schema["paths"].values():
         for operation in path.values():
             assert operation["responses"]["200"]["content"]["application/json"]["schema"]
+    # Spec 08 extends existing routes; the route inventory above must stay unchanged.
+    models = schema["components"]["schemas"]
+    assert {"plans", "no_match_reason"} <= models["LookupResult"]["properties"].keys()
+    assert "preferences" in models["NeedSpec"]["properties"]
+    assert {"lines", "plan_ref"} <= models["QuoteRequest"]["properties"].keys()
+    assert "authoritative" in models["FulfilmentPlan"]["properties"]["policy_preview"]["description"]

@@ -11,6 +11,7 @@ approval:
     - NO_FIT_SCORE
     - PRICE_ERROR
     - AVAILABILITY_ERROR
+    - OUTSIDE_PREFERENCE
 reject:
   on_hard_constraint_violation: true
   on: [SALES_BLOCK, UNKNOWN_PRODUCT]

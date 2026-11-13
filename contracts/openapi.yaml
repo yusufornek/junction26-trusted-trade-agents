@@ -54,7 +54,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /v1/offers:
     post:
-      summary: Shortlist catalog matches, then fetch live offers
+      summary: Rank live offers and substitutes; propose fulfilment plans with caller
+        policy previews
       operationId: offers_v1_offers_post
       parameters:
       - name: x-agent-id
@@ -432,7 +433,7 @@ paths:
           description: Service Unavailable
   /v1/quotes:
     post:
-      summary: Recheck live price/stock and lock fixed prices
+      summary: Recheck selected lines or a plan_ref live and lock fixed prices
       operationId: create_quote_v1_quotes_post
       parameters:
       - name: x-agent-id
@@ -1303,6 +1304,25 @@ components:
       required:
       - cancelled_by
       title: CancelRequest
+    CoveredQuantity:
+      properties:
+        value:
+          type: number
+          minimum: 0.0
+          title: Value
+        unit:
+          type: string
+          enum:
+          - L
+          - KG
+          - SALES_UNIT
+          title: Unit
+      additionalProperties: false
+      type: object
+      required:
+      - value
+      - unit
+      title: CoveredQuantity
     ErrorResponse:
       properties:
         code:
@@ -1318,6 +1338,54 @@ components:
       - code
       - message
       title: ErrorResponse
+    FulfilmentPlan:
+      properties:
+        kind:
+          type: string
+          enum:
+          - single
+          - split
+          - partial
+          title: Kind
+        lines:
+          items:
+            $ref: '#/components/schemas/PlanLine'
+          type: array
+          maxItems: 4
+          minItems: 1
+          title: Lines
+        total:
+          type: number
+          minimum: 0.0
+          title: Total
+          description: Sum of fixed net EUR line totals at lookup time.
+        coverage:
+          $ref: '#/components/schemas/CoveredQuantity'
+          description: Sum of line covers in the need's unit; whole packs may over-cover.
+        uncovered:
+          $ref: '#/components/schemas/CoveredQuantity'
+          description: Requested quantity still missing by the deadline; zero for
+            a complete plan.
+        warnings:
+          items:
+            $ref: '#/components/schemas/Warning'
+          type: array
+          title: Warnings
+        policy_preview:
+          $ref: '#/components/schemas/PolicyResult'
+          description: Side-effect-free current policy evaluation for the caller,
+            including mandate and daily limits. Stock and policy may change before
+            placement; the order result is authoritative.
+      additionalProperties: false
+      type: object
+      required:
+      - kind
+      - lines
+      - total
+      - coverage
+      - uncovered
+      - policy_preview
+      title: FulfilmentPlan
     Health:
       properties:
         status:
@@ -1377,6 +1445,20 @@ components:
             $ref: '#/components/schemas/OfferCard'
           type: array
           title: Offers
+        plans:
+          items:
+            $ref: '#/components/schemas/FulfilmentPlan'
+          type: array
+          title: Plans
+          description: Single, split or partial plans from this lookup's returned
+            priced offers only; no extra upstream calls.
+        no_match_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: No Match Reason
+          description: Explains empty catalog results, including how many candidates
+            each hard constraint removed.
         excluded_count:
           type: integer
           title: Excluded Count
@@ -1464,6 +1546,10 @@ components:
           description: Maximum ranked offers returned; suitable candidates are priced
             up to shortlist.live_max.
           default: 10
+        preferences:
+          $ref: '#/components/schemas/Preferences'
+          description: Soft preferences; differences mark substitutes and require
+            approval by default.
       additionalProperties: false
       type: object
       required:
@@ -1778,6 +1864,59 @@ components:
       - total_live_calls
       - total_decision_calls
       title: OrderTimeline
+    PackSizePreference:
+      properties:
+        min:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Min
+        max:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Max
+      additionalProperties: false
+      type: object
+      title: PackSizePreference
+    PlanLine:
+      properties:
+        product_id:
+          type: string
+          title: Product Id
+        units:
+          type: integer
+          exclusiveMinimum: 0.0
+          title: Units
+          description: Whole sales units, never exceeding on-time stock.
+        covers:
+          $ref: '#/components/schemas/CoveredQuantity'
+      additionalProperties: false
+      type: object
+      required:
+      - product_id
+      - units
+      - covers
+      title: PlanLine
+    PlanRef:
+      properties:
+        lookup_id:
+          type: string
+          minLength: 1
+          title: Lookup Id
+        plan_index:
+          type: integer
+          minimum: 0.0
+          title: Plan Index
+          description: Zero-based index in the stored lookup's plans.
+      additionalProperties: false
+      type: object
+      required:
+      - lookup_id
+      - plan_index
+      title: PlanRef
     PolicyResetRequest:
       properties:
         updated_by:
@@ -1876,6 +2015,34 @@ components:
       - updated_by
       - policy
       title: PolicyUpdateRequest
+    Preferences:
+      properties:
+        brands:
+          items:
+            type: string
+          type: array
+          title: Brands
+        max_price_per_unit:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Max Price Per Unit
+          description: Maximum net EUR per L or KG.
+        pack_size:
+          anyOf:
+          - $ref: '#/components/schemas/PackSizePreference'
+          - type: 'null'
+          description: L or KG per sales unit.
+        labels:
+          items:
+            type: string
+          type: array
+          title: Labels
+          description: Preferred catalog packaging label IDs.
+      additionalProperties: false
+      type: object
+      title: Preferences
     Product:
       properties:
         id:
@@ -2041,6 +2208,17 @@ components:
           - type: string
           - type: 'null'
           title: Need Ref
+        plan_ref:
+          anyOf:
+          - $ref: '#/components/schemas/PlanRef'
+          - type: 'null'
+        warnings:
+          items:
+            $ref: '#/components/schemas/Warning'
+          type: array
+          title: Warnings
+          description: Plan-level risks, including an uncovered part of the original
+            need; retained through ordering.
         status:
           type: string
           enum:
@@ -2121,12 +2299,20 @@ components:
           format: date
           title: Deliver By
         lines:
-          items:
-            $ref: '#/components/schemas/QuoteLineRequest'
-          type: array
-          maxItems: 10
-          minItems: 1
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/QuoteLineRequest'
+            type: array
+            maxItems: 10
+            minItems: 1
+          - type: 'null'
           title: Lines
+        plan_ref:
+          anyOf:
+          - $ref: '#/components/schemas/PlanRef'
+          - type: 'null'
+          description: Alternative to explicit lines; recheck a stored plan live.
+            Exactly one of lines or plan_ref is required.
         need_ref:
           anyOf:
           - type: string
@@ -2138,7 +2324,6 @@ components:
       type: object
       required:
       - deliver_by
-      - lines
       title: QuoteRequest
     RankingWeights:
       properties:

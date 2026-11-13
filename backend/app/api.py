@@ -77,7 +77,8 @@ def create_app(gateway=None):
         count = svc(request).catalog.count()
         return Health(status="ok" if count else "catalog_empty", catalog_rows=count)
 
-    @app.post("/v1/offers", response_model=LookupResult, summary="Shortlist catalog matches, then fetch live offers")
+    @app.post("/v1/offers", response_model=LookupResult,
+              summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
     def offers(need: NeedSpec, request: Request, x_agent_id: Annotated[str, Header()] = "external"):
         return svc(request).find_offers(need, actor=f"agent:{x_agent_id}")
 
@@ -107,7 +108,7 @@ def create_app(gateway=None):
     def product(id: str, request: Request):
         return svc(request).catalog.get(id)
 
-    @app.post("/v1/quotes", response_model=Quote, summary="Recheck live price/stock and lock fixed prices")
+    @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices")
     def create_quote(body: QuoteRequest, request: Request, x_agent_id: Annotated[str, Header()] = "external"):
         return svc(request).orders.create_quote(body, x_agent_id)
 

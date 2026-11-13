@@ -5,7 +5,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .db import DomainError
-from .models import LookupResult, NeedSpec, Order, Product, Quote, QuoteLineRequest, QuoteRequest
+from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
 
 WARNINGS = (
@@ -13,6 +13,7 @@ WARNINGS = (
     "CUTOFF_PASSED means closingTime < upstream timeNow (meaning unconfirmed, requires review); SALES_BLOCK means not for sale; "
     "UNKNOWN_PRODUCT means no schedule lines; PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
     "SIZE_MISMATCH means exact pack content differs from the live price ratio by more than 3% and requires review; "
+    "OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. "
     "NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. "
     "Hard constraints and sale blocks cannot be overridden by fit scores."
 )
@@ -24,7 +25,9 @@ def create_server(gateway, agent_id="mcp-agent"):
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. "
         "Unregistered agents always need human approval. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
-        "Pass lookup_id as need_ref to preserve fit and constraints. " + WARNINGS))
+        "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
+        "Previews include mandate and daily limits; stock and policy may change, so placement is authoritative. "
+        "Quote a plan with plan_ref {lookup_id, plan_index}, or pass explicit lines and lookup_id as need_ref to preserve fit and constraints. " + WARNINGS))
 
     @server.tool(description="Search the local catalog using AND terms and structured hard filters. Returns at most 10 products; makes no live API calls. Excluding allergens checks catalog CONTAINS, not a safety certification.")
     def search_products(query: str, required_claims: list[str] | None = None,
@@ -32,15 +35,16 @@ def create_server(gateway, agent_id="mcp-agent"):
         products, _ = gateway.catalog.search(query, required_claims, exclude_allergens, limit)
         return products
 
-    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Hard filters run locally; Decisions gates suitable candidates for one price and one stock batch, up to shortlist.live_max (default 25), before ranking and truncating. Returns screened_count, priced_count, lookup_id, conversions, provenance, fit and stock. " + WARNINGS)
+    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Hard filters run locally; Decisions gates suitable candidates for one price and one stock batch, up to shortlist.live_max (default 25), before ranking and truncating. Returns screened_count, priced_count, lookup_id, conversions, provenance, fit and stock. Also returns single/split/partial plans with total, coverage, uncovered and policy_preview for this server identity, including mandate and daily limits, without extra calls or commitments. Stock/policy can change before placement; the order result is authoritative. Soft preferences rank matching products above substitutes; no_match_reason explains empty hard-filter results. " + WARNINGS)
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{agent_id}")
 
-    @server.tool(description="Recheck live price and stock for selected lines, then lock fixed net EUR prices until expires_at (at most 30 minutes). Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents may quote but always need human approval to order. Quantity is in sales units. Pass lookup_id as need_ref to carry server-verified fit and hard constraints. No negotiation or signing in MVP.")
-    def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest], need_ref: str | None = None) -> Quote:
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents may quote but always need human approval to order. Quantity is in sales units. Explicit lines may pass lookup_id as need_ref to carry fit, preferences and hard constraints. No negotiation or signing in MVP.")
+    def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
+                     need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref), agent_id=agent_id)
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 

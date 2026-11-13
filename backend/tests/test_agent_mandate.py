@@ -68,6 +68,9 @@ def test_ac_2_unregistered_agent_requires_human_and_is_attributed(gateway, need,
         assert {entry["actor"]: entry["registered"] for entry in stats["agents_seen"]} == {
             "agent:web-console": True, "agent:external": False}
         assert client.post(f"/v1/approvals/{order['id']}/approve", json={"approver": "Ada"}).json()["status"] == "CONFIRMED"
+        # The approval audit keeps the mandate rule the human signed off.
+        approve = [e for e in gateway.audit(order_id=order["id"]) if e.action == "APPROVE"][-1]
+        assert "unregistered_agent" in [h["rule"] for h in approve.data["rule_hits"]]
 
 
 def test_ac_3_daily_limit_serializes_orders_and_uses_rolling_window(gateway, need, upstream, monkeypatch):

@@ -21,6 +21,7 @@ WARNING_TEXT = {
     "SIZE_MISMATCH": "Exact pack content differs from the live price ratio by more than 3%.",
     "NO_FIT_SCORE": "Decisions fit probability is unavailable; a human must review suitability.",
     "AVAILABILITY_ERROR": "Availability could not be verified with the upstream API.",
+    "OUTSIDE_PREFERENCE": "The product is a substitute outside the buyer's soft preferences.",
 }
 
 
@@ -160,6 +161,30 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
         warnings.append(warning("SIZE_UNKNOWN"))
     if not fit:
         warnings.append(warning("NO_FIT_SCORE"))
+    preferences, differences = need.preferences, []
+    brand = (product.brand or "").strip()  # catalog brands carry stray whitespace ("Arla ")
+    if preferences.brands and brand.casefold() not in {b.strip().casefold() for b in preferences.brands}:
+        differences.append(f"brand {brand or 'unknown'}, preferred {', '.join(preferences.brands)}")
+    if preferences.max_price_per_unit is not None:
+        per_unit = net / size if net is not None and size and need.quantity.unit != "SALES_UNIT" else None
+        if per_unit is None:
+            differences.append("price per L / KG unknown")
+        elif per_unit > preferences.max_price_per_unit:
+            differences.append(f"{per_unit:g} EUR/{need.quantity.unit}, preferred <= {preferences.max_price_per_unit:g}")
+    if preferences.pack_size and (preferences.pack_size.min is not None or preferences.pack_size.max is not None):
+        bounds = preferences.pack_size
+        if not size or need.quantity.unit == "SALES_UNIT":
+            differences.append("pack size in L / KG unknown")
+        else:
+            if bounds.min is not None and size < bounds.min:
+                differences.append(f"{size:g} {need.quantity.unit} pack, preferred >= {bounds.min:g} {need.quantity.unit}")
+            if bounds.max is not None and size > bounds.max:
+                differences.append(f"{size:g} {need.quantity.unit} pack, preferred <= {bounds.max:g} {need.quantity.unit}")
+    for label in preferences.labels:
+        if label.casefold() not in {l.casefold() for l in product.labels}:
+            differences.append(f"missing preferred label {label}")
+    if differences:
+        warnings.append(Warning(code="OUTSIDE_PREFERENCE", text="; ".join(differences)))
     matched = [f"{c} from catalog nutritionalClaim" for c in need.required_claims if c in product.claims]
     matched += [f"{a} absent from catalog allergen CONTAINS" for a in need.exclude_allergens if a not in product.allergens_contains]
     return OfferCard(
@@ -195,7 +220,7 @@ def rank(offers, weights, fit_floor=None):
             if key in {"price", "co2"} and v is not None and high != low:
                 normalized = 1 - normalized
             offer.score += weights[key] * normalized
-    offers.sort(key=lambda o: (-o.score, o.product_id))
+    offers.sort(key=lambda o: (any(w.code == "OUTSIDE_PREFERENCE" for w in o.warnings), -o.score, o.product_id))
     for offer, label in zip(offers, ("best", "better", "good")):
         offer.rank_label = label
 
@@ -215,8 +240,9 @@ class Lookup:
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         policy = self.policy.get()
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
+        removed_by = {}
         pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
-                                             max_limit=pool_size)
+                                             max_limit=pool_size, removed_by=removed_by)
         counter = RequestCounter()
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
@@ -241,7 +267,16 @@ class Lookup:
             offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
                                 (fits or {}).get(p.id), reserved_amount=reserved(conn, p.id)) for p in candidates]
             rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability)
-            result = LookupResult(lookup_id=str(uuid4()), need=need, offers=offers[:need.max_candidates], excluded_count=excluded,
+            from .plans import build_plans
+            returned = offers[:need.max_candidates]
+            plans = build_plans(need, returned, self.policy, policy, conn, actor.removeprefix("agent:"), self.catalog)
+            no_match_reason = None
+            if not pool:
+                counts = "; ".join(f"{key} removed {count} candidates" for key, count in sorted(removed_by.items()))
+                no_match_reason = (f"No products pass the hard filters: {counts}. Counts may overlap."
+                                   if counts else "No catalog products match the search terms.")
+            result = LookupResult(lookup_id=str(uuid4()), need=need, offers=returned, plans=plans,
+                                  no_match_reason=no_match_reason, excluded_count=excluded,
                                   priced_count=len(candidates), screened_count=screened_count,
                                   live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))

@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -7,7 +8,7 @@ import yaml
 
 from . import audit
 from .db import DomainError
-from .models import PolicyDocument, PolicyResource, PolicyResult, RuleHit
+from .models import Order, PolicyDocument, PolicyResource, PolicyResult, RuleHit
 
 
 class PolicyLoader(yaml.SafeLoader):
@@ -114,7 +115,20 @@ class Policy:
         if mandate is not None and customer_id not in mandate.customer_ids:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", f"Agent {agent_id} has no mandate for customer {customer_id}", 403)
 
-    def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, autonomous_total=Decimal(0), policy=None):
+    def evaluate_order(self, conn, total, lines, hard_violations=(), *, agent_id, policy=None, warnings=()):
+        """Shared read-only placement/preview evaluation, under the caller's SQLite snapshot/lock."""
+        now = audit.utcnow()
+        start = now - timedelta(hours=24)
+        autonomous_total = Decimal(0)
+        for row in conn.execute("SELECT data FROM orders WHERE status='CONFIRMED'"):
+            order = Order.model_validate_json(row["data"])
+            if (order.agent_id == agent_id and order.approver is None and order.currency == "EUR"
+                    and start <= order.created_at <= now):
+                autonomous_total += Decimal(str(order.total))
+        return self.evaluate(total, lines, hard_violations, agent_id=agent_id,
+                             autonomous_total=autonomous_total, policy=policy, warnings=warnings)
+
+    def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, autonomous_total=Decimal(0), policy=None, warnings=()):
         policy = policy or self.get()
         max_total = policy.approval.max_auto_total_eur
         source = "global policy"
@@ -139,13 +153,17 @@ class Policy:
         if total > max_total:
             hits.append(RuleHit(rule="max_auto_total_eur", detail=f"Net total {total:.2f} exceeds {max_total:.2f} EUR ({source})"))
             approval = True
+        warning_groups = [("plan", warnings)]
         for line in lines:
             if line.fit is not None and line.fit < min_fit:
                 hits.append(RuleHit(rule="min_fit_probability", detail=f"{line.product_id}: {line.fit:.3f} < {min_fit:.3f}"))
                 approval = True
-            for warning in line.warnings:
+            warning_groups.append((line.product_id, line.warnings))
+        for product_id, line_warnings in warning_groups:
+            # Stock refresh changes warning insertion order; equivalent evidence must yield identical hits.
+            for warning in sorted(line_warnings, key=lambda w: (w.code, w.text)):
                 if warning.code in reject_codes or warning.code in approval_codes:
-                    hits.append(RuleHit(rule=warning.code, detail=f"{line.product_id}: {warning.text}"))
+                    hits.append(RuleHit(rule=warning.code, detail=f"{product_id}: {warning.text}"))
                     rejected |= warning.code in reject_codes
                     approval |= warning.code in approval_codes
         return PolicyResult(outcome="REJECTED" if rejected else "PENDING_APPROVAL" if approval else "CONFIRMED", hits=hits)

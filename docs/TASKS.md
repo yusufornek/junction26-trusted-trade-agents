@@ -20,6 +20,6 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 16 | Agent mandate — per-agent authority, cumulative limit | Backend | done | spec `docs/specs/06-agent-mandate.md` |
 | 17 | Order timeline endpoint (`GET /v1/orders/{id}/timeline`) | Backend | done | spec `docs/specs/07-order-timeline.md` |
 | 18 | Price-complete shortlist — stable best offer | Backend | done | spec `docs/specs/09-price-complete-shortlist.md` |
-| 19 | Exceptions — fulfilment plans, policy preview, substitutes | Backend | todo | spec draft `docs/specs/08-exceptions.md` |
+| 19 | Exceptions — fulfilment plans, policy preview, substitutes | Backend | done | spec `docs/specs/08-exceptions.md`; verified live 14.11 |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

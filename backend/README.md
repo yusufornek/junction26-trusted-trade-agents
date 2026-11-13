@@ -67,10 +67,13 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
 }
 ```
 
-2. Select an offer. Call `create_quote`, or `POST /v1/quotes`, with `customer_id`, `deliver_by`,
+2. Select an offer or a fulfilment plan (see below). Call `create_quote`, or `POST /v1/quotes`, with `customer_id`, `deliver_by`,
    `need_ref` set to the returned `lookup_id`, and `lines` containing its `product_id` and
    `quantity_sales_units` set to `units_needed`. Multiple explicit lines are supported. The gateway
    stores lookups and retrieves fit/constraints itself; clients cannot inject a trusted fit score.
+   Alternatively, omit `lines` and send `plan_ref: {"lookup_id": "...", "plan_index": 0}`;
+   `need_ref` then defaults to that lookup. Exactly one of `lines` or `plan_ref` is required.
+   Customer and delivery date must match the lookup. Invalid plan indices return 422.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
    header `Idempotency-Key`, and optional `X-Agent-Id` (default `external`, unregistered and always
    requiring human approval). Use a registered identity such as `hotel-chain-agent` for autonomous
@@ -154,6 +157,38 @@ SQLite writer lock across REST/MCP instances, so concurrent split orders cannot 
 Idempotent replays retain their existing result and never add spend. A human may approve an order
 held for a missing mandate or spend limit through the normal inbox.
 
+## Fulfilment plans and substitutes (spec 08)
+
+Every lookup adds `plans` alongside the existing offers, using only the returned, already-priced offers.
+No additional Valio or Decisions calls are made. Up to three top-ranked `single` plans cover the whole
+need. A `split` plan combines up to four products when no single can cover it, or when splitting is
+cheaper; the planner compares bounded whole-pack combinations and respects on-time stock after local
+reservations. Products must pass hard filters and have fit at or above the policy floor, valid EUR
+prices and verified availability. If full coverage is impossible, a `partial` plan provides the best
+coverage possible within four lines and states the missing quantity with `PARTIAL_STOCK`.
+
+Plan lines contain `product_id`, whole sales `units`, and `covers {value, unit}`. `coverage {value, unit}`
+is the sum of line covers (possibly above the need due to whole packs); `uncovered {value, unit}` is
+zero for full plans. `total` is the sum of rounded net EUR line totals. `warnings` combines line risks
+and any uncovered-need warning. The latter survives plan quotation and placement, so ordering only
+the available portion still requires approval by default. Quotes always recheck price and stock live.
+
+Each plan's `policy_preview {outcome, hits}` uses the same evaluation as real placement, including
+the caller's registration, per-order ceiling and rolling daily spend. REST lookup callers should send
+`X-Agent-Id`; MCP uses its fixed server identity. Preview evaluation creates no order, quote, reservation
+or separate audit event. A lookup still persists its normal lookup evidence and audit event. Stock,
+spend and policy can change between preview and placement; **the actual order result is authoritative**.
+
+Optional `preferences` contains `brands` (case-insensitive exact catalog brands), `max_price_per_unit`
+(net EUR per L/KG), `pack_size {min, max}` (L/KG per sales unit), and `labels` (catalog label IDs).
+Hard constraints remain `required_claims` / `exclude_allergens`. An offer leaving a soft preference
+carries `OUTSIDE_PREFERENCE` listing every difference; unknown price/size/brand cannot prove a match.
+All matching offers rank above substitutes, with existing scores within each group and best/better/good
+labels assigned overall. Substitutes require approval in the committed default policy. Existing runtime
+policy files continue loading and keep their configured warning list. Empty hard-filter results return
+`no_match_reason` with per-constraint removal counts (overlapping failures can count in multiple buckets).
+Old stored lookups without preferences/plans remain readable, including through the order timeline.
+
 ## Evidence, policy and lifecycle
 
 - `search_products` is catalog-only. FTS searches English/Finnish names, English ingredients and marketing
@@ -188,7 +223,7 @@ held for a missing mandate or spend limit through the normal inbox.
   its precise meaning is unconfirmed. Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
 - Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `UNKNOWN_PRODUCT`,
-  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, and `AVAILABILITY_ERROR`. Empty schedule lines signal
+  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, and `AVAILABILITY_ERROR`. Empty schedule lines signal
   `UNKNOWN_PRODUCT`. Lookup failures remain visible; a quote requires a valid price and successful
   upstream checks. Human approval cannot override sales blocks, unknown products, hard constraints,
   or unverifiable availability.
@@ -226,6 +261,6 @@ held for a missing mandate or spend limit through the normal inbox.
 This local development gateway has one named human approver role and no authentication.
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
 Signed quotes, verifiable-credential mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
-automatic splitting/substitution, payments, deployment and separate buyer-agent code are deferred.
+automatic re-planning after commitment, recipe-aware substitutions, payments, deployment and separate buyer-agent code are deferred.
 The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}`.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.
