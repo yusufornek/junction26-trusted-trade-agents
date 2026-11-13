@@ -1,12 +1,17 @@
 import asyncio
+import gzip
 import json
+import sqlite3
 from datetime import timedelta
+from time import perf_counter
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from app.catalog import build
+from app.db import DomainError
 from app.mcp_server import create_server
 from app.models import NeedSpec, PolicyUpdateRequest, QuoteRequest
 from conftest import raw_product
@@ -264,3 +269,157 @@ def test_exceptions_brand_preference_ignores_catalog_whitespace(gateway, need, u
     result = find(gateway, need, preferences={"brands": [f" {product.brand.lower()}"]})
     offer = next(o for o in result.offers if o.product_id == "2")
     assert "OUTSIDE_PREFERENCE" not in {w.code for w in offer.warnings}
+
+
+def replace_products(gateway, tmp_path, rows):
+    source = tmp_path / "exception-products.json.gz"
+    with gzip.open(source, "wt") as file:
+        json.dump(rows, file)
+    build(gateway.db, source, tmp_path / "reliability.csv", tmp_path / "carbon.csv")
+
+
+def assert_full_plan_valid(plan, lookup, target):
+    offers = {offer.product_id: offer for offer in lookup.offers}
+    assert 1 <= len(plan.lines) <= 4
+    assert len({line.product_id for line in plan.lines}) == len(plan.lines)
+    assert plan.coverage.value == pytest.approx(sum(line.covers.value for line in plan.lines))
+    assert plan.coverage.value >= target and plan.uncovered.value == 0
+    for line in plan.lines:
+        offer = offers[line.product_id]
+        assert 0 < line.units <= offer.availability.available_amount
+        assert line.covers.value == pytest.approx(line.units * offer.size_per_sales_unit)
+    assert plan.total == pytest.approx(sum(round(offers[line.product_id].unit_price * line.units, 2)
+                                         for line in plan.lines))
+
+
+def test_exceptions_ac_11_stock_limited_search_is_fast_and_valid(gateway, need, upstream, tmp_path, record_property):
+    rows = [dict(raw_product(str(i), f"Milk bulk {i}", sales="KG", base="KG", multiplier=1),
+                 allowedLotSize=1) for i in range(1, 11)]
+    replace_products(gateway, tmp_path, rows)
+    upstream.amount = 3000
+    upstream.prices = {str(i): round(3 + (i - 1) / 100, 2) for i in range(1, 11)}
+    start = perf_counter()
+    result = find(gateway, need, quantity={"value": 10000, "unit": "KG"})
+    elapsed = perf_counter() - start
+    record_property("elapsed_seconds", elapsed)
+    assert elapsed < 2, f"Stock-limited lookup took {elapsed:.6f}s"
+    plan, = result.plans
+    assert plan.kind == "split"
+    assert_full_plan_valid(plan, result, 10000)
+    assert {line.product_id: line.units for line in plan.lines} == {"1": 3000, "2": 3000, "3": 3000, "4": 1000}
+    assert plan.total == 30120
+    # Even an exhausted budget must retain the valid greedy fallback.
+    from app.plans import build_plans
+    fallback, = build_plans(result.need, result.offers, gateway.policy, gateway.policy.get(),
+                            AGENT, gateway.catalog, node_budget=0)
+    assert_full_plan_valid(fallback, result, 10000)
+
+
+def test_exceptions_ac_12_tied_fractional_prices_are_fast_and_valid(gateway, need, upstream, tmp_path, record_property):
+    replace_products(gateway, tmp_path, [raw_product("1", "Milk 0.02 L", volume=0.02, multiplier=1),
+                                         raw_product("2", "Milk 1 L", volume=1, multiplier=1)])
+    upstream.model, upstream.amount = "Terminal", 999999
+    upstream.sizes, upstream.prices = {"1": 0.02, "2": 1}, {"1": 0.1234, "2": 6.17}
+    start = perf_counter()
+    result = find(gateway, need)
+    elapsed = perf_counter() - start
+    record_property("elapsed_seconds", elapsed)
+    assert elapsed < 2, f"Tied-price lookup took {elapsed:.6f}s"
+    assert result.plans
+    for plan in result.plans:
+        assert_full_plan_valid(plan, result, 1000)
+        assert all(line.units == int(line.units) for line in plan.lines)
+
+
+def test_exceptions_ac_13_preferred_split_precedes_cheaper_substitute(gateway, need, upstream, tmp_path):
+    replace_products(gateway, tmp_path, [raw_product(pid, "Milk 1 L", volume=1, multiplier=1, brand=brand)
+                                         for pid, brand in [("1", "Valio"), ("2", "Valio"), ("3", "Arla")]])
+    upstream.sizes = {"1": 1, "2": 1, "3": 1}
+    upstream.prices, upstream.amounts = {"1": 1.20, "2": 1.25, "3": 1.22}, {"1": 380, "2": 700, "3": 999999}
+    result = find(gateway, need, preferences={"brands": ["Valio"]})
+    preferred, substitute = [plan for plan in result.plans if plan.kind == "split"]
+    assert {line.product_id: line.units for line in preferred.lines} == {"1": 380, "2": 620}
+    assert preferred.policy_preview.outcome == "CONFIRMED"
+    assert not any(w.code == "OUTSIDE_PREFERENCE" for w in preferred.warnings)
+    assert {line.product_id: line.units for line in substitute.lines} == {"1": 380, "3": 620}
+    assert substitute.total < preferred.total
+    assert any(w.code == "OUTSIDE_PREFERENCE" for w in substitute.warnings)
+    assert substitute.policy_preview.outcome == "PENDING_APPROVAL"
+    assert "OUTSIDE_PREFERENCE" in {hit.rule for hit in substitute.policy_preview.hits}
+    assert result.plans.index(preferred) < result.plans.index(substitute)
+    order = gateway.orders.place_order(quote(gateway, need, result, result.plans.index(preferred)).id,
+                                       "preferred-split", AGENT)
+    assert order.policy == preferred.policy_preview
+    gateway.orders.cancel(order.id, actor=f"agent:{AGENT}")
+    # The preferred-only partial must also survive when substitutes can fill the rest.
+    upstream.amounts.update({"1": 100, "2": 200})
+    partial_result = find(gateway, need, preferences={"brands": ["Valio"]})
+    partial = partial_result.plans[0]
+    assert partial.kind == "partial" and partial.coverage.value == 300
+    assert {line.product_id for line in partial.lines} == {"1", "2"}
+    assert any(any(w.code == "OUTSIDE_PREFERENCE" for w in plan.warnings) for plan in partial_result.plans[1:])
+
+
+def test_exceptions_ac_14_preview_rejects_customer_outside_mandate(gateway, need, upstream):
+    upstream.amount = 2000
+    result = find(gateway, need, customer_id="2")
+    assert result.plans
+    for plan in result.plans:
+        assert plan.policy_preview.outcome == "REJECTED"
+        assert "CUSTOMER_NOT_IN_MANDATE" in {hit.rule for hit in plan.policy_preview.hits}
+    with pytest.raises(DomainError) as refused_quote:
+        quote(gateway, result.need, result)
+    assert refused_quote.value.code == "CUSTOMER_NOT_IN_MANDATE" and refused_quote.value.status == 403
+    # Placement still returns its existing 403 if scope changes after quoting.
+    allowed = find(gateway, need)
+    q = quote(gateway, need, allowed)
+    body = gateway.policy.get().model_dump(mode="json")
+    body["agents"][AGENT]["customer_ids"] = ["2"]
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    with pytest.raises(DomainError) as refused_order:
+        gateway.orders.place_order(q.id, "scope-changed", AGENT)
+    assert refused_order.value.code == "CUSTOMER_NOT_IN_MANDATE" and refused_order.value.status == 403
+
+
+def test_exceptions_ac_15_kg_plans_follow_fractional_lots(gateway, need, upstream, tmp_path):
+    replace_products(gateway, tmp_path, [dict(raw_product("1", "Milk bulk", sales="KG", base="KG", multiplier=1),
+                                              allowedLotSize=0.5)])
+    upstream.amounts, upstream.prices = {"1": 10.75}, {"1": 2.675}
+    result = find(gateway, need, quantity={"value": 10.25, "unit": "KG"})
+    plan, = result.plans
+    offer, = result.offers
+    assert plan.kind == "single" and plan.lines[0].units == offer.units_needed == 10.5
+    assert plan.total == offer.total
+    assert_full_plan_valid(plan, result, 10.25)
+    assert quote(gateway, result.need, result).total == plan.total
+    # Less than one kg of stock is eligible if it contains a complete allowed lot.
+    upstream.amounts["1"] = 0.75
+    small = find(gateway, need, quantity={"value": 0.25, "unit": "KG"})
+    assert small.plans[0].lines[0].units == small.offers[0].units_needed == 0.5
+    assert small.plans[0].total == small.offers[0].total
+    partial = find(gateway, need, quantity={"value": 1, "unit": "KG"}).plans[0]
+    assert partial.kind == "partial" and partial.lines[0].units == 0.5
+
+
+def test_exceptions_ac_16_planning_does_not_hold_writer_lock(gateway, need, upstream, monkeypatch):
+    from app import plans
+    original, checked = plans.build_plans, []
+
+    def build_with_independent_writer(*args, **kwargs):
+        # Fail immediately if lookup holds BEGIN IMMEDIATE. Keep this writer open throughout
+        # real planning to prove planning/preview themselves never request a write transaction.
+        conn = sqlite3.connect(gateway.db.path, timeout=0)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            checked.append(True)
+            return original(*args, **kwargs)
+        finally:
+            conn.rollback()
+            conn.close()
+
+    monkeypatch.setattr(plans, "build_plans", build_with_independent_writer)
+    upstream.amounts = {"1": 380, "2": 70}
+    result = find(gateway, need)
+    assert checked == [True] and result.plans
+    assert gateway.lookup.get(result.lookup_id) == result
+    assert [event.action for event in gateway.audit()] == ["LOOKUP"]

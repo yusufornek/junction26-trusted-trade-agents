@@ -128,7 +128,7 @@ class CoveredQuantity(Model):
 
 class PlanLine(Model):
     product_id: str
-    units: int = Field(gt=0, description="Whole sales units, never exceeding on-time stock.")
+    units: float = Field(gt=0, description="Sales quantity: allowed_lot_size multiples for KG-sold products, whole units otherwise; never exceeds on-time stock.")
     covers: CoveredQuantity
 
 

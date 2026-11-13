@@ -115,8 +115,8 @@ class Policy:
         if mandate is not None and customer_id not in mandate.customer_ids:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", f"Agent {agent_id} has no mandate for customer {customer_id}", 403)
 
-    def evaluate_order(self, conn, total, lines, hard_violations=(), *, agent_id, policy=None, warnings=()):
-        """Shared read-only placement/preview evaluation, under the caller's SQLite snapshot/lock."""
+    def autonomous_total(self, conn, agent_id):
+        """Read rolling spend once from the caller's SQLite snapshot/placement lock."""
         now = audit.utcnow()
         start = now - timedelta(hours=24)
         autonomous_total = Decimal(0)
@@ -125,10 +125,17 @@ class Policy:
             if (order.agent_id == agent_id and order.approver is None and order.currency == "EUR"
                     and start <= order.created_at <= now):
                 autonomous_total += Decimal(str(order.total))
-        return self.evaluate(total, lines, hard_violations, agent_id=agent_id,
-                             autonomous_total=autonomous_total, policy=policy, warnings=warnings)
+        return autonomous_total
 
-    def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, autonomous_total=Decimal(0), policy=None, warnings=()):
+    def evaluate_order(self, conn, total, lines, hard_violations=(), *, agent_id, customer_id=None,
+                       policy=None, warnings=()):
+        """Shared read-only placement/preview evaluation, under the caller's SQLite snapshot/lock."""
+        return self.evaluate(total, lines, hard_violations, agent_id=agent_id,
+                             customer_id=customer_id, autonomous_total=self.autonomous_total(conn, agent_id),
+                             policy=policy, warnings=warnings)
+
+    def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, customer_id=None,
+                 autonomous_total=Decimal(0), policy=None, warnings=()):
         policy = policy or self.get()
         max_total = policy.approval.max_auto_total_eur
         source = "global policy"
@@ -139,6 +146,10 @@ class Policy:
         min_fit = policy.approval.min_fit_probability
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
         hits, rejected, approval = [], False, False
+        if mandate is not None and customer_id is not None and customer_id not in mandate.customer_ids:
+            hits.append(RuleHit(rule="CUSTOMER_NOT_IN_MANDATE",
+                                detail=f"Agent {agent_id} has no mandate for customer {customer_id}"))
+            rejected = True
         if agent_id is not None and mandate is None:
             hits.append(RuleHit(rule="unregistered_agent", detail=f"Agent {agent_id} has no mandate; human approval is required."))
             approval = True

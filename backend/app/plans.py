@@ -1,28 +1,29 @@
 """Bounded fulfilment proposals using already-priced offers, without upstream calls or writes."""
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-from fractions import Fraction
 
 from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Warning
 
 
-def build_plans(need, offers, evaluator, policy, conn, agent_id, catalog):
+def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
+                autonomous_total=Decimal(0), node_budget=20_000):
     target = Decimal(str(need.quantity.value))
     # Hard filters already ran before pricing. Exclude unverifiable/unsuitable offers as well.
     invalid = {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT", "AVAILABILITY_ERROR"}
     eligible = [o for o in offers if o.fit is not None and o.fit >= policy.approval.min_fit_probability
                 and o.currency == "EUR" and o.unit_price is not None and o.size_per_sales_unit
                 and not any(w.code in invalid for w in o.warnings)
-                and o.availability.available_amount >= 1]
-    sizes = [Decimal(str(o.size_per_sales_unit)) for o in eligible]
-    steps = [Fraction(str(catalog.get(o.product_id).allowed_lot_size)).numerator if o.sales_unit == "KG" else 1
+                and o.availability.available_amount > 0]
+    steps = [Decimal(str(catalog.get(o.product_id).allowed_lot_size)) if o.sales_unit == "KG" else Decimal(1)
              for o in eligible]
-    limits = [int(Decimal(str(o.availability.available_amount)).to_integral_value(rounding=ROUND_FLOOR)) // step * step
+    # Search in integer lot counts; convert back to sales quantities only at the boundary.
+    sizes = [Decimal(str(o.size_per_sales_unit)) * step for o, step in zip(eligible, steps)]
+    limits = [int((Decimal(str(o.availability.available_amount)) / step).to_integral_value(rounding=ROUND_FLOOR))
               for o, step in zip(eligible, steps)]
-    prices = [Decimal(str(o.unit_price)) for o in eligible]
+    prices = [Decimal(str(o.unit_price)) * step for o, step in zip(eligible, steps)]
 
-    def line_cost(i, units):
+    def line_cost(i, lots):
         # Match offer_for's existing rounding, including prices with more than two decimals.
-        return Decimal(str(round(eligible[i].unit_price * units, 2)))
+        return Decimal(str(round(eligible[i].unit_price * float(lots * steps[i]), 2)))
 
     def cost(allocation):
         return sum(line_cost(i, units) for i, units in allocation)
@@ -36,7 +37,7 @@ def build_plans(need, offers, evaluator, policy, conn, agent_id, catalog):
         lines, warnings = [], list(plan_warnings)
         for i, units in allocation:
             line = eligible[i].model_copy(deep=True)
-            line.units_needed, line.total = units, float(line_cost(i, units))
+            line.units_needed, line.total = float(units * steps[i]), float(line_cost(i, units))
             line.availability.enough, line.availability.coverage = True, 1
             # A split line can cover its allocation even though its original full-need offer could not.
             line.warnings = [w for w in line.warnings if w.code != "PARTIAL_STOCK"]
@@ -45,10 +46,10 @@ def build_plans(need, offers, evaluator, policy, conn, agent_id, catalog):
                 if warning not in warnings:
                     warnings.append(warning)
         total = float(cost(allocation))
-        preview = evaluator.evaluate_order(conn, total, lines, agent_id=agent_id, policy=policy,
-                                           warnings=plan_warnings)
+        preview = evaluator.evaluate(total, lines, agent_id=agent_id, customer_id=need.customer_id,
+                                     autonomous_total=autonomous_total, policy=policy, warnings=plan_warnings)
         return FulfilmentPlan(
-            kind=kind, lines=[PlanLine(product_id=eligible[i].product_id, units=units,
+            kind=kind, lines=[PlanLine(product_id=eligible[i].product_id, units=float(units * steps[i]),
                                       covers=CoveredQuantity(value=float(sizes[i] * units), unit=need.quantity.unit))
                               for i, units in allocation],
             total=total, coverage=CoveredQuantity(value=float(coverage), unit=need.quantity.unit),
@@ -57,70 +58,107 @@ def build_plans(need, offers, evaluator, policy, conn, agent_id, catalog):
 
     singles = []
     for i, size in enumerate(sizes):
-        units = int((target / size / steps[i]).to_integral_value(rounding=ROUND_CEILING)) * steps[i]
+        units = int((target / size).to_integral_value(rounding=ROUND_CEILING))
         if units <= limits[i]:
             singles.append(((i, units),))
 
-    complete, partial = {}, {}
+    nodes_left = node_budget  # Shared by the preferred-only and mixed searches.
 
-    def fill(allocation=(), covered=Decimal(0)):
-        # Try each ranked offer as the next source, comparing the cost of the resulting fills.
-        # At most 10P4 paths; never enumerate individual litres or make another live request.
-        if allocation:
-            key = tuple(sorted(allocation))
-            (complete if covered >= target else partial)[key] = covered
-        if covered >= target or len(allocation) == 4:
-            return
-        used = {i for i, _ in allocation}
-        for i, size in enumerate(sizes):
-            if i in used:
-                continue
-            units = min(limits[i], int(((target - covered) / size / steps[i]).to_integral_value(rounding=ROUND_CEILING)) * steps[i])
-            if units:
-                fill((*allocation, (i, units)), covered + size * units)
+    def composite(indices):
+        complete, partial = {}, {}
 
-    fill()
-    plans = [make(allocation, "single") for allocation in singles[:3]]
-    best = min(complete, key=lambda a: (cost(a), a)) if complete else None
-    # Greedy fills provide a fast upper bound. Branch-and-bound also checks interior allocations:
-    # e.g. one 6 L pack + one 4 L pack can beat either rounded-up single-product order.
-    order = sorted(range(len(eligible)), key=lambda i: (prices[i] / sizes[i], i))
-    rounding_slack = (Decimal("0.0200001") if any(p != p.quantize(Decimal("0.01")) for p in prices)
-                      else Decimal(0))
-    visited = {}
+        def fill(allocation=(), covered=Decimal(0)):
+            # At most 10P4 paths, independent of quantity/lot size. Always retain a valid fallback.
+            if allocation:
+                key = tuple(sorted(allocation))
+                (complete if covered >= target else partial)[key] = covered
+            if covered >= target or len(allocation) == 4:
+                return
+            used = {i for i, _ in allocation}
+            for i in indices:
+                if i in used:
+                    continue
+                units = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+                if units:
+                    fill((*allocation, (i, units)), covered + sizes[i] * units)
 
-    def cheapest(start=0, allocation=(), covered=Decimal(0), paid=Decimal(0)):
-        nonlocal best
-        if covered >= target:
-            if best is None or cost(allocation) < cost(best):
-                best = allocation
-            return
-        slots = 4 - len(allocation)
-        remaining = order[start:]
-        if not slots or not remaining:
-            return
-        state = (start, slots, covered)
-        if state in visited and visited[state] <= paid:
-            return
-        visited[state] = paid
-        if covered + sum(sorted((sizes[i] * limits[i] for i in remaining), reverse=True)[:slots]) < target:
-            return
-        lower = paid + (target - covered) * (prices[remaining[0]] / sizes[remaining[0]]) - rounding_slack
-        lower = max(Decimal(0), lower)
-        if best is not None and lower.quantize(Decimal("0.01"), rounding=ROUND_CEILING) >= cost(best):
-            return
-        i = remaining[0]
-        maximum = min(limits[i], int(((target - covered) / sizes[i] / steps[i]).to_integral_value(rounding=ROUND_CEILING)) * steps[i])
-        for units in range(maximum, -1, -steps[i]):
-            amount = line_cost(i, units)
-            if best is None or paid + amount < cost(best):
-                cheapest(start + 1, (*allocation, (i, units)) if units else allocation,
-                         covered + sizes[i] * units, paid + amount)
+        fill()
+        if not complete:
+            if partial:
+                return min(partial, key=lambda a: (-partial[a], cost(a), a)), "partial"
+            return None
+        best = min(complete, key=lambda a: (cost(a), a))
+        best_cost = cost(best)
+        order = sorted(indices, key=lambda i: (prices[i] / sizes[i], i))
+        capacities = {i: sizes[i] * limits[i] for i in indices}
+        # Precompute each suffix's top-k capacity; no sorting in the search itself.
+        max_cover = []
+        for start in range(len(order) + 1):
+            largest = sorted((capacities[i] for i in order[start:]), reverse=True)
+            max_cover.append([sum(largest[:slots]) for slots in range(5)])
 
-    cheapest()
-    if best and len(best) > 1 and (not singles or cost(best) < min(cost(a) for a in singles)):
-        plans.append(make(best, "split"))
-    if not complete and partial:
-        best = min(partial, key=lambda a: (-partial[a], cost(a), a))
-        plans.append(make(best, "partial"))
-    return plans
+        def lower_bound(start, covered, paid, slots):
+            remaining = target - covered
+            if remaining <= 0:
+                return paid
+            if not slots or max_cover[start][slots] < remaining:
+                return Decimal("Infinity")
+            # Fractional cheapest-first fill respects stock (relaxes lots and the line limit).
+            lower = paid
+            for i in order[start:]:
+                amount = min(remaining, capacities[i])
+                lower += amount * prices[i] / sizes[i]
+                remaining -= amount
+                if remaining <= 0:
+                    break
+            # Deliberately ignore savings of a cent caused only by split-line rounding.
+            return lower.quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+
+        def cheapest(start=0, allocation=(), covered=Decimal(0), paid=Decimal(0)):
+            nonlocal best, best_cost, nodes_left
+            if nodes_left <= 0:
+                return
+            nodes_left -= 1
+            if covered >= target:
+                if paid < best_cost:
+                    best, best_cost = allocation, paid
+                return
+            slots = 4 - len(allocation)
+            if lower_bound(start, covered, paid, slots) >= best_cost:
+                return
+            i = order[start]
+            maximum = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+            for units in range(maximum, 0, -1):
+                if nodes_left <= 0:
+                    return
+                next_covered, next_paid = covered + sizes[i] * units, paid + line_cost(i, units)
+                # Below the target, shrinking this cheapest source raises the child bound.
+                # The initial rounded-up lot may over-cover; dropping that lot can lower cost.
+                if lower_bound(start + 1, next_covered, next_paid, slots - 1) >= best_cost:
+                    if next_covered < target:
+                        break
+                    continue
+                cheapest(start + 1, (*allocation, (i, units)), next_covered, next_paid)
+            # Skipping this source restores a line slot, so check it even after a capacity break.
+            cheapest(start + 1, allocation, covered, paid)
+
+        cheapest()
+        group_singles = [a for a in singles if a[0][0] in indices]
+        if len(best) > 1 and (not group_singles or best_cost < min(cost(a) for a in group_singles)):
+            return best, "split"
+        return None
+
+    preferred = [i for i, offer in enumerate(eligible)
+                 if not any(w.code == "OUTSIDE_PREFERENCE" for w in offer.warnings)]
+    preferred_singles = [a for a in singles if a[0][0] in preferred]
+    proposals = [(a, "single") for a in preferred_singles[:3]]
+    preferred_plan = composite(preferred)
+    if preferred_plan:
+        proposals.append(preferred_plan)
+    substitute_singles = [a for a in singles if a[0][0] not in preferred]
+    proposals.extend((a, "single") for a in substitute_singles[:max(0, 3 - len(preferred_singles))])
+    if len(preferred) != len(eligible):
+        mixed = composite(list(range(len(eligible))))
+        if mixed and any(i not in preferred for i, _ in mixed[0]):
+            proposals.append(mixed)
+    return [make(allocation, kind) for allocation, kind in proposals]

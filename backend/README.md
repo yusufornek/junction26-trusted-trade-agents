@@ -162,19 +162,29 @@ held for a missing mandate or spend limit through the normal inbox.
 Every lookup adds `plans` alongside the existing offers, using only the returned, already-priced offers.
 No additional Valio or Decisions calls are made. Up to three top-ranked `single` plans cover the whole
 need. A `split` plan combines up to four products when no single can cover it, or when splitting is
-cheaper; the planner compares bounded whole-pack combinations and respects on-time stock after local
-reservations. Products must pass hard filters and have fit at or above the policy floor, valid EUR
+cheaper; the planner compares lot/pack combinations and respects on-time stock after local
+reservations. Cheapest-split search uses stock-aware bounds and a shared 20,000-node budget per lookup
+(the internal `build_plans(..., node_budget=...)` argument can override it). On exhaustion it keeps the
+best valid plan found, with greedy fills always available as a fallback. It may miss a cheaper combination,
+including savings of a cent due only to rounding individual lines. Reservations and autonomous daily spend
+are read in one read snapshot; planning runs after that snapshot closes. The write transaction only stores
+the lookup and its audit row, so planning holds no writer lock against quotes, orders or approvals.
+Products must pass hard filters and have fit at or above the policy floor, valid EUR
 prices and verified availability. If full coverage is impossible, a `partial` plan provides the best
 coverage possible within four lines and states the missing quantity with `PARTIAL_STOCK`.
 
-Plan lines contain `product_id`, whole sales `units`, and `covers {value, unit}`. `coverage {value, unit}`
+Plan lines contain `product_id`, numeric sales `units`, and `covers {value, unit}`. KG-sold products use
+`allowed_lot_size` multiples (e.g. 10.5 kg for a 10.25 kg need with a 0.5 kg lot); other products use whole
+sales units. A KG single plan's units and total match its offer. `coverage {value, unit}`
 is the sum of line covers (possibly above the need due to whole packs); `uncovered {value, unit}` is
 zero for full plans. `total` is the sum of rounded net EUR line totals. `warnings` combines line risks
 and any uncovered-need warning. The latter survives plan quotation and placement, so ordering only
 the available portion still requires approval by default. Quotes always recheck price and stock live.
 
 Each plan's `policy_preview {outcome, hits}` uses the same evaluation as real placement, including
-the caller's registration, per-order ceiling and rolling daily spend. REST lookup callers should send
+the caller's registration, customer scope, per-order ceiling and rolling daily spend. A registered agent
+outside its customer mandate sees every plan preview `REJECTED` with `CUSTOMER_NOT_IN_MANDATE`;
+quoting and placement retain their `403 CUSTOMER_NOT_IN_MANDATE` responses. REST lookup callers should send
 `X-Agent-Id`; MCP uses its fixed server identity. Preview evaluation creates no order, quote, reservation
 or separate audit event. A lookup still persists its normal lookup evidence and audit event. Stock,
 spend and policy can change between preview and placement; **the actual order result is authoritative**.
@@ -184,7 +194,10 @@ Optional `preferences` contains `brands` (case-insensitive exact catalog brands)
 Hard constraints remain `required_claims` / `exclude_allergens`. An offer leaving a soft preference
 carries `OUTSIDE_PREFERENCE` listing every difference; unknown price/size/brand cannot prove a match.
 All matching offers rank above substitutes, with existing scores within each group and best/better/good
-labels assigned overall. Substitutes require approval in the committed default policy. Existing runtime
+labels assigned overall. Split and partial plans are first built from matching offers, preserving an
+in-preference plan even when a substitute costs less. A cheaper split containing substitutes is offered
+after it with `OUTSIDE_PREFERENCE`; preferred-only partials also remain visible when substitutes can
+complete the need. Substitutes require approval in the committed default policy. Existing runtime
 policy files continue loading and keep their configured warning list. Empty hard-filter results return
 `no_match_reason` with per-constraint removal counts (overlapping failures can count in multiple buckets).
 Old stored lookups without preferences/plans remain readable, including through the order timeline.

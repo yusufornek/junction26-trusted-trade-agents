@@ -176,7 +176,8 @@ class Orders:
             # Re-read catalog hard facts as well as preserving original quote violations.
             now = audit.utcnow()
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
-                                                agent_id=agent_id, policy=policy, warnings=quote.warnings)
+                                                agent_id=agent_id, customer_id=quote.customer_id,
+                                                policy=policy, warnings=quote.warnings)
             order = Order(id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, policy=result, live_calls=counter.live())

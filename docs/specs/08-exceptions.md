@@ -1,6 +1,6 @@
 # 08 — Exceptions: partial stock, split orders, substitutes
 
-Status: built (verified live 2026-11-14: split plan 33 cases + 4 cartons for 400 L, quote from `plan_ref`, order outcome equal to the preview) · R-10–R-13 added after the independent review, in progress · Judged as "Robustness to exception situations" (15%): partial availability, substitutions and
+Status: built (verified live 2026-11-14: split plan 33 cases + 4 cartons for 400 L, quote from `plan_ref`, order outcome equal to the preview) · R-10–R-13 added after the independent review and built (40-scenario fuzz: every plan valid, under 0.1 s) · Judged as "Robustness to exception situations" (15%): partial availability, substitutions and
 delivery constraints beyond the happy path. Brief: "how an agent handles partial availability and substitution
 ranking (good-better-best) within Valio Aimo's own assortment."
 

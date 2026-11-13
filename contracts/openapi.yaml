@@ -1887,10 +1887,11 @@ components:
           type: string
           title: Product Id
         units:
-          type: integer
+          type: number
           exclusiveMinimum: 0.0
           title: Units
-          description: Whole sales units, never exceeding on-time stock.
+          description: 'Sales quantity: allowed_lot_size multiples for KG-sold products,
+            whole units otherwise; never exceeds on-time stock.'
         covers:
           $ref: '#/components/schemas/CoveredQuantity'
       additionalProperties: false

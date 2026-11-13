@@ -263,22 +263,30 @@ class Lookup:
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
         if candidates and (not fits or any(p.id not in fits for p in candidates)):
             global_warnings.append(warning("NO_FIT_SCORE"))
+        agent_id = actor.removeprefix("agent:")
+        # A deferred read transaction gives reservations and spend one consistent snapshot.
+        # Release it before planning; only persistence needs the SQLite writer lock.
+        with self.db.connect() as conn:
+            conn.execute("BEGIN")
+            reservations = {p.id: reserved(conn, p.id) for p in candidates}
+            autonomous_total = self.policy.autonomous_total(conn, agent_id)
+        offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
+                            (fits or {}).get(p.id), reserved_amount=reservations[p.id]) for p in candidates]
+        rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability)
+        from .plans import build_plans
+        returned = offers[:need.max_candidates]
+        plans = build_plans(need, returned, self.policy, policy, agent_id, self.catalog,
+                            autonomous_total=autonomous_total)
+        no_match_reason = None
+        if not pool:
+            counts = "; ".join(f"{key} removed {count} candidates" for key, count in sorted(removed_by.items()))
+            no_match_reason = (f"No products pass the hard filters: {counts}. Counts may overlap."
+                               if counts else "No catalog products match the search terms.")
+        result = LookupResult(lookup_id=str(uuid4()), need=need, offers=returned, plans=plans,
+                              no_match_reason=no_match_reason, excluded_count=excluded,
+                              priced_count=len(candidates), screened_count=screened_count,
+                              live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
-            offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
-                                (fits or {}).get(p.id), reserved_amount=reserved(conn, p.id)) for p in candidates]
-            rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability)
-            from .plans import build_plans
-            returned = offers[:need.max_candidates]
-            plans = build_plans(need, returned, self.policy, policy, conn, actor.removeprefix("agent:"), self.catalog)
-            no_match_reason = None
-            if not pool:
-                counts = "; ".join(f"{key} removed {count} candidates" for key, count in sorted(removed_by.items()))
-                no_match_reason = (f"No products pass the hard filters: {counts}. Counts may overlap."
-                                   if counts else "No catalog products match the search terms.")
-            result = LookupResult(lookup_id=str(uuid4()), need=need, offers=returned, plans=plans,
-                                  no_match_reason=no_match_reason, excluded_count=excluded,
-                                  priced_count=len(candidates), screened_count=screened_count,
-                                  live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             audit.append(conn, actor, "LOOKUP", f"Priced {len(candidates)} candidates, returned {len(result.offers)} offers and excluded {excluded} hard-filter failures.",
                          data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id,
