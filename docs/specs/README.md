@@ -17,5 +17,9 @@ change or extend.
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | built |
 | 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
 | 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | built |
+| 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | draft |
+| 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | draft |
+| 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority | draft |
+| 13 | [Open-standard mapping](13-open-standard-mapping.md) | Peppol / UBL mapping and export | draft |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .
