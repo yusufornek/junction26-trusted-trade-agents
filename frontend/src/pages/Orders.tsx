@@ -6,7 +6,7 @@ import { Card, Empty, ErrorNote, Spinner, StatusChip, eur, useAsync, when } from
 const FILTERS: (OrderStatus | "ALL")[] = ["ALL", "PENDING_APPROVAL", "CONFIRMED", "REJECTED", "EXPIRED"];
 
 export default function Orders() {
-  const { data, error, loading } = useAsync(() => api.orders(), []);
+  const { data, error, loading } = useAsync(() => api.orders(), [], 5000);
   const [filter, setFilter] = useState<OrderStatus | "ALL">("ALL");
 
   if (error) return <ErrorNote error={error} />;

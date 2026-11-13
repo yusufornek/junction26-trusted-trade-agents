@@ -118,6 +118,40 @@ export type AuditEntry = {
 
 export type Health = { status: string; catalog_rows: number };
 
+export type PolicyResource = {
+  approval: {
+    max_auto_total_eur: number;
+    min_fit_probability: number;
+    warnings_need_approval: string[];
+  };
+  reject: { on_hard_constraint_violation: boolean; on: string[] };
+  ranking_weights: { price: number; coverage: number; reliability: number; co2: number; fit: number };
+  shortlist: { catalog_pool: number };
+  updated_at: string | null;
+  updated_by: string | null;
+  known_warning_codes: string[];
+};
+
+/** The writable part of the policy — `updated_at` and the code list are server-owned. */
+export type PolicyDocument = Pick<
+  PolicyResource,
+  "approval" | "reject" | "ranking_weights" | "shortlist"
+>;
+
+export type Stats = {
+  since: string | null;
+  lookups: number;
+  orders_by_status: Record<string, number>;
+  placement_outcomes: Record<string, number>;
+  human_decisions: { approved: number; rejected: number };
+  confirmed_spend_total_eur: number;
+  average_live_calls_per_lookup: { price: number; availability: number };
+  total_decisions_calls: number;
+  top_warning_codes: { code: string; count: number }[];
+  top_rule_hits: { rule: string; count: number }[];
+  agents_seen: { actor: string; order_count: number }[];
+};
+
 export class ApiError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
     super(message);
@@ -141,12 +175,21 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => call<Health>("/health"),
   offers: (need: NeedSpec) => call<LookupResult>("/v1/offers", { method: "POST", body: JSON.stringify(need) }),
-  createQuote: (body: {
-    customer_id: string;
-    deliver_by: string;
-    need_ref: string;
-    lines: { product_id: string; quantity_sales_units: number }[];
-  }) => call<Quote>("/v1/quotes", { method: "POST", body: JSON.stringify(body) }),
+  lookup: (id: string) => call<LookupResult>(`/v1/lookups/${id}`),
+  createQuote: (
+    body: {
+      customer_id: string;
+      deliver_by: string;
+      need_ref: string;
+      lines: { product_id: string; quantity_sales_units: number }[];
+    },
+    agentId = "web-console",
+  ) =>
+    call<Quote>("/v1/quotes", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "X-Agent-Id": agentId },
+    }),
   quote: (id: string) => call<Quote>(`/v1/quotes/${id}`),
   placeOrder: (quoteId: string, idempotencyKey: string, agentId = "web-console") =>
     call<Order>("/v1/orders", {
@@ -167,6 +210,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ approver, comment }),
     }),
+  policy: () => call<PolicyResource>("/v1/policy"),
+  updatePolicy: (policy: PolicyDocument, updated_by: string, comment: string) =>
+    call<PolicyResource>("/v1/policy", {
+      method: "PUT",
+      body: JSON.stringify({ policy, updated_by, comment }),
+    }),
+  resetPolicy: (updated_by: string) =>
+    call<PolicyResource>("/v1/policy/reset", { method: "POST", body: JSON.stringify({ updated_by }) }),
+  stats: (since?: string) => call<Stats>("/v1/stats" + (since ? `?since=${encodeURIComponent(since)}` : "")),
   audit: (params?: { order_id?: string; quote_id?: string }) => {
     const q = new URLSearchParams(
       Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][],

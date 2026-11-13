@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import {
   Card,
+  Countdown,
   Empty,
   ErrorNote,
   Spinner,
@@ -16,12 +17,22 @@ import {
 
 export default function OrderDetail() {
   const { id = "" } = useParams();
-  const order = useAsync(() => api.order(id), [id]);
-  const audit = useAsync(() => api.audit({ order_id: id }), [id]);
+  const order = useAsync(() => api.order(id), [id], 5000);
+  const audit = useAsync(() => api.audit({ order_id: id }), [id], 5000);
+  const quoteId = order.data?.quote_id;
+  // What else the agent considered: the lookup behind this order's quote still holds the ranked offers.
+  const alternatives = useAsync(async () => {
+    if (!quoteId) return null;
+    const quote = await api.quote(quoteId);
+    if (!quote.need_ref) return null;
+    return api.lookup(quote.need_ref);
+  }, [quoteId]);
 
   if (order.error) return <ErrorNote error={order.error} />;
   if (order.loading || !order.data) return <Spinner />;
   const o = order.data;
+  const orderedIds = new Set(o.lines.map((l) => l.product_id));
+  const rejected = (alternatives.data?.offers ?? []).filter((x) => !orderedIds.has(x.product_id));
 
   return (
     <div className="flex flex-col gap-4">
@@ -41,7 +52,11 @@ export default function OrderDetail() {
         <div className="text-right">
           <div className="num text-[28px] font-semibold">{eur(o.total, o.currency)}</div>
           <div className="label">
-            {o.live_calls ? `${o.live_calls.price + o.live_calls.availability} upstream calls` : ""}
+            {o.status === "PENDING_APPROVAL" ? (
+              <Countdown to={o.expires_at} />
+            ) : o.live_calls ? (
+              `${o.live_calls.price + o.live_calls.availability} upstream calls`
+            ) : null}
           </div>
         </div>
       </Card>
@@ -82,6 +97,38 @@ export default function OrderDetail() {
                 ) : null}
               </div>
             ))}
+          </Card>
+
+          <Card className="flex flex-col gap-3">
+            <div>
+              <h3 className="text-[15px] font-semibold">What else the agent considered</h3>
+              <p className="label">
+                {alternatives.data
+                  ? `${rejected.length} other offers from the same lookup, ranked but not ordered`
+                  : "No lookup is linked to this order"}
+              </p>
+            </div>
+            {alternatives.loading ? (
+              <Spinner />
+            ) : !rejected.length ? (
+              <Empty>No alternatives recorded.</Empty>
+            ) : (
+              <ul className="flex flex-col gap-1.5">
+                {rejected.slice(0, 6).map((x) => (
+                  <li
+                    key={x.product_id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-tile)] border border-line p-2.5 text-[13px]"
+                  >
+                    {x.rank_label ? <span className="chip bg-chip text-ink-muted">{x.rank_label}</span> : null}
+                    <span className="min-w-0 flex-1 truncate">{x.name}</span>
+                    <span className="num text-ink-muted">{eur(x.total, x.currency)}</span>
+                    <div className="w-full">
+                      <WarningChips warnings={x.warnings} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Card>
 
           <Card className="flex flex-col gap-3">

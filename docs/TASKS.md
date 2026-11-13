@@ -13,6 +13,7 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 7 | MCP server over the same core (search, offers, quote, order, status) | Backend (Claude → Codex) | done | |
 | 8 | End-to-end demo: Claude as MCP client runs the 1,000 L milk request | Gökalp + Claude | done | `backend/demo/run_buyer_agent.sh`; verified live 13.11 |
 | 12 | Better shortlist: score more catalog candidates with Decisions before live calls (agent searching only "milk" missed cheaper Valio Eila 1 L) | Backend | done | demo now picks 1,010 € auto-confirmed option instead of 1,708 € |
-| 9 | Frontend: dashboard, buyer flow, approval inbox, orders, audit, policy | Frontend | done | Vite + React + TS + Tailwind; verified live against the gateway 13.11; backend notes: `docs/FRONTEND.md` |
+| 9 | Frontend: dashboard, buyer flow, approval inbox, orders, audit, policy | Frontend | done | Vite + React + TS + Tailwind; stats/policy/lookups wired, 5 s polling, multi-line quotes, editable policy; verified live 13.11; backend notes: `docs/FRONTEND.md` |
+| 13 | Order cancel endpoint over REST (core has `Orders.cancel`, contract does not) | Backend | todo | frontend has no screen for it until the endpoint exists |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

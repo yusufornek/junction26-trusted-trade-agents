@@ -29,9 +29,9 @@ gateway can remain loopback-only. No frontend environment variables.
 | `/` | Committed spend, orders awaiting a human, share decided autonomously, upstream call count, approval preview, audit feed |
 | `/buyer` | Structured need → offers (good/better/best) → locked quote → order |
 | `/approvals` | Orders the policy held, with the matched rules, approve / reject as a named human |
-| `/orders`, `/orders/:id` | All commitments; detail shows lines, warnings, provenance, policy outcome and that order's audit trail |
+| `/orders`, `/orders/:id` | All commitments; detail shows lines, warnings, provenance, policy outcome, the other offers the agent considered, and that order's audit trail |
 | `/audit` | Append-only record, expandable to the raw entry payload |
-| `/policy` | The guardrails, rendered from `backend/policy.yaml` itself |
+| `/policy` | The guardrails, **editable**: ceiling, confidence floor, which warnings need a signature, hard stops, ranking weights |
 
 ## Conventions
 
@@ -44,10 +44,15 @@ gateway can remain loopback-only. No frontend environment variables.
   deliberately plain fetch-on-mount hook with explicit `reload()`, no cache layer.
 - Every number the agent acted on is shown with its evidence: unit conversion is spelled out,
   `matched_because` is listed, warnings are chips, and provenance names the upstream call and time.
-- `/policy` imports `../../backend/policy.yaml?raw`, so the page can never drift from the rules the
-  gateway loads. This needs `server.fs.allow: ['..']` in `vite.config.ts`.
+- `/policy` reads and writes `GET`/`PUT /v1/policy`, so the page shows the rules the gateway is
+  actually running and every edit lands in the audit trail as `POLICY_UPDATED`.
+- The backend has no push events, so views poll every 5 s through `useAsync(fn, deps, 5000)`.
+  Background refreshes are quiet — no spinner flash — and pause while the tab is hidden.
+- The buyer flow builds a multi-line quote: offers are added to a cart with editable sales-unit
+  quantities, and the sticky bar shows how much of the need the selection actually covers.
 
 ## Not done
 
-Live-updating views (everything refetches on mount or after an action), auth, multi-line quotes from
-the UI (the buyer flow locks one offer at a time), and the order-cancel path the core supports.
+No auth (deliberate — the gateway is loopback-only for the demo). No order-cancel screen: the core
+supports `Orders.cancel`, but the contract exposes no REST endpoint for it yet, so the backend side
+would have to add one first. Dashboard figures come from `GET /v1/stats` with no date range picker.

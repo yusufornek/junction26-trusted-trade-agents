@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { Card, Empty, ErrorNote, Spinner, useAsync, when } from "../ui";
+import { Card, Empty, ErrorNote, LiveDot, Spinner, useAsync, when } from "../ui";
 
 export default function Audit() {
-  const { data, error, loading } = useAsync(() => api.audit(), []);
+  const { data, error, loading } = useAsync(() => api.audit(), [], 5000);
   const [open, setOpen] = useState<number | null>(null);
 
   if (error) return <ErrorNote error={error} />;
@@ -19,6 +19,7 @@ export default function Audit() {
           <h2 className="text-[15px] font-semibold">{entries.length} entries</h2>
           <p className="label">Append-only. The database forbids updates and deletes.</p>
         </div>
+        <LiveDot />
       </div>
 
       {!entries.length ? (

@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { Card, Empty, ErrorNote, Spinner, WarningChips, eur, num, useAsync, when } from "../ui";
+import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, useAsync, when } from "../ui";
 
 export default function Approvals() {
-  const { data, error, loading, reload } = useAsync(() => api.approvals(), []);
+  const { data, error, loading, reload } = useAsync(() => api.approvals(), [], 5000);
   const [approver, setApprover] = useState("Ada");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -43,6 +43,7 @@ export default function Approvals() {
             onChange={(e) => setComment(e.target.value)}
           />
         </label>
+        <LiveDot label={`${data?.length ?? 0} waiting`} />
       </Card>
 
       {actionError ? <ErrorNote error={actionError} /> : null}
@@ -63,7 +64,9 @@ export default function Approvals() {
               </div>
               <div className="text-right">
                 <div className="num text-[24px] font-semibold">{eur(order.total, order.currency)}</div>
-                <div className="label">expires {new Date(order.expires_at).toLocaleTimeString("en-GB")}</div>
+                <div className="label">
+                  price locked · <Countdown to={order.expires_at} />
+                </div>
               </div>
             </div>
 

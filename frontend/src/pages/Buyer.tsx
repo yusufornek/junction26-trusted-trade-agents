@@ -28,6 +28,8 @@ export default function Buyer() {
   const [order, setOrder] = useState<Order | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  /** product_id → sales units. Several offers can be split across one quote when no single one covers the need. */
+  const [cart, setCart] = useState<Record<string, number>>({});
 
   const guard = async (stage: string, fn: () => Promise<void>) => {
     setBusy(stage);
@@ -45,21 +47,45 @@ export default function Buyer() {
     guard("search", async () => {
       setQuote(null);
       setOrder(null);
+      setCart({});
       setLookup(await api.offers(need));
     });
 
-  const lockPrice = (offer: OfferCard) =>
-    guard("quote:" + offer.product_id, async () => {
+  const toggleLine = (offer: OfferCard) =>
+    setCart((c) => {
+      const next = { ...c };
+      if (next[offer.product_id] != null) delete next[offer.product_id];
+      else next[offer.product_id] = offer.units_needed ?? 0;
+      return next;
+    });
+
+  const setUnits = (productId: string, units: number) =>
+    setCart((c) => ({ ...c, [productId]: Math.max(0, units) }));
+
+  const lockPrice = () =>
+    guard("quote", async () => {
       setOrder(null);
       setQuote(
         await api.createQuote({
           customer_id: need.customer_id,
           deliver_by: need.deliver_by,
           need_ref: lookup!.lookup_id,
-          lines: [{ product_id: offer.product_id, quantity_sales_units: offer.units_needed ?? 0 }],
+          lines: Object.entries(cart)
+            .filter(([, units]) => units > 0)
+            .map(([product_id, quantity_sales_units]) => ({ product_id, quantity_sales_units })),
         }),
       );
     });
+
+  const cartOffers = (lookup?.offers ?? []).filter((o) => cart[o.product_id] != null);
+  const cartTotal = cartOffers.reduce(
+    (sum, o) => sum + (o.unit_price ?? 0) * (cart[o.product_id] ?? 0),
+    0,
+  );
+  const cartCovered = cartOffers.reduce(
+    (sum, o) => sum + (o.size_per_sales_unit ?? 0) * (cart[o.product_id] ?? 0),
+    0,
+  );
 
   const placeOrder = () =>
     guard("order", async () => {
@@ -228,16 +254,51 @@ export default function Buyer() {
                   {o.availability?.logistic_model ?? "—"} · arrives {o.availability?.available_date ?? "—"}
                   {o.fit != null ? ` · fit ${pct(o.fit)}` : ""}
                 </span>
-                <button
-                  className="btn-dark"
-                  onClick={() => lockPrice(o)}
-                  disabled={busy === "quote:" + o.product_id}
-                >
-                  {busy === "quote:" + o.product_id ? "Locking…" : "Lock price"}
-                </button>
+                {cart[o.product_id] != null ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      className="field w-24 py-1.5 text-right"
+                      value={cart[o.product_id]}
+                      onChange={(e) => setUnits(o.product_id, Number(e.target.value))}
+                    />
+                    <span className="label">{o.sales_unit}</span>
+                    <button className="btn-ghost" onClick={() => toggleLine(o)}>
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <button className="btn-dark" onClick={() => toggleLine(o)}>
+                    Add to quote
+                  </button>
+                )}
               </div>
             </Card>
           ))}
+        </div>
+      ) : null}
+
+      {cartOffers.length && !quote ? (
+        <div className="sticky bottom-4 z-10">
+          <Card className="flex flex-wrap items-center gap-4 shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
+            <div className="min-w-0 flex-1">
+              <div className="text-[14px] font-medium">
+                {cartOffers.length} line{cartOffers.length > 1 ? "s" : ""} selected
+              </div>
+              <div className="label">
+                covers {num(cartCovered)} of {num(need.quantity.value)} {need.quantity.unit}
+                {cartCovered < need.quantity.value ? (
+                  <span className="text-warn"> · {num(need.quantity.value - cartCovered)} short</span>
+                ) : (
+                  <span className="text-positive"> · need met</span>
+                )}
+              </div>
+            </div>
+            <div className="num text-[20px] font-semibold">{eur(cartTotal)}</div>
+            <button className="btn-dark" onClick={lockPrice} disabled={busy === "quote"}>
+              {busy === "quote" ? "Locking…" : "Lock price"}
+            </button>
+          </Card>
         </div>
       ) : null}
 
@@ -253,6 +314,21 @@ export default function Buyer() {
             </div>
             <div className="num text-[24px] font-semibold">{eur(quote.total, quote.currency)}</div>
           </div>
+
+          <ul className="flex flex-col gap-1.5">
+            {quote.lines.map((l) => (
+              <li
+                key={l.product_id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-tile)] bg-page p-3 text-[13px]"
+              >
+                <span className="font-medium">
+                  {num(l.quantity_sales_units ?? l.units_needed)} {l.sales_unit}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-ink-muted">{l.name}</span>
+                <span className="num font-medium">{eur(l.total, l.currency)}</span>
+              </li>
+            ))}
+          </ul>
 
           {quote.hard_constraint_violations.length ? (
             <div className="rounded-[var(--radius-tile)] bg-negative-soft p-3 text-[12px] text-negative">
@@ -306,7 +382,7 @@ export default function Buyer() {
               </Link>
             ) : null}
           </div>
-          <p className="label">Deliver by {dateOnly(order.lines[0] ? quote?.deliver_by : null)}</p>
+          <p className="label">Deliver by {dateOnly(quote?.deliver_by)}</p>
         </Card>
       ) : null}
     </div>

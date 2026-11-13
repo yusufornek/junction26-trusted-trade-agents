@@ -104,27 +104,70 @@ export function ErrorNote({ error }: { error: unknown }) {
   );
 }
 
-/** Minimal data hook: no cache, explicit reload — enough for a local demo console. */
-export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
+/**
+ * Minimal data hook: no cache, explicit reload, optional polling.
+ * The backend has no push events, so polling is what keeps a shared console honest
+ * when an agent orders while a human is looking at the screen.
+ */
+export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs = 0) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
 
-  const run = useCallback(() => {
-    setLoading(true);
-    fn()
-      .then((d) => {
-        setData(d);
-        setError(null);
-      })
-      .catch(setError)
-      .finally(() => setLoading(false));
+  const run = useCallback(
+    (quiet = false) => {
+      if (!quiet) setLoading(true);
+      return fn()
+        .then((d) => {
+          setData(d);
+          setError(null);
+        })
+        .catch(setError)
+        .finally(() => setLoading(false));
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+    deps,
+  );
 
   useEffect(() => {
     run();
-  }, [run]);
+    if (!pollMs) return;
+    // Background refreshes stay quiet so the page never flashes a spinner at the user.
+    const id = setInterval(() => {
+      if (!document.hidden) run(true);
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [run, pollMs]);
 
-  return { data, error, loading, reload: run };
+  return { data, error, loading, reload: () => run(true) };
+}
+
+/** Pending orders hold a fixed price for ~30 minutes; whoever approves needs to see that burn down. */
+export function Countdown({ to, className = "" }: { to: string; className?: string }) {
+  const [left, setLeft] = useState(() => new Date(to).getTime() - Date.now());
+
+  useEffect(() => {
+    setLeft(new Date(to).getTime() - Date.now());
+    const id = setInterval(() => setLeft(new Date(to).getTime() - Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [to]);
+
+  if (left <= 0) return <span className={`text-negative ${className}`}>expired</span>;
+  const mins = Math.floor(left / 60000);
+  const secs = Math.floor((left % 60000) / 1000);
+  const urgent = left < 5 * 60000;
+  return (
+    <span className={`${urgent ? "text-negative" : "text-ink-muted"} ${className}`}>
+      {mins}:{String(secs).padStart(2, "0")} left
+    </span>
+  );
+}
+
+export function LiveDot({ label = "live" }: { label?: string }) {
+  return (
+    <span className="chip bg-chip text-ink-muted">
+      <span className="size-1.5 animate-pulse rounded-full bg-positive" />
+      {label}
+    </span>
+  );
 }
