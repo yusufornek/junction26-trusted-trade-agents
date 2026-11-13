@@ -1,6 +1,6 @@
 # 07 — Order timeline (traceability)
 
-Status: draft → in progress · Found in the frontend review on 2026-11-14.
+Status: built (verified live 2026-11-14) · Found in the frontend review on 2026-11-14.
 
 ## Purpose
 `GET /v1/audit?order_id=…` returns only events that carry the order id, so the order page shows "place order"

@@ -12,6 +12,7 @@ WARNINGS = (
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
     "CUTOFF_PASSED means closingTime < upstream timeNow (meaning unconfirmed, requires review); SALES_BLOCK means not for sale; "
     "UNKNOWN_PRODUCT means no schedule lines; PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
+    "SIZE_MISMATCH means exact pack content differs from the live price ratio by more than 3% and requires review; "
     "NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. "
     "Hard constraints and sale blocks cannot be overridden by fit scores."
 )

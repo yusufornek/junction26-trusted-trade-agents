@@ -28,7 +28,7 @@ def test_catalog_build_and_hard_filters(gateway):
 
 
 @pytest.mark.parametrize("pid,unit,price,expected,source", [
-    ("1", "L", {"catalogPrice": {"value": 13}, "comparisonPrice": {"value": 2.6}, "comparisonUnit": "L"}, 5, "price_ratio"),
+    ("1", "L", {"catalogPrice": {"value": 13}, "comparisonPrice": {"value": 2.6}, "comparisonUnit": "L"}, 5, "name_parse"),
     ("4", "L", {}, 10, "catalog"),
     ("1", "L", {}, 5, "name_parse"),
     ("5", "KG", {}, 5, "catalog"),
@@ -77,7 +77,7 @@ def test_lookup_batches_filters_and_cache(gateway, need, upstream):
     assert len(upstream.price_calls[0]["products"]) <= 10
     assert not {"2", "3"} & set(upstream.price_calls[0]["products"])
     first = next(o for o in result.offers if o.product_id == "1")
-    assert first.size_source == "price_ratio" and first.units_needed == 200
+    assert first.size_source == "name_parse" and first.units_needed == 200
     assert first.total == 2600
     assert first.fit == 0.91
     assert first.matched_because == ["FREE_FROM_LACTOSE from catalog nutritionalClaim", "AE absent from catalog allergen CONTAINS"]

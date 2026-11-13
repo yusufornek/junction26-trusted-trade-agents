@@ -148,6 +148,11 @@ def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     assert event.action == "CANCEL_FAILED"
     assert event.quote_id == order.quote_id
     assert event.data["error"] == "VALIDATION_ERROR"
+    # The actor is normalised, never raw input ("human:None", unstripped names, objects).
+    name = body.get("cancelled_by") if isinstance(body, dict) else None
+    expected = name.strip() if isinstance(name, str) and name.strip() else "unknown"
+    assert event.actor == f"human:{expected}"
+    assert event.data["inputs"]["order_id"] == order.id
 
 
 def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, monkeypatch):

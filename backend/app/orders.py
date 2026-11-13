@@ -6,7 +6,7 @@ from . import audit
 from .catalog import hard_violations
 from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
-from .models import LookupResult, NeedSpec, Order, Quantity, Quote
+from .models import LiveCalls, LookupResult, NeedSpec, Order, OrderTimeline, Quantity, Quote, TimelineStep
 from .valio import RequestCounter
 
 
@@ -215,6 +215,32 @@ class Orders:
         self.expire()
         with self.db.connect() as conn:
             return self._order(conn, order_id)
+
+    def timeline(self, order_id):
+        self.expire()
+        with self.db.connect() as conn:
+            # Order state, quote reference and audit history share one read snapshot.
+            conn.execute("BEGIN")
+            order = self._order(conn, order_id)
+            quote = self._quote(conn, order.quote_id)
+            events = audit.read_timeline(conn, order.id, quote.id, quote.need_ref)
+        stages = {"LOOKUP": "lookup", "CREATE_QUOTE": "quote", "PLACE_ORDER": "order",
+                  "ORDER_REPLAY": "order", "APPROVE": "decision", "REJECT": "decision",
+                  "CANCEL": "cancellation"}
+        steps = [TimelineStep(
+            ts=event.ts, actor=event.actor, action=event.action,
+            step=stages.get(event.action.removesuffix("_FAILED"), "system"),
+            summary=event.summary, data=event.data,
+            live_calls=LiveCalls.model_validate(event.data.get("live_calls") or {}),
+            decision_calls=event.data.get("decision_calls") or 0,
+        ) for event in events]
+        return OrderTimeline(
+            order_id=order.id, quote_id=quote.id, lookup_id=quote.need_ref,
+            agent_id=order.agent_id, status=order.status, steps=steps,
+            total_live_calls=LiveCalls(price=sum(step.live_calls.price for step in steps),
+                                       availability=sum(step.live_calls.availability for step in steps)),
+            total_decision_calls=sum(step.decision_calls for step in steps),
+        )
 
     def list_orders(self, pending_only=False):
         self.expire()

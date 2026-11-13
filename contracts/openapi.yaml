@@ -632,6 +632,55 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Service Unavailable
+  /v1/orders/{order_id}/timeline:
+    get:
+      summary: Read the full lookup-to-order audit story and call totals without upstream
+        requests
+      operationId: order_timeline_v1_orders__order_id__timeline_get
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderTimeline'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
   /v1/orders/{order_id}/cancel:
     post:
       summary: Cancel a confirmed order before every known cutoff; fixed prices remain
@@ -1276,6 +1325,12 @@ components:
           - type: 'null'
           title: Size Source
           description: price_ratio, catalog, name_parse, base_unit or sales_unit.
+        size_confirmed_by_price:
+          type: boolean
+          title: Size Confirmed By Price
+          description: True when the live price ratio agrees with the selected exact
+            catalog or name size within 3%.
+          default: false
         units_needed:
           anyOf:
           - type: number
@@ -1489,6 +1544,64 @@ components:
       required:
       - quote_id
       title: OrderRequest
+    OrderTimeline:
+      properties:
+        order_id:
+          type: string
+          title: Order Id
+          description: Order whose complete history is returned.
+        quote_id:
+          type: string
+          title: Quote Id
+          description: Fixed-price quote accepted by the order.
+        lookup_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lookup Id
+          description: Quote need_ref linking the original lookup; null for explicit
+            selection without a lookup.
+        agent_id:
+          type: string
+          title: Agent Id
+          description: Agent that placed the order.
+        status:
+          type: string
+          enum:
+          - CONFIRMED
+          - PENDING_APPROVAL
+          - REJECTED
+          - EXPIRED
+          - CANCELLED
+          title: Status
+          description: Current local order status after refreshing expirations.
+        steps:
+          items:
+            $ref: '#/components/schemas/TimelineStep'
+          type: array
+          title: Steps
+          description: Related lookup, quote and order audit events, oldest first;
+            each event appears once.
+        total_live_calls:
+          $ref: '#/components/schemas/LiveCalls'
+          description: Sum of actual Valio requests across all steps, including failed
+            checks and human approval.
+        total_decision_calls:
+          type: integer
+          title: Total Decision Calls
+          description: Sum of actual Decisions requests across all steps.
+      additionalProperties: false
+      type: object
+      required:
+      - order_id
+      - quote_id
+      - lookup_id
+      - agent_id
+      - status
+      - steps
+      - total_live_calls
+      - total_decision_calls
+      title: OrderTimeline
     PolicyResetRequest:
       properties:
         updated_by:
@@ -2017,6 +2130,63 @@ components:
       - top_rule_hits
       - agents_seen
       title: Stats
+    TimelineStep:
+      properties:
+        ts:
+          type: string
+          format: date-time
+          title: Ts
+          description: UTC audit event time; steps are oldest first, with audit ID
+            breaking ties.
+        actor:
+          type: string
+          title: Actor
+          description: Recorded actor, such as agent:buyer, human:Ada or system.
+        action:
+          type: string
+          title: Action
+          description: Original audit action, including replays and failed attempts.
+        step:
+          type: string
+          enum:
+          - lookup
+          - quote
+          - order
+          - decision
+          - cancellation
+          - system
+          title: Step
+          description: Human-facing stage of the order lifecycle.
+        summary:
+          type: string
+          title: Summary
+          description: Original human-readable audit summary.
+        data:
+          additionalProperties: true
+          type: object
+          title: Data
+          description: Unmodified audit payload, including inputs, evidence and policy
+            rule hits.
+        live_calls:
+          $ref: '#/components/schemas/LiveCalls'
+          description: Actual Valio requests for this event; absent audit counts default
+            to zero.
+        decision_calls:
+          type: integer
+          title: Decision Calls
+          description: Actual Decisions requests for this event; absent audit counts
+            default to zero.
+          default: 0
+      additionalProperties: false
+      type: object
+      required:
+      - ts
+      - actor
+      - action
+      - step
+      - summary
+      - data
+      title: TimelineStep
     Warning:
       properties:
         code:

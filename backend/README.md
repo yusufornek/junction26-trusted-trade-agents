@@ -85,6 +85,16 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
 
 ## Frontend control plane
 
+- `GET /v1/orders/{order_id}/timeline` returns the complete order story: the lookup referenced by the
+  quote's `need_ref`, quote creation, placement and idempotent replays, human decisions, expiration,
+  cancellation and failed attempts tied to the order or its quote. The response contains `order_id`,
+  `quote_id`, nullable `lookup_id`, `agent_id`, current `status`, `steps`, `total_live_calls`
+  (`price`, `availability`) and `total_decision_calls`. Each step preserves audit `ts`, `actor`, `action`,
+  `summary` and `data`, plus a `step` stage (`lookup`, `quote`, `order`, `decision`, `cancellation`,
+  `system`) and actual `live_calls` / `decision_calls` (zero if absent). Steps sort by timestamp and
+  audit ID, without duplicates; totals include failed checks and human approval stock checks.
+  The read refreshes local expirations, makes no upstream requests, and returns `404 ORDER_NOT_FOUND`
+  for unknown orders. MCP `get_order_status` continues to return the existing order model.
 - `GET /v1/lookups/{lookup_id}` returns the original stored `LookupResult`, including alternatives;
   use a quote's `need_ref`. Unknown IDs return `404 LOOKUP_NOT_FOUND`. No upstream calls are made.
 - `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `updated_at`,
@@ -118,8 +128,13 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   using AND tokens; `search_terms` avoids incidental words in the buyer's natural-language intent.
   Required claims and excluded `CONTAINS` allergens are hard filters before shortlisting. Absence from
   the contains list is catalog evidence, not certification that an allergen is absent.
-- Conversion priority is live catalog/comparison price ratio, catalog base content times sales-unit
-  multiplier, then size parsed from the name times the multiplier. KG sales use their lot-size step;
+- Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
+  multiplier, and the live catalog/comparison price ratio. Among exact sources confirmed by price,
+  catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
+  `size_confirmed_by_price` is true. Without a ratio the exact size is used unconfirmed. A disagreement
+  uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
+  With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
+  reconciled size; quotes retain their explicitly requested sales quantities. KG sales use their lot-size step;
   other sales quantities are whole units. Unknown content never silently becomes one litre/kg.
 - Prices are net `catalogPrice.value`; tax-inclusive values are returned separately. Every quote rechecks
   both endpoints bypassing the 60-second per-product cache. Order placement rechecks availability only.
@@ -130,7 +145,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   its precise meaning is unconfirmed. Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
 - Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `UNKNOWN_PRODUCT`,
-  `PRICE_ERROR`, `SIZE_UNKNOWN`, `NO_FIT_SCORE`, and `AVAILABILITY_ERROR`. Empty schedule lines signal
+  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, and `AVAILABILITY_ERROR`. Empty schedule lines signal
   `UNKNOWN_PRODUCT`. Lookup failures remain visible; a quote requires a valid price and successful
   upstream checks. Human approval cannot override sales blocks, unknown products, hard constraints,
   or unverifiable availability.

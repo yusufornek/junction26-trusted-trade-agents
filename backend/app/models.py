@@ -79,6 +79,7 @@ class OfferCard(Model):
     size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit; null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
+    size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
     units_needed: float | None = Field(default=None, description="Whole sales units; KG sales quantities are rounded to the allowed lot step.")
     unit_price: float | None = Field(default=None, description="Net catalog price per sales unit, fixed on quote creation.")
     unit_price_with_tax: float | None = None
@@ -208,6 +209,28 @@ class AuditEntry(Model):
     quote_id: str | None
     summary: str
     data: dict[str, Any]
+
+
+class TimelineStep(Model):
+    ts: datetime = Field(description="UTC audit event time; steps are oldest first, with audit ID breaking ties.")
+    actor: str = Field(description="Recorded actor, such as agent:buyer, human:Ada or system.")
+    action: str = Field(description="Original audit action, including replays and failed attempts.")
+    step: Literal["lookup", "quote", "order", "decision", "cancellation", "system"] = Field(description="Human-facing stage of the order lifecycle.")
+    summary: str = Field(description="Original human-readable audit summary.")
+    data: dict[str, Any] = Field(description="Unmodified audit payload, including inputs, evidence and policy rule hits.")
+    live_calls: LiveCalls = Field(default_factory=LiveCalls, description="Actual Valio requests for this event; absent audit counts default to zero.")
+    decision_calls: int = Field(default=0, description="Actual Decisions requests for this event; absent audit counts default to zero.")
+
+
+class OrderTimeline(Model):
+    order_id: str = Field(description="Order whose complete history is returned.")
+    quote_id: str = Field(description="Fixed-price quote accepted by the order.")
+    lookup_id: str | None = Field(description="Quote need_ref linking the original lookup; null for explicit selection without a lookup.")
+    agent_id: str = Field(description="Agent that placed the order.")
+    status: Literal["CONFIRMED", "PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCELLED"] = Field(description="Current local order status after refreshing expirations.")
+    steps: list[TimelineStep] = Field(description="Related lookup, quote and order audit events, oldest first; each event appears once.")
+    total_live_calls: LiveCalls = Field(description="Sum of actual Valio requests across all steps, including failed checks and human approval.")
+    total_decision_calls: int = Field(description="Sum of actual Decisions requests across all steps.")
 
 
 class ErrorResponse(Model):

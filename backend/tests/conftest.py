@@ -94,7 +94,9 @@ class Upstream:
             {"productId": pid, "quantity": 1.0, "catalogPrice": {
                 "value": self.price, "valueWithTax": self.price * 1.135, "currency": "EUR",
                 "validFrom": "2020-01-01T00:00:00+0000", "validTo": "9999-12-31T00:00:00+0200"},
-             "comparisonPrice": {"value": 2.6}, "comparisonUnit": "L", "netPriceFound": False, "error": self.price_error}
+             # Product 4 has 10 L of catalog content; keep ordinary lifecycle fixtures consistent.
+             "comparisonPrice": {"value": self.price / 10 if pid == "4" else 2.6},
+             "comparisonUnit": "L", "netPriceFound": False, "error": self.price_error}
             for pid in body["products"]]})
 
     def availability_response(self, request):

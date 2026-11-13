@@ -1,6 +1,6 @@
 # 05 — Size reconciliation (Core 1 quality)
 
-Status: draft → in progress · Found in the frontend review on 2026-11-14.
+Status: built (verified live 2026-11-14: sizes 5 / 20 / 12 L, 200 / 50 / 84 units) · Found in the frontend review on 2026-11-14.
 
 ## Purpose
 "1,000 litres" must become the right number of packs. Today the size per sales unit comes first from the live

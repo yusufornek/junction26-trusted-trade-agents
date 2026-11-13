@@ -1,6 +1,7 @@
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_CEILING
+from math import isclose
 from uuid import uuid4
 
 from . import audit
@@ -17,6 +18,7 @@ WARNING_TEXT = {
     "UNKNOWN_PRODUCT": "No schedule lines were returned; the upstream API does not flag unknown IDs.",
     "PRICE_ERROR": "A valid net catalog price could not be obtained.",
     "SIZE_UNKNOWN": "Sales-unit content cannot be converted to the requested unit.",
+    "SIZE_MISMATCH": "Exact pack content differs from the live price ratio by more than 3%.",
     "NO_FIT_SCORE": "Decisions fit probability is unavailable; a human must review suitability.",
     "AVAILABILITY_ERROR": "Availability could not be verified with the upstream API.",
 }
@@ -49,29 +51,54 @@ def round_quantity(quantity, product):
 
 
 def size_for(product, price, requested_unit):
+    return reconcile_size(product, price, requested_unit)[:2]
+
+
+def reconcile_size(product, price, requested_unit):
     if requested_unit == "SALES_UNIT":
-        return 1.0, "sales_unit"
+        return 1.0, "sales_unit", False, []
     net = number((price.get("catalogPrice") or {}).get("value"))
     comparison = number((price.get("comparisonPrice") or {}).get("value"))
+    ratio = None
     if not price.get("error") and price.get("comparisonUnit") == requested_unit and net and net > 0 and comparison and comparison > 0:
-        return net / comparison, "price_ratio"
-    if product.sales_unit == requested_unit == "KG":
-        return 1.0, "base_unit"
+        ratio = net / comparison
     multiplier = product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None)
-    if multiplier is None or multiplier <= 0:
-        return None, None
-    content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
-    if content and content > 0:
-        return content * multiplier, "catalog"
-    # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
-    pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
-    for name in (product.name_en, product.name_fi):
-        for match in re.finditer(pattern, name, re.IGNORECASE):
-            value, unit = float(match[1].replace(",", ".")), match[2].lower()
-            factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
-            if unit in factors and value > 0:
-                return value * factors[unit] * multiplier, "name_parse"
-    return None, None
+    exact = {}
+    if multiplier is not None and multiplier > 0:
+        content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
+        if content and content > 0:
+            exact["catalog"] = content * multiplier
+        # Compute the name source too, even when structured catalog content exists.
+        # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
+        pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+        factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
+        for name in (product.name_en, product.name_fi):
+            for match in re.finditer(pattern, name, re.IGNORECASE):
+                value, unit = float(match[1].replace(",", ".")), match[2].lower()
+                if unit in factors and value > 0:
+                    exact["name_parse"] = value * factors[unit] * multiplier
+                    break
+            if "name_parse" in exact:
+                break
+    if exact:
+        if ratio is None:
+            source = next(iter(exact))
+            return exact[source], source, False, []
+        # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
+        for source, size in exact.items():
+            difference = abs(ratio / size - 1)
+            if difference < 0.03 or isclose(difference, 0.03, rel_tol=1e-12):
+                return size, source, True, []
+        values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
+        mismatch = Warning(code="SIZE_MISMATCH", text=(
+            f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; price_ratio={ratio:g} {requested_unit} per sales unit."
+        ))
+        return ratio, "price_ratio", False, [mismatch]
+    if ratio is not None:
+        return ratio, "price_ratio", False, []
+    if product.sales_unit == requested_unit == "KG":
+        return 1.0, "base_unit", False, []
+    return None, None, False, []
 
 
 def reserved(conn, product_id, exclude_order=None):
@@ -111,10 +138,11 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0):
 
 
 def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, reserved_amount=0):
-    size, source = size_for(product, price, need.quantity.unit)
+    size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
         round_quantity(need.quantity.value / size, product) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount)
+    warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}
     net = number(catalog.get("value"))
     valid_from, valid_to = timestamp(catalog.get("validFrom")), timestamp(catalog.get("validTo"))
@@ -131,6 +159,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     return OfferCard(
         product_id=product.id, name=product.name_en, sales_unit=product.sales_unit,
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
+        size_confirmed_by_price=confirmed,
         unit_price=net, unit_price_with_tax=number(catalog.get("valueWithTax")),
         price_per_l_or_kg=net / size if net is not None and size and need.quantity.unit != "SALES_UNIT" else None,
         total=round(net * quantity, 2) if net is not None and quantity is not None else None,

@@ -25,3 +25,14 @@ def read(db, order_id=None, quote_id=None):
     sql = "SELECT * FROM audit" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY id"
     with db.connect() as conn:
         return [AuditEntry(**{**dict(r), "data": json.loads(r["data"])}) for r in conn.execute(sql, args)]
+
+
+def read_timeline(conn, order_id, quote_id, lookup_id):
+    # OR joins the complete chain without duplicating events carrying both IDs.
+    rows = conn.execute(
+        """SELECT * FROM audit WHERE order_id=? OR quote_id=?
+           OR (action='LOOKUP' AND json_extract(data, '$.lookup_id')=?)""",
+        (order_id, quote_id, lookup_id),
+    )
+    events = [AuditEntry(**{**dict(row), "data": json.loads(row["data"])}) for row in rows]
+    return sorted(events, key=lambda event: (event.ts, event.id))

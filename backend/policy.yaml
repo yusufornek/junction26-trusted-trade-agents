@@ -7,6 +7,7 @@ approval:
     - DATE_SHIFT
     - CUTOFF_PASSED
     - SIZE_UNKNOWN
+    - SIZE_MISMATCH
     - NO_FIT_SCORE
     - PRICE_ERROR
     - AVAILABILITY_ERROR
