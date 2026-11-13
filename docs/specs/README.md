@@ -15,8 +15,8 @@ change or extend.
 | 05 | [Size reconciliation](05-size-reconciliation.md) | Exact pack counts: catalog / name size confirmed by the live price ratio | built |
 | 06 | [Agent mandate](06-agent-mandate.md) | Per-agent authority, cumulative spend limit, unregistered agents | built |
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | built |
-| 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
 | 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | built |
+| 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
 | 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | draft |
 | 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | draft |
 | 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority | draft |

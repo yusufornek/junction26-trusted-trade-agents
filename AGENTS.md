@@ -1,7 +1,8 @@
 # AGENTS.md — Junction 2026: Valio Aimo Trusted Trade Agents
 
 Shared instructions for every coding agent working in this repo (Codex, Claude and subagents).
-Read this file, `docs/CHALLENGE.md`, `docs/DECISIONS.md` and `docs/TASKS.md` before starting work.
+Read this file, `docs/CHALLENGE.md`, `docs/DECISIONS.md`, `docs/TASKS.md` and the spec of the feature you work on
+(`docs/specs/`) before starting work.
 `PROJECT.md` (Turkish) is the team's verified API reference; `VALIO-AIMO-CHALLENGE-TR.md` is the brief in Turkish.
 
 ## Context
@@ -29,6 +30,9 @@ to the other side.
 - **Claude subagents** — research (APIs, datasets, docs), independent review, tests and verification.
 
 ## Rules for agents
+0. Spec-driven: every feature has a spec in `docs/specs/` (requirements `R-n`, acceptance criteria `AC-n`) before it
+   is built. Implement the spec exactly, write one test per acceptance criterion with the AC number in its name,
+   and report the AC → test mapping.
 1. Stay inside the scope of your brief and your area's folder. Don't refactor or add files outside it.
 2. Before finishing: run the build / tests / lint that exist and report the results honestly.
 3. End with a short summary: files changed, how to run it, anything left undone or uncertain.
