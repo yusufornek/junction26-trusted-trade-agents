@@ -27,6 +27,12 @@ availability", so every product that is suitable enough must be priced before ra
 - **R-7 Policy + contract:** `shortlist.live_max` is readable and editable through `/v1/policy` with validation;
   a `PUT` without it keeps the current value; contract regenerated; README updated.
 
+- **R-8 Fit judges suitability only:** the Decisions question receives the buyer's intent, quantity and deadline
+  and the candidates' catalog facts. Hard constraints (required claims, excluded allergens) are verified by the
+  gateway and are kept out of the fuzzy question, so a product that passes them is not doubted again (found live:
+  with an excluded allergen in the question the cheapest suitable milk dropped from fit 0.96 to 0.35 and out of
+  the shortlist).
+
 ## Acceptance criteria
 - **AC-1** Pool of 15 products all with fit ≥ floor, `max_candidates` 10 → 15 products priced in one price call
   and one availability call; 10 offers returned; `priced_count` 15, `screened_count` 15.
@@ -38,5 +44,8 @@ availability", so every product that is suitable enough must be priced before ra
 - **AC-5** `live_max` 12 with 15 passing → exactly 12 priced, highest fits first.
 - **AC-6** Decisions unavailable → first `max_candidates` in catalog order, `NO_FIT_SCORE` warnings.
 - **AC-7** `GET /v1/policy` shows `shortlist.live_max`; `PUT` validates 10–40; `PUT` without it keeps the value.
+- **AC-9** The Decisions request carries only `intent`, `quantity` and `deliver_by` of the need
+  (`test_ac_9_fit_question_carries_suitability_only`); live, the same lookup with and without an excluded
+  allergen gives the same fit scores and the same best offer.
 - **AC-8** Live check: repeated 1,000 L milk lookups return the same best offer every time (the 1,010 €
   product), with 1 + 1 Valio calls.

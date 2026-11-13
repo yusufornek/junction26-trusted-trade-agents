@@ -124,3 +124,12 @@ def test_ac_7_policy_live_max_validation_and_legacy_update(gateway):
         # Runtime documents from older versions inherit the committed live cap.
         gateway.policy.runtime_path.write_text(yaml.safe_dump(policy))
         assert gateway.policy.get().shortlist.live_max == 25
+
+
+def test_ac_9_fit_question_carries_suitability_only(gateway, need, upstream):
+    """Hard constraints are verified by the gateway and never re-judged by the Decisions model."""
+    gateway.find_offers(need.model_copy(update={"exclude_allergens": ["AE"], "required_claims": ["FREE_FROM_LACTOSE"]}))
+    sent = upstream.decision_calls[-1]
+    payload = next(part["data"] for part in sent["input"][0]["content"] if part["type"] == "input_json")
+    assert set(payload["need"]) == {"intent", "quantity", "deliver_by"}
+    assert "exclude_allergens" not in str(payload["need"]) and "required_claims" not in str(payload["need"])
