@@ -174,7 +174,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => call<Health>("/health"),
-  offers: (need: NeedSpec) => call<LookupResult>("/v1/offers", { method: "POST", body: JSON.stringify(need) }),
+  offers: (need: NeedSpec, agentId = "web-console") =>
+    call<LookupResult>("/v1/offers", {
+      method: "POST",
+      body: JSON.stringify(need),
+      headers: { "X-Agent-Id": agentId },
+    }),
   lookup: (id: string) => call<LookupResult>(`/v1/lookups/${id}`),
   createQuote: (
     body: {
