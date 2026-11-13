@@ -123,6 +123,16 @@ Sales units: mostly `KI` (8.0k), `ST` (5.6k), `KG`, `PAK`, `BAG`, `RAS`, `PRK`, 
 Data quality varies: GTIN packaged goods have rich nutrition/allergen data; fruit & veg mostly don't.
 Category `10400` = milk drinks; 62 products have both "milk" and "lactose free" in the name.
 
+Structured attributes inside `synkkaData` (better than matching on names):
+- `classifications[]` by `name`: `nutritionalClaim` (7.6k, e.g. `FREE_FROM_LACTOSE`, `FREE_FROM_GLUTEN`,
+  `VEGETARIAN`), `allergen` (7.2k, GS1 codes with `CONTAINS`, e.g. `AM` milk, `AE` egg), `nonAllergen`
+  (5.1k, `FREE_FROM`), `packagingMarkedLabel` (17k, labels such as `GOODS_FROM_FINLAND_BLUE_SWAN` — usable
+  for the sustainability/label comparison), `nutritionFact` / `gda`, `mineral`, `vitamin`.
+- `unitConversions[].volume` (LTR) / `netWeight` — pack content for ~9k products, so litres per unit can
+  come from the catalog; the `catalogPrice / comparisonPrice` ratio is the fallback.
+- `units[]` maps each unit (`ST`, `KI`, `PAL`, ...) to `sizeInBaseUnits` (e.g. 462775: KI = 12 ST, PAL = 576 ST).
+- Also: `ingredients`, `keyIngredients`, `storageInstructions`, `brand`, `producers`, min/max temperature.
+
 ## Mentors
 - Marketplace / commercial: Hanna Forsström, Pirjo Kaartinen
 - Online sales: Minni Ruhtinas
@@ -132,3 +142,7 @@ Category `10400` = milk drinks; 62 products have both "milk" and "lactose free" 
 - Webshop test accounts — "shared separately when ready" per the brief.
 - `closingTime` already in the past (e.g. 463038: 2026-11-12 15:00) while `availableDate` is still
   2026-11-16 — ask a mentor what the cut-off actually gates.
+  Observed 2026-11-13 22:24: for requestedDate 16, 18, 20 and 23.11 the API returned the **same**
+  `closingTime` and the same `availableDate` 2026-11-16 for both 463038 (Terminal) and 462775 (Stock) —
+  schedule lines do not follow the requested date. Until a mentor confirms otherwise we treat
+  `closingTime < timeNow` as "cut-off missed for this delivery" and flag it, never silently order.
