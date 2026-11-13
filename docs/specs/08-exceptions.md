@@ -1,6 +1,6 @@
 # 08 — Exceptions: partial stock, split orders, substitutes
 
-Status: built (verified live 2026-11-14: split plan 33 cases + 4 cartons for 400 L, quote from `plan_ref`, order outcome equal to the preview) · Judged as "Robustness to exception situations" (15%): partial availability, substitutions and
+Status: built (verified live 2026-11-14: split plan 33 cases + 4 cartons for 400 L, quote from `plan_ref`, order outcome equal to the preview) · R-10–R-13 added after the independent review, in progress · Judged as "Robustness to exception situations" (15%): partial availability, substitutions and
 delivery constraints beyond the happy path. Brief: "how an agent handles partial availability and substitution
 ranking (good-better-best) within Valio Aimo's own assortment."
 
@@ -37,6 +37,20 @@ and whether it would need a human, and mark substitutes that leave the buyer's s
 - **R-8 Live calls stay bounded:** plans are computed from the offers already fetched; no extra Valio calls.
 - **R-9 MCP + contract:** tool descriptions explain plans, previews and substitutes; contract regenerated.
 
+- **R-10 Bounded work:** building plans takes bounded time whatever the quantity, pack size or stock limits:
+  the search for the cheapest split stops after a fixed node budget (default 20,000) and keeps the best plan
+  found so far; the result is always a valid plan. Plans are computed outside the database write transaction,
+  so a lookup never makes quotes, orders or approvals wait.
+- **R-11 Preferences first:** split and partial plans are first built from offers inside the buyer's
+  preferences. A cheaper split that includes a substitute is added as a further plan (it carries
+  `OUTSIDE_PREFERENCE` and previews accordingly), so the agent always sees the plan that stays within its
+  authority when one exists.
+- **R-12 Preview knows the customer scope:** when the calling agent has a mandate and the need's customer is
+  outside it, every plan previews `REJECTED` with rule hit `CUSTOMER_NOT_IN_MANDATE` — the same refusal the
+  quote would give.
+- **R-13 Weight lots:** for KG-sold products plan units follow `allowed_lot_size` (e.g. 10.5 kg), so a single
+  plan's units and total equal that product's offer.
+
 ## Acceptance criteria
 - **AC-1** One product covers 1,000 L → a `single` plan for it with `policy_preview.outcome = CONFIRMED` when
   within limits.
@@ -54,6 +68,19 @@ and whether it would need a human, and mark substitutes that leave the buyer's s
 - **AC-9** Plans add no Valio calls (`live_calls` unchanged: 1 price + 1 availability).
 - **AC-10** Live check: 1,000 L of a product family with limited Stock items yields a sensible split or partial
   plan with previews.
+
+- **AC-11** 10,000 KG, ten KG-sold products each with 3,000 kg on-time stock at 3.00–3.09 EUR/kg → plans return
+  in under 2 seconds with a valid 4-line split covering 10,000 kg (3 × 3,000 + 1,000 from the cheapest four).
+- **AC-12** 1,000 L, a 0.02 L portion at 0.1234 EUR and a 1 L pack at 6.17 EUR, both unlimited → plans return in
+  under 2 seconds.
+- **AC-13** `preferences.brands = ["Valio"]`, Valio A 1 L at 1.20 with 380 in stock, Valio B 1 L at 1.25 with 700,
+  Arla C 1 L at 1.22 unlimited, need 1,000 L → a split A 380 + B 620 is offered and previews `CONFIRMED`; the
+  cheaper split with C is offered as a further plan carrying `OUTSIDE_PREFERENCE`.
+- **AC-14** Registered agent with `customer_ids ["1"]` looks up for customer "2" → every plan previews
+  `REJECTED` with `CUSTOMER_NOT_IN_MANDATE`.
+- **AC-15** KG-sold product with lot size 0.5 and a 10.25 kg need → the single plan has 10.5 units and the same
+  total as the offer.
+- **AC-16** While plans are being built, another connection can open a write transaction (no write lock held).
 
 ## For the review
 Choices made in this draft: max 4 lines per split; substitutes need approval by default; split plans are
