@@ -29,7 +29,7 @@ every step audited (`backend/demo/run_buyer_agent.sh`).
 | Working end-to-end demo | 30% | REST + MCP flows run live; console shows them | demo video as backup |
 | Solving the user need | 20% | Right product, quantity, price; sour milk screened out | [05](05-size-reconciliation.md) exact pack counts |
 | Autonomy and controls | 20% | Editable policy, approval inbox, append-only audit | [06](06-agent-mandate.md), [04](04-order-cancel.md) |
-| Robustness to exceptions | 15% | Warnings for partial stock, date shift, cut-off; agent explains alternatives | exceptions spec (split orders, substitution) — to be written |
+| Robustness to exceptions | 15% | Warnings for partial stock, date shift, cut-off; agent explains alternatives | [08](08-exceptions.md) split orders, substitutes, policy preview |
 | Openness & path to production | 15% | MCP + OpenAPI contract, documented assumptions | signed quotes, Peppol mapping, verifiable mandate |
 
 ## Optional directions

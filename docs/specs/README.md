@@ -15,5 +15,6 @@ change or extend.
 | 05 | [Size reconciliation](05-size-reconciliation.md) | Exact pack counts: catalog / name size confirmed by the live price ratio | draft |
 | 06 | [Agent mandate](06-agent-mandate.md) | Per-agent authority, cumulative spend limit, unregistered agents | draft |
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | draft |
+| 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | draft |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .
