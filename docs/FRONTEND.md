@@ -39,6 +39,20 @@ Background: `docs/CHALLENGE.md`, `docs/DECISIONS.md`.
 - **Timing**: a lookup with live calls + Decisions takes a few seconds; approvals and audit reads are instant.
   There are no push events yet — polling every few seconds is what we used while testing.
 
+## New on the backend since 14.11 (specs in `docs/specs/`, all in `contracts/openapi.yaml`)
+| What | Where | Observed while testing |
+|---|---|---|
+| Cancel a confirmed order | `POST /v1/orders/{order_id}/cancel` `{cancelled_by, reason}` → `Order` with `cancelled_by`, `cancel_reason` | Stock-model orders (cut-off 15.11 17:00) cancel; Terminal-model orders answer `409 CUTOFF_PASSED`; not-confirmed → `409 INVALID_TRANSITION` (spec 04) |
+| Whole story of an order | `GET /v1/orders/{order_id}/timeline` → `steps[]` with `step` = lookup / quote / order / decision / cancellation / system, plus call totals | One call replaces stitching `/v1/audit` + `/v1/lookups`; includes the search and the quote that led to the order (spec 07) |
+| Fulfilment plans | `LookupResult.plans[]`: `kind` single / split / partial, `lines[]`, `total`, `coverage`, `uncovered`, `warnings[]`, `policy_preview {outcome, hits[]}` | The preview tells before ordering whether the agent may confirm alone or a human will be asked, and why; a 400 L request with limited stock produced a split plan (33 cases + 4 cartons) (spec 08) |
+| Quote from a plan | `POST /v1/quotes` with `plan_ref {lookup_id, plan_index}` instead of `lines` | Order outcome matched the plan's preview in our runs |
+| Buyer preferences | `NeedSpec.preferences {brands[], max_price_per_unit, pack_size {min, max}, labels[]}` | Offers outside a preference carry `OUTSIDE_PREFERENCE` with the differences in the text ("brand Valio, preferred Arla; 5 L pack, preferred <= 1 L") and rank below the others; they need sign-off by default |
+| Nothing fits | `LookupResult.no_match_reason` | Names which hard constraint removed how many candidates |
+| Exact pack sizes | `OfferCard.size_source` is now mostly `catalog` / `name_parse`, new `size_confirmed_by_price`; new warning `SIZE_MISMATCH` | "1,000 L ÷ 5 L/KI = 200 KI" instead of 5.01 and 201 (spec 05) |
+| How many were considered | `LookupResult.screened_count`, `priced_count` | Typical milk lookup: 40 screened, 13–17 priced, 10 returned, still 1 + 1 Valio calls (spec 09) |
+| Agent mandates | `GET /v1/policy` → `agents {<id>: {customer_ids, max_auto_total_eur?, max_auto_daily_total_eur, note}}`, `shortlist.live_max`; `PUT` without them keeps the current values | New rule hits: `unregistered_agent`, `max_auto_daily_total_eur`; an agent without a mandate always lands in the inbox; `403 CUSTOMER_NOT_IN_MANDATE` for a foreign customer (spec 06) |
+| Who is registered | `GET /v1/stats` → `agents_seen[].registered` | The console's own flow is `agent:web-console` (registered); lookups now carry that id too |
+
 ## Demo context (from `docs/DECISIONS.md`)
 The pitch opens by giving the challenge sentence ("1,000 L lactose-free milk by Monday …") to A.I.mo in My Aimo
 and then to our agent; what our agent did is then shown through the UI.
