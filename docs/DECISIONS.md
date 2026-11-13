@@ -2,6 +2,23 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-13 — **Positioning: an agent-commerce governance layer, not a generic AI-governance platform.**
+  Pitch line: "Valio Aimo's agent gateway — outside AI agents can buy, but with a mandate, policy, human sign-off
+  and a full audit trail." Governance = who (agent identity → mandate), what it may do (policy), when it asks a
+  human (rule hits / low confidence), what happened and why (audit), can the data be trusted (provenance → signed
+  quotes). Order of work: the flow works first (demo 30% + user need 20%), then governance is made visible
+  (guardrails 20% + openness 15% are what set us apart). In the pitch say "aligned with the EU AI Act principles of
+  human oversight and record-keeping", never "compliant" — why: honest claim, a procurement agent is likely not a
+  high-risk system.
+- 2026-11-13 — **UI = a human control plane, not a shop or a chatbot** (the agent's interface is MCP). Screens in
+  priority order: (1) approval inbox + decision card (request, agent's choice, good/better/best alternatives, rule
+  hits in plain language, fit scores, provenance; approve / reject / pick alternative); (2) order timeline = audit
+  trail per order; (3) policy page showing `policy.yaml` with editable thresholds (demo: lower the limit, re-run,
+  outcome changes); (4) optional Valio operator stats. Calm B2B look; navy + orange accent from the brief, no Valio
+  logo. Backend adds `GET /v1/lookups/{id}`, `GET`/`PUT /v1/policy`, `GET /v1/stats`.
+- 2026-11-13 — **No Apache Superset.** Heavy setup (Docker, metadata DB, SQLite blocked by default), little score
+  impact; a small stats endpoint + a few charts in our frontend covers it. Superset is only a "path to production"
+  mention (audit/order data plugs into Valio's BI over SQL).
 - 2026-11-13 — **MVP first, ship fast.** Build the thinnest working end-to-end flow now; every design decision
   above is revisited one by one *after* the MVP runs — the demo is 30% of the score and time is short.
   MVP cuts (deferred, not dropped): signed quotes (JWS), mandate as a verifiable credential, UBL/Peppol mapping,
