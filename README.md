@@ -8,7 +8,7 @@ Valio Aimo challenge'ı için hazırlık dokümanları ve 24 saatlik uygulama pl
 
 | Dosya | İçerik |
 |---|---|
-| [PLAN-24H.md](PLAN-24H.md) | **Ana doküman.** Canlı test edilmiş API bulguları, mimari, saat saat takvim, demo senaryosu |
+| [PROJECT.md](PROJECT.md) | **Ana doküman.** Challenge kapsamı, mock API referansı, doğrulanmış API davranışları, veri alanları |
 | [VALIO-AIMO-CHALLENGE-TR.md](VALIO-AIMO-CHALLENGE-TR.md) | Valio Aimo challenge brief'i — Türkçe |
 | [data/](data/) | Challenge veri dosyaları (ürün kataloğu, teslim güvenilirliği, karbon ayak izi) |
 
@@ -40,4 +40,4 @@ GET  /api/carbon-footprint/download
 **Sipariş endpoint'i yok, arama endpoint'i yok.** İkisi de sizin tarafınızda.
 `products` düz string dizisidir — nesne gönderirseniz 422 alırsınız.
 
-Detaylı bulgular ve tuzaklar için [PLAN-24H.md](PLAN-24H.md) Bölüm 1–2.
+Endpoint'lerin tamamı, yanıt şemaları ve doğrulanmış API davranışları: [PROJECT.md](PROJECT.md)

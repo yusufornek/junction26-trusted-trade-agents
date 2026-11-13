@@ -17,4 +17,4 @@ gunzip -k data/product_data.json.gz
 
 Ham JSON 83 MB olduğu için repoya sıkıştırılmış hâliyle eklendi (`.gitignore` ham dosyayı dışarıda tutuyor).
 
-> 83 MB'ı runtime'da parse etmeyin — bir kerelik ön-işlemeyle slim index üretin. Gerekçe: [../PLAN-24H.md](../PLAN-24H.md), Bölüm 3.
+Alan listeleri ve veri kapsamı notları: [../PROJECT.md](../PROJECT.md), Bölüm 5.
