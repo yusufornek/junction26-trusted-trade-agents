@@ -1,8 +1,6 @@
-# Challenge veri dosyaları (86 MB, portaldan indirilir)
-data/
-*.json.gz
-valio_aimo_junction26_*.json
-valio_aimo_junction26_*.csv
+# Ham ürün verisi 83 MB — repoda sıkıştırılmış hâli (product_data.json.gz) var.
+# Açmak için: gunzip -k data/product_data.json.gz
+data/product_data.json
 
 # Gizli
 .env

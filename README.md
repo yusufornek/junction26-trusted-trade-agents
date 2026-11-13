@@ -10,7 +10,7 @@ Valio Aimo challenge'ı için hazırlık dokümanları ve 24 saatlik uygulama pl
 |---|---|
 | [PLAN-24H.md](PLAN-24H.md) | **Ana doküman.** Canlı test edilmiş API bulguları, mimari, saat saat takvim, demo senaryosu |
 | [VALIO-AIMO-CHALLENGE-TR.md](VALIO-AIMO-CHALLENGE-TR.md) | Valio Aimo challenge brief'i — Türkçe |
-| [CHALLENGE-KARSILASTIRMA.md](CHALLENGE-KARSILASTIRMA.md) | Challenge seçim gerekçesi (Espoo alternatifiyle karşılaştırma) |
+| [data/](data/) | Challenge veri dosyaları (ürün kataloğu, teslim güvenilirliği, karbon ayak izi) |
 
 ## Seçilen challenge
 

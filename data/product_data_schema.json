@@ -1,0 +1,811 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Product data for Junction 2026 Valio Aimo challenge. While inspired by real-world, this dataset does not contain fully accurate product information and it must not be used for anything outside of Junction 2026 event",
+  "description": "Static product information",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "description": "One product.",
+    "properties": {
+      "allowedLotSize": {
+        "type": "number",
+        "description": "Smallest quantity step the product can be ordered in (order quantity must be a multiple of it), in sales units."
+      },
+      "baseUnit": {
+        "type": "string",
+        "description": "Base unit of measure of the product. Unit codes such as KI are technical codes and their translations are not included in this data set."
+      },
+      "category": {
+        "type": "string",
+        "description": "Product category code. Category names are not part of this data set."
+      },
+      "countryOfOrigin": {
+        "type": "string",
+        "description": "Country of origin as a lowercase ISO 3166-1 alpha-2 code, for example fi or de."
+      },
+      "deleted": {
+        "type": "boolean",
+        "description": "True if the product has been deleted. Products are only included in this file if they are not deleted, so the value is always false."
+      },
+      "deposits": {
+        "type": "array",
+        "description": "Deposit (returnable packaging) items that are charged together with the product.",
+        "items": {
+          "type": "object",
+          "description": "One deposit item.",
+          "properties": {
+            "material": {
+              "type": "string",
+              "description": "Product code of the deposit material."
+            },
+            "quantity": {
+              "type": "number",
+              "description": "Number of deposit units charged per sales unit of the product."
+            },
+            "unit": {
+              "type": "string",
+              "description": "Unit of the deposit quantity, for example ST (piece). Unit codes such as KI are technical codes and their translations are not included in this data set."
+            }
+          },
+          "required": [
+            "material",
+            "quantity",
+            "unit"
+          ]
+        }
+      },
+      "id": {
+        "type": "string",
+        "description": "Product code. Use it as the product id in the API requests and in the other data files."
+      },
+      "salesUnit": {
+        "type": "string",
+        "description": "Unit of measure the product is sold in. Unit codes such as KI are technical codes and their translations are not included in this data set."
+      },
+      "salesUnitGtin": {
+        "type": "string",
+        "description": "GTIN (barcode number) of the sales unit. Not all products have one"
+      },
+      "substitutions": {
+        "type": "array",
+        "description": "Products that can replace this product when it is not available.",
+        "items": {
+          "type": "object",
+          "description": "One substitution rule.",
+          "properties": {
+            "product": {
+              "type": "string",
+              "description": "Product code of the product being substituted."
+            },
+            "substituteProduct": {
+              "type": "string",
+              "description": "Product code of the product that can be offered instead."
+            }
+          },
+          "required": [
+            "product",
+            "substituteProduct"
+          ]
+        }
+      },
+      "synkkaData": {
+        "type": "object",
+        "description": "Product information supplied by the manufacturer through the GS1 Synkka product data service. Quantity and quality vary between products, so most fields can be missing.",
+        "properties": {
+          "brand": {
+            "type": "string",
+            "description": "Brand of the product."
+          },
+          "classifications": {
+            "type": "array",
+            "description": "Classifications of the product, grouped by name: nutrition values, allergens, labels, claims and packaging.",
+            "items": {
+              "type": "object",
+              "description": "One classification group.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Name of the group, for example allergen, nonAllergen, nutritionFact, gda, nutritionalClaim, packaging or packagingMarkedLabel."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Type of the values in the group: ENUM for codes or DECIMAL for numbers."
+                },
+                "values": {
+                  "type": "array",
+                  "description": "Values of the group.",
+                  "items": {
+                    "type": "object",
+                    "description": "One value of the group.",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Internal feature id"
+                      },
+                      "synkkaId": {
+                        "type": "string",
+                        "description": "Synkka id"
+                      },
+                      "unit": {
+                        "type": "string",
+                        "description": "Unit of the value, for example GRM (gram) or KJO (kilojoule). For allergens it tells how the allergen relates to the product: CONTAINS or FREE_FROM."
+                      },
+                      "value": {
+                        "type": "number",
+                        "description": "Numeric value, in the unit given."
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "values"
+              ]
+            }
+          },
+          "countriesOfOrigin": {
+            "type": "array",
+            "description": "Countries of origin as numeric ISO 3166-1 codes, for example 246 for Finland.",
+            "items": {
+              "type": "string",
+              "description": "A numeric ISO 3166-1 country code."
+            }
+          },
+          "disposalInformations": {
+            "type": "array",
+            "description": "Instructions for recycling or disposing of the packaging in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "fishingReports": {
+            "type": "array",
+            "description": "Catch information of fish products.",
+            "items": {
+              "type": "object",
+              "description": "One fish species.",
+              "properties": {
+                "catchMethods": {
+                  "type": "array",
+                  "description": "How and where the fish was produced.",
+                  "items": {
+                    "type": "object",
+                    "description": "One production method.",
+                    "properties": {
+                      "areas": {
+                        "type": "array",
+                        "description": "Codes of the fishing areas, for example 27. Names are not part of this data set",
+                        "items": {
+                          "type": "string",
+                          "description": "A fishing area code."
+                        }
+                      },
+                      "methods": {
+                        "type": "array",
+                        "description": "Codes of the fishing method, for example TM or 03. Names are not part of this dataset.",
+                        "items": {
+                          "type": "string",
+                          "description": "A fishing method code."
+                        }
+                      },
+                      "productionMethod": {
+                        "type": "string",
+                        "description": "Production method: AQUACULTURE, MARINE_FISHERY or INLAND_FISHERY."
+                      }
+                    },
+                    "required": [
+                      "areas",
+                      "methods",
+                      "productionMethod"
+                    ]
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Species code, for example SAL (salmon) or HER (herring)."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Latin name of the species."
+                }
+              },
+              "required": [
+                "catchMethods",
+                "id",
+                "name"
+              ]
+            }
+          },
+          "gtin": {
+            "type": "string",
+            "description": "GTIN (barcode number) of the consumer unit."
+          },
+          "ingredients": {
+            "type": "array",
+            "description": "Ingredients in structured form, in order of the ingredient list.",
+            "items": {
+              "type": "object",
+              "description": "One ingredient.",
+              "properties": {
+                "names": {
+                  "type": "array",
+                  "description": "Name of the ingredient in several languages.",
+                  "items": {
+                    "type": "object",
+                    "description": "The name in one language.",
+                    "properties": {
+                      "language": {
+                        "type": "string",
+                        "description": "Language of the name as an ISO 639-1 code."
+                      },
+                      "value": {
+                        "type": "string",
+                        "description": "The name."
+                      }
+                    },
+                    "required": [
+                      "language",
+                      "value"
+                    ]
+                  }
+                },
+                "origins": {
+                  "type": "array",
+                  "description": "Where the ingredient comes from, by production stage.",
+                  "items": {
+                    "type": "object",
+                    "description": "One origin.",
+                    "properties": {
+                      "country": {
+                        "type": "string",
+                        "description": "Country of the origin as a numeric ISO 3166-1 code, or NON_EU."
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "Production stage the origin refers to, for example FARMING, MILKING, REARING, BIRTH or LAST_PROCESSING."
+                      }
+                    },
+                    "required": [
+                      "country",
+                      "type"
+                    ]
+                  }
+                },
+                "percentage": {
+                  "type": "number",
+                  "description": "Share of the ingredient in the product, in percent."
+                },
+                "sequence": {
+                  "type": "integer",
+                  "description": "Position of the ingredient in the ingredient list, starting from 1."
+                }
+              },
+              "required": [
+                "sequence"
+              ]
+            }
+          },
+          "keyIngredients": {
+            "type": "array",
+            "descrption": "Ingredient statement or main ingredients of the product in different languages",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "lastUpdated": {
+            "type": "string",
+            "description": "Time the product information was last updated, as an ISO 8601 timestamp."
+          },
+          "marketingTexts": {
+            "type": "array",
+            "description": "Marketing description of the product in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "materialAdditionalDescriptions": {
+            "type": "array",
+            "description": "Additional description of the product, for example the contents of a multipack in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "maxTemperature": {
+            "type": "number",
+            "description": "Maximum storage temperature in degrees Celsius."
+          },
+          "medias": {
+            "type": "array",
+            "description": "Images and other media of the product. The files themselves are not part of this data set.",
+            "items": {
+              "type": "object",
+              "description": "One media item.",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "description": "Id of the media item."
+                },
+                "primary": {
+                  "type": "boolean",
+                  "description": "True for the main image of the product."
+                }
+              },
+              "required": [
+                "id",
+                "primary"
+              ]
+            }
+          },
+          "mediasLastUpdated": {
+            "type": "string",
+            "description": "Time the images and other media were last updated, as an ISO 8601 timestamp."
+          },
+          "minTemperature": {
+            "type": "number",
+            "description": "Minimum storage temperature in degrees Celsius."
+          },
+          "names": {
+            "type": "array",
+            "description": "Product name in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "nutritionalContent": {
+            "type": "array",
+            "description": "Nutrition declaration of the product.",
+            "items": {
+              "type": "object",
+              "description": "One nutrient.",
+              "properties": {
+                "basisQuantity": {
+                  "type": "number",
+                  "description": "Quantity the value is given for, for example 100."
+                },
+                "basisQuantityUnit": {
+                  "type": "string",
+                  "description": "Unit of the basis quantity, for example GRM (gram) or MLT (millilitre)."
+                },
+                "dailyValueIntakePercent": {
+                  "type": "number",
+                  "description": "Share of the recommended daily intake that the value covers, in percent."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Nutrient code, for example ENER-KJO (energy, kJ), ENER-E14 (energy, kcal), FAT, FASAT (saturated fat), CHOAVL (carbohydrate), SUGAR- (sugars), FIBTG (fibre), PRO- (protein) or SALTEQ (salt)."
+                },
+                "servingSize": {
+                  "type": "number",
+                  "description": "Size of one serving."
+                },
+                "servingSizeUnit": {
+                  "type": "string",
+                  "description": "Unit of the serving size, GRM or MLT."
+                },
+                "unit": {
+                  "type": "string",
+                  "description": "Unit of the value, for example GRM (gram), MGM (milligram), KJO (kilojoule) or E14 (kilocalorie)."
+                },
+                "unitPrecision": {
+                  "type": "string",
+                  "description": "How exact the value is, for example APPROXIMATELY, LESS_THAN or ABOUT."
+                },
+                "value": {
+                  "type": "number",
+                  "description": "Amount of the nutrient, in the unit given, per basisQuantity."
+                }
+              },
+              "required": [
+                "basisQuantity",
+                "basisQuantityUnit",
+                "id",
+                "unit",
+                "value"
+              ]
+            }
+          },
+          "preparationInstructions": {
+            "type": "array",
+            "description": "Instructions for preparing the product in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "producers": {
+            "type": "array",
+            "description": "Producers of the product.",
+            "items": {
+              "type": "object",
+              "description": "One producer.",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Identifier of the producer, a 13-digit location number."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the producer."
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ]
+            }
+          },
+          "safetyData": {
+            "type": "array",
+            "description": "Safety data of hazardous products.",
+            "items": {
+              "type": "object",
+              "description": "One safety data sheet.",
+              "properties": {
+                "sheetId": {
+                  "type": "string",
+                  "description": "Identifier or date of the safety data sheet."
+                },
+                "values": {
+                  "type": "array",
+                  "description": "Hazard and precautionary statements of the sheet.",
+                  "items": {
+                    "type": "object",
+                    "description": "One statement.",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "Statement code, for example h319 or p280. Descriptions of the codes are not in this dataset"
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "HazardStatement or PrecautionaryStatement."
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "type"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "sheetId",
+                "values"
+              ]
+            }
+          },
+          "storageInstructions": {
+            "type": "array",
+            "description": "Instructions for storing the product in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "unitConversions": {
+            "type": "array",
+            "description": "Weights and dimensions of each packaging level of the product.",
+            "items": {
+              "type": "object",
+              "description": "One packaging level.",
+              "properties": {
+                "grossWeight": {
+                  "type": "object",
+                  "description": "Gross weight, including packaging of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: GRM (gram) or KGM (kilogram)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                },
+                "height": {
+                  "type": "object",
+                  "description": "Height of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: MMT (millimetre) or CMT (centimetre)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                },
+                "length": {
+                  "type": "object",
+                  "description": "Length of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: MMT (millimetre) or CMT (centimetre)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                },
+                "netWeight": {
+                  "type": "object",
+                  "description": "Net weight of the contents of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: GRM (gram) or KGM (kilogram)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                },
+                "synkkaPackagingType": {
+                  "type": "string",
+                  "description": "Packaging level: BASE_UNIT_OR_EACH (consumer unit), CASE or PALLET."
+                },
+                "volume": {
+                  "type": "object",
+                  "description": "Volume of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: for example LTR (litre) or MLT (millilitre)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                },
+                "width": {
+                  "type": "object",
+                  "description": "Width of the packaging level.",
+                  "properties": {
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit of the value: MMT (millimetre) or CMT (centimetre)."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Numeric value, in the unit given."
+                    }
+                  },
+                  "required": [
+                    "unit",
+                    "value"
+                  ]
+                }
+              },
+              "required": [
+                "grossWeight",
+                "height",
+                "length",
+                "synkkaPackagingType",
+                "width"
+              ]
+            }
+          },
+          "usageInstructions": {
+            "type": "array",
+            "description": "Instructions for using the product in several languages.",
+            "items": {
+              "type": "object",
+              "description": "The text in one language.",
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language of the text as an ISO 639-1 code, for example fi, sv or en."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "The text."
+                }
+              },
+              "required": [
+                "language",
+                "value"
+              ]
+            }
+          },
+          "variableUnit": {
+            "type": "boolean",
+            "description": "True if the product is sold by variable weight, so that the actual quantity of a unit varies."
+          },
+          "vatCode": {
+            "type": "string",
+            "description": "VAT class of the product in Finland: STANDARD (25.5 %), MEDIUM (reduced rate for food, 13.5 %) or LOW (reduced rate, 10 %). The official source of truth is tax.taxRate of the price API."
+          }
+        },
+        "required": [
+          "classifications",
+          "keyIngredients",
+          "marketingTexts",
+          "materialAdditionalDescriptions",
+          "medias",
+          "names",
+          "nutritionalContent"
+        ]
+      },
+      "temperatureCondition": {
+        "type": "integer",
+        "description": "Code of the temperature (storage and transport) class of the product, e.g. ambient, chilled or frozen. Code meanings are not part of this data set."
+      },
+      "units": {
+        "type": "array",
+        "description": "Packaging hierarchy of the product: the units it can be handled in, each with its own barcode.",
+        "items": {
+          "type": "object",
+          "description": "One packaging unit.",
+          "properties": {
+            "gtin": {
+              "type": "string",
+              "description": "GTIN (barcode number) of the unit."
+            },
+            "sizeInBaseUnits": {
+              "type": "number",
+              "description": "How many base units the unit contains."
+            },
+            "unitId": {
+              "type": "string",
+              "description": "Code of the unit. Unit codes such as KI are technical codes and their translations are not included in this data set."
+            }
+          },
+          "required": [
+            "sizeInBaseUnits",
+            "unitId"
+          ]
+        }
+      },
+      "vendorName": {
+        "type": "string",
+        "description": "Name of the vendor (supplier) of the product."
+      }
+    },
+    "required": [
+      "allowedLotSize",
+      "baseUnit",
+      "category",
+      "deleted",
+      "deposits",
+      "id",
+      "salesUnit",
+      "synkkaData",
+      "units",
+      "vendorName"
+    ]
+  }
+}
