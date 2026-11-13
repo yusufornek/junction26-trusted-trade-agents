@@ -1,0 +1,130 @@
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { OrderStatus, Warning } from "./api";
+
+export const eur = (n: number | null | undefined, currency = "EUR") =>
+  n == null ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(n);
+
+export const num = (n: number | null | undefined, digits = 0) =>
+  n == null ? "—" : new Intl.NumberFormat("en-GB", { maximumFractionDigits: digits }).format(n);
+
+export const pct = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+
+export const when = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)} h ago`;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+export const dateOnly = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
+
+export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
+  return <div className={`card p-5 ${className}`}>{children}</div>;
+}
+
+export function Metric({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: ReactNode;
+  sub?: ReactNode;
+  accent?: "positive" | "negative" | "warn";
+}) {
+  const color =
+    accent === "positive" ? "text-positive" : accent === "negative" ? "text-negative" : accent === "warn" ? "text-warn" : "";
+  return (
+    <Card className="flex flex-col gap-2">
+      <div className="label">{label}</div>
+      <div className={`metric ${color}`}>{value}</div>
+      {sub ? <div className="text-[12px] text-ink-soft">{sub}</div> : null}
+    </Card>
+  );
+}
+
+const STATUS_STYLE: Record<string, string> = {
+  CONFIRMED: "bg-positive-soft text-positive",
+  PENDING_APPROVAL: "bg-warn-soft text-warn",
+  REJECTED: "bg-negative-soft text-negative",
+  EXPIRED: "bg-chip text-ink-muted",
+  CANCELLED: "bg-chip text-ink-muted",
+  OPEN: "bg-chip text-ink-muted",
+  ACCEPTED: "bg-positive-soft text-positive",
+};
+
+export function StatusChip({ status }: { status: OrderStatus | string }) {
+  return (
+    <span className={`chip ${STATUS_STYLE[status] ?? "bg-chip text-ink-muted"}`}>
+      {status.replaceAll("_", " ").toLowerCase()}
+    </span>
+  );
+}
+
+export function WarningChips({ warnings }: { warnings: Warning[] }) {
+  if (!warnings?.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {warnings.map((w) => (
+        <span key={w.code} className="chip bg-warn-soft text-warn" title={w.text}>
+          {w.code.replaceAll("_", " ").toLowerCase()}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="py-12 text-center text-[13px] text-ink-soft">{children}</div>;
+}
+
+export function Spinner({ label = "Loading" }: { label?: string }) {
+  return (
+    <div className="flex items-center gap-2 py-12 justify-center text-[13px] text-ink-soft">
+      <span className="size-3 rounded-full border-2 border-line border-t-ink animate-spin" />
+      {label}
+    </div>
+  );
+}
+
+export function ErrorNote({ error }: { error: unknown }) {
+  const msg = error instanceof Error ? error.message : String(error);
+  return (
+    <div className="card border-negative/30 bg-negative-soft p-4 text-[13px] text-negative">
+      {msg}
+      <div className="mt-1 text-[12px] opacity-70">
+        Is the gateway running? <code>uvicorn app.api:app --port 8000</code>
+      </div>
+    </div>
+  );
+}
+
+/** Minimal data hook: no cache, explicit reload — enough for a local demo console. */
+export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
+
+  const run = useCallback(() => {
+    setLoading(true);
+    fn()
+      .then((d) => {
+        setData(d);
+        setError(null);
+      })
+      .catch(setError)
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+
+  useEffect(() => {
+    run();
+  }, [run]);
+
+  return { data, error, loading, reload: run };
+}

@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+/* Design language — see docs/DECISIONS.md (2026-11-13, design language).
+   Light dashboard, dark icon rail, hairline borders, oversized metrics. */
+@theme {
+  --color-page: #f6f6f3;
+  --color-surface: #ffffff;
+  --color-rail: #16171a;
+  --color-line: #eaeae6;
+
+  --color-ink: #121212;
+  --color-ink-muted: #8c8c86;
+  --color-ink-soft: #b4b4ae;
+
+  --color-positive: #3fcf5a;
+  --color-positive-soft: #e9fbec;
+  --color-negative: #f0514e;
+  --color-negative-soft: #fdedec;
+  --color-warn: #d9933a;
+  --color-warn-soft: #fdf3e4;
+  --color-chip: #f2f2ef;
+
+  --radius-card: 20px;
+  --radius-tile: 14px;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+/* Tabular figures keep metric columns from jittering as values update. */
+@utility num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-page text-ink font-sans;
+    margin: 0;
+  }
+}
+
+/* Component classes apply Tailwind utilities only — v4 cannot @apply another custom class. */
+@layer components {
+  .card {
+    @apply bg-surface border border-line rounded-[var(--radius-card)];
+  }
+  .label {
+    @apply text-[13px] text-ink-muted;
+  }
+  .metric {
+    @apply text-[32px] font-semibold leading-none;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium;
+  }
+  .btn-dark,
+  .btn-ghost,
+  .btn-danger {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-full px-4 py-2.5
+           text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-dark {
+    @apply bg-ink text-white hover:bg-ink/90;
+  }
+  .btn-ghost {
+    @apply bg-chip text-ink hover:bg-line;
+  }
+  .btn-danger {
+    @apply bg-negative-soft text-negative hover:bg-negative hover:text-white;
+  }
+  .field {
+    @apply w-full rounded-[var(--radius-tile)] border border-line bg-surface px-3.5 py-2.5
+           text-[14px] outline-none placeholder:text-ink-soft focus:border-ink/30;
+  }
+}

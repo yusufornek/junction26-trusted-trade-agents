@@ -53,4 +53,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 .venv/bin/python -m pytest tests -q                    # tests, no network
 .venv/bin/python scripts/export_openapi.py             # refresh contracts/openapi.yaml
 ```
-Frontend: _filled in by the frontend owner._
+Frontend (from `frontend/`, Vite + React + TS + Tailwind v4; needs the gateway on port 8000):
+```
+npm install                                            # once
+npm run dev                                            # http://localhost:5173
+npm run build                                          # typecheck + production build
+```

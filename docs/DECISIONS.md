@@ -18,6 +18,16 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 - 2026-11-13 — **UI = a control plane for the humans** who watch, approve and set rules for agents (the agent's
   interface is MCP). The frontend owner designs the screens; the backend provides the data for approvals, order
   history/audit, policy and stats and shares what it observes in `docs/FRONTEND.md`.
+- 2026-11-13 — **Frontend stack: Vite + React + TypeScript + Tailwind v4** — no SSR is needed for a local
+  demo, Vite gives the fastest dev loop, and Tailwind tokens reproduce the agreed design language cheaply.
+  Types are generated from `contracts/openapi.yaml`, so the contract stays the single source of truth.
+  UI language is **English** (the jury is international), while the team keeps talking Turkish.
+  Scope agreed with the team: dashboard, buyer flow (need → offers → quote → order), approval inbox,
+  order list + detail, audit trail, policy view.
+- 2026-11-13 — **Design language: light dashboard, dark icon rail.** Warm off-white page, white cards with
+  ~20 px radius and hairline borders, near-black pill buttons, green for positive and coral for negative,
+  pastel status chips, oversized metric numbers over small grey labels. Every agent decision shown on screen
+  carries its evidence (matched_because, warnings, provenance), because that is what the jury scores.
 - 2026-11-13 — **MVP first, ship fast.** Build the thinnest working end-to-end flow now; every design decision
   above is revisited one by one *after* the MVP runs — the demo is 30% of the score and time is short.
   Deferred to after the MVP: signed quotes (JWS), mandate as a verifiable credential, UBL/Peppol mapping,
