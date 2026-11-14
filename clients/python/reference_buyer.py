@@ -105,6 +105,16 @@ def verify_receipt(order, jwks, *, customer_id, agent_id):
     return payload
 
 
+def verify_card(card, trusted_jwks, *, expected_origin):
+    """Validate discovery before using an endpoint; works as script or module."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("luotsi_card_verifier", Path(__file__).with_name("agent_surface.py"))
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    return verifier.verify_card(card, trusted_jwks, expected_origin=expected_origin)
+
+
 async def run_session(session, scenario, get_jwks, *, need=None, sleep=asyncio.sleep):
     """Same entry point for real MCP HTTP and in-process acceptance tests."""
     await session.initialize()
@@ -148,7 +158,10 @@ async def main():
             response = await http.get(base + "/.well-known/jwks.json")
             response.raise_for_status()
             return response.json()
-        async with streamable_http_client(base + "/mcp", http_client=http) as streams:
+        response = await http.get(base + "/mcp/server-card")
+        response.raise_for_status()
+        card = verify_card(response.json(), await jwks(), expected_origin=base)
+        async with streamable_http_client(card["remotes"][0]["url"], http_client=http) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
                 order = await run_session(session, args.scenario, jwks)
     print(json.dumps({"order_id": order["id"], "status": order["status"], "receipt_verified": True}))

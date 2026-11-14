@@ -191,7 +191,11 @@ class ProcurementA2A:
             admission_token = ADMISSION.set(None)
             try:
                 task = self._send(params, principal, mandate)
+                from .agent_surface_interpret import note_a2a
+                note_a2a(self.gateway, params, principal)
             except DomainError as error:
+                from .agent_surface_interpret import note_a2a
+                note_a2a(self.gateway, params, principal, error)
                 parts = [MessageToDict(part).get("data", {}) for part in params.message.parts if part.WhichOneof("content") == "data"]
                 name = parts[0].get("command") if parts else None
                 route = {"lookup": "gateway.find_offers", "select_plan": "orders.create_quote",
@@ -277,6 +281,10 @@ class ProcurementA2A:
                 bound=(kind, object_id) if kind else None)
 
     def _send(self, params, principal, mandate=None):
+        from .agent_surface_interpret import a2a_text
+        interpreted = a2a_text(self, params, principal, mandate)
+        if interpreted is not None:
+            return interpreted
         message = params.message
         if not message.message_id or message.role != t.Role.ROLE_USER:
             raise InvalidParamsError("A user message with a nonempty messageId is required")
@@ -790,7 +798,8 @@ class Handler(RequestHandler):
                 conn.execute("DELETE FROM a2a_push_configs WHERE task_id=? AND id=?", (params.task_id, params.id))
 
     async def on_get_extended_agent_card(self, params, context):
-        raise UnsupportedOperationError("The public card contains all supported capabilities")
+        with self.authenticated(context, params) as (gateway, principal, mandate):
+            return await agent_card(gateway, audience=self.audience)
 
 
 async def agent_card(gateway=None, base_url="http://localhost:8000", audience="buyer"):
@@ -843,7 +852,8 @@ async def agent_card(gateway=None, base_url="http://localhost:8000", audience="b
                 card.skills.add(id=operation, name=operation.replace("_", " "), description="Tenant governance operation; mutations require human confirmation.", tags=["tenant", "governance"])
         card.capabilities.extensions.add(uri="urn:trusted-trade:human-command:v1", description="Data part: version=1, command=skill id, arguments=object. Decisions return a five-minute single-use confirmation_token; retry with it.",
             params={"schemas": {name: model.model_json_schema() for name, (model, *_) in available(audience).items()}})
-    return card
+    from .agent_surface_cards import enrich_agent_card
+    return await enrich_agent_card(card, gateway, audience)
 
 
 def install_routes(app):
@@ -866,13 +876,15 @@ def install_routes(app):
 
     @app.get("/.well-known/agent-card.json", response_model=dict, summary="A2A 1.0 Agent Card generated from shared MCP schemas")
     async def card(request: Request):
-        return MessageToDict(await agent_card(request.app.state.gateway, str(request.base_url).rstrip("/")))
+        from .agent_surface_cards import card_response
+        return await card_response(request)
 
     add_a2a_routes_to_fastapi(app, jsonrpc_routes=create_jsonrpc_routes(Handler(), rpc_url="/a2a", context_builder=ContextBuilder()))
     for audience in ("tenant", "operator"):
         def card_endpoint(selected):
             async def get(request: Request):
-                return MessageToDict(await agent_card(request.app.state.gateway, str(request.base_url).rstrip("/"), selected))
+                from .agent_surface_cards import card_response
+                return await card_response(request, selected)
             return get
         app.add_api_route("/a2a/"+audience+"/.well-known/agent-card.json", card_endpoint(audience), methods=["GET"], response_model=dict, tags=["a2a"])
         if audience == "tenant":
@@ -892,6 +904,9 @@ def human_send(gateway, principal, audience, params):
     from .commands import json_value
     from .tenant_api import DecisionPreview
     parts = [MessageToDict(part)["data"] for part in params.message.parts if part.WhichOneof("content") == "data"]
+    if len(parts) == 1 and parts[0].get("command") == "tool":
+        from .agent_surface_interpret import a2a_skill
+        return a2a_skill(gateway, params, principal, audience)
     if len(parts) == 1 and audience == "tenant" and "operation" in parts[0]:
         from .governance_api import invoke
         command = command_data(parts[0])

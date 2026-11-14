@@ -66,13 +66,34 @@ WARNINGS = (
 
 class GatewayMCPServer(MCPServer):
     async def list_tools(self):
+        from .agent_surface import effective_audience, surface, discovery_metadata
+        audience = effective_audience(PRINCIPAL.get() if hasattr(self.gateway, "db") else None, self.audience)
+        if audience != self.audience:
+            return await create_server(self.gateway, agent_id=None, audience=audience).list_tools()
         tools = await super().list_tools()
+        if self.compatibility_tools is not None:
+            tools = [tool for tool in tools if tool.name in self.compatibility_tools]
         # SDK defaults to validation schemas; Order's computed recovery guidance is
         # emitted on the wire and must also appear in the advertised output schema.
         for tool in tools:
             if tool.name in {"place_order", "get_order_status", "get_order_receipt", "cancel_order"}:
                 tool.output_schema = Order.model_json_schema(mode="serialization")
-        return tools
+        p = PRINCIPAL.get()
+        registry = getattr(self, "surface_capabilities", {})
+        tools = [tool for tool in tools if tool.name not in registry or surface(self.gateway).visible(registry[tool.name], p)]
+        return discovery_metadata(self, tools)
+
+    async def list_resources(self):
+        from .agent_surface import discovery_metadata
+        return discovery_metadata(self, await super().list_resources())
+
+    async def list_resource_templates(self):
+        from .agent_surface import discovery_metadata
+        return discovery_metadata(self, await super().list_resource_templates())
+
+    async def list_prompts(self):
+        from .agent_surface import discovery_metadata
+        return discovery_metadata(self, await super().list_prompts())
 
     def streamable_http_app(self, **kwargs):
         if self.audience == "buyer" and self.agent_id is not None and not self.keys.has_agent(self.agent_id):
@@ -81,9 +102,15 @@ class GatewayMCPServer(MCPServer):
         if self.audience == "buyer":
             check_server(self, http_app=app)
         app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway, audience=self.audience)
+        from .agent_surface_http import install
+        app = install(self, app, kwargs)
         return app
 
     async def call_tool(self, name, arguments, context=None):
+        from .agent_surface import call_tool
+        return await call_tool(self, name, arguments, context)
+
+    async def _call_tool(self, name, arguments, context=None):
         from .runtime import TRANSPORT, CLOCK, ENVIRONMENT
         transport_token = TRANSPORT.set("mcp")
         clock_token = CLOCK.set(self.gateway.sandbox.now if self.gateway.sandbox else None)
@@ -131,7 +158,8 @@ class GatewayMCPServer(MCPServer):
                 PRINCIPAL.set(self.gateway.accounts.bind(local_principal))
             if self.audience != "buyer" and name != "agent_governance":
                 from .oauth import require_audience
-                from .human_tools import execute, confirm_mcp
+                from .human_tools import execute
+                from .agent_surface_interpret import confirm_human_mcp as confirm_mcp
                 from .commands import json_value
                 require_audience(PRINCIPAL.get(), self.audience, "/mcp/"+self.audience)
                 if name in {"approve_order", "reject_order", "cancel_order", "set_policy"}:
@@ -180,7 +208,12 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer"):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=None):
+    """Keep bound buyer discovery stable; shared gateways expose the full surface.
+
+    Standalone callers can opt in with full_surface=True. All registered tools
+    continue to use the same authorization and execution paths.
+    """
     if audience != "buyer":
         server = GatewayMCPServer(NAME+"-"+audience, title=TITLE+" — "+audience, version=VERSION,
             instructions="Human " + audience + " assistant. Credentials bind the consenting human and audience. "
@@ -191,11 +224,14 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
             "EVIDENCE_CHANGED requires reviewing fresh evidence and a new confirmation. Never invent confirmation answers.")
         server.keys, server.gateway, server.agent_id = gateway.settings.keys or Credentials(), gateway, agent_id
         server.mandate, server.audience = mandate, audience
+        server.compatibility_tools = None
         from .human_tools import register_tools
         register_tools(server, audience)
         if audience == "tenant":
             from .governance_transports import register_tenant_tools
             register_tenant_tools(server)
+        from .agent_surface import register
+        register(server)
         return server
     # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
     server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
@@ -373,6 +409,10 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
             # Expected refusals must retain their public code instead of becoming SDK crash errors.
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
+    from .agent_surface import register
+    expanded = agent_id is None if full_surface is None else full_surface
+    server.compatibility_tools = None if expanded else frozenset(server._tool_manager._tools)
+    register(server)
     check_server(server)
     return server
 
@@ -389,7 +429,7 @@ def main():
     gateway = Gateway()
     gateway.recurring.start()
     try:
-        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience)
+        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience, full_surface=True)
         import os
         server.local_credential = os.environ.get("VTG_CONNECTION_KEY")
         if args.audience != "buyer":

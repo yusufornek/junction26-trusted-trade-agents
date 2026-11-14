@@ -372,6 +372,16 @@ class Database:
 
 
 class DomainError(Exception):
+    @classmethod
+    def from_problem(cls, payload):
+        """Restore an existing mapped domain refusal across transport adapters."""
+        from .recovery import RECOVERY
+        code = payload["code"]
+        if code not in RECOVERY:
+            raise ValueError("Cannot restore an unmapped domain error")
+        return cls(code, payload.get("detail", payload.get("message", "Request refused")),
+                   payload["status"], payload.get("data"))
+
     def __init__(self, code: str, message: str, status: int = 409, data=None):
         super().__init__(f"{code}: {message}")
         self.code, self.message, self.status = code, message, status

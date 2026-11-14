@@ -507,14 +507,16 @@ def run(id: str, request: Request, body: RunRequest = RunRequest(), principal: P
     return request.app.state.gateway.recurring.run(id, body.occurrence_at, principal, command_key=idempotency_key)
 
 
-@router.post("/{id}/pause", response_model=dict, summary="Pause your recurring workflow under current recurring permission")
+@router.post("/{id}/pause", response_model=dict, include_in_schema=False,
+             summary="Pause your recurring workflow under current recurring permission")
 def pause(id: str, request: Request, principal: Principal = Depends(resolve_principal),
           agent_mandate: str | None = Header(default=None),
           idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
     return request.app.state.gateway.recurring.pause(id, principal, agent_mandate, command_key=idempotency_key)
 
 
-@router.post("/{id}/resume", response_model=dict, summary="Resume your recurring workflow under current recurring permission")
+@router.post("/{id}/resume", response_model=dict, include_in_schema=False,
+             summary="Resume your recurring workflow under current recurring permission")
 def resume(id: str, request: Request, principal: Principal = Depends(resolve_principal),
            agent_mandate: str | None = Header(default=None),
            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):

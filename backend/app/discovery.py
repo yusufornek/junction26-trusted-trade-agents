@@ -89,8 +89,9 @@ def card_schema():
 
 
 def install_routes(app):
-    def card(request: Request):
-        return cached(request, server_card(base_url(request)), "application/mcp-server-card+json")
+    async def card(request: Request):
+        from .agent_surface_cards import card_response
+        return await card_response(request, mcp=True)
 
     if app.state.mcp_served:
         app.add_api_route("/mcp/server-card", card, response_class=Response, responses={

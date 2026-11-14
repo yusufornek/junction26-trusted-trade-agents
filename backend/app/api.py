@@ -555,6 +555,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return result
 
     install_aliases(app)
+    from .agent_surface import install as install_agent_surface
+    install_agent_surface(app)
 
     original_openapi = app.openapi
     def problem_openapi():

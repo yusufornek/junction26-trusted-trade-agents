@@ -278,8 +278,10 @@ class MCPBearerMiddleware:
                 principal = admit_credential(self.gateway, self.keys, source, secret, resource)
                 from .oauth import require_audience
                 base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
-                require_audience(principal, self.audience, "/mcp" + ("" if self.audience == "buyer" else "/" + self.audience), base)
-                if self.audience == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
+                from .agent_surface import effective_audience
+                selected = effective_audience(principal, self.audience) if self.agent_id is None else self.audience
+                require_audience(principal, selected, "/mcp" + ("" if selected == "buyer" else "/" + selected), base)
+                if selected == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
@@ -296,7 +298,8 @@ class MCPBearerMiddleware:
                 return
         async def correlated_send(message):
             if message["type"] == "http.response.start" and correlation_token is not None:
-                message["headers"] = [*message.get("headers", []), (b"x-correlation-id", CORRELATION.get().encode("latin-1"))]
+                message["headers"] = [*message.get("headers", []), (b"x-correlation-id", CORRELATION.get().encode("latin-1")),
+                                      (b"cache-control", b"private, no-store"), (b"vary", b"Authorization")]
             await send(message)
         try:
             await self.app(scope, receive, correlated_send)
