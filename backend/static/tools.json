@@ -1,0 +1,5616 @@
+{
+  "get_agent_context": {
+    "description": "Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.",
+    "inputSchema": {
+      "properties": {},
+      "title": "get_agent_contextArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "principal": {
+          "additionalProperties": true,
+          "title": "Principal",
+          "type": "object"
+        },
+        "customer_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Customer Ids",
+          "type": "array"
+        },
+        "mandate": {
+          "additionalProperties": true,
+          "title": "Mandate",
+          "type": "object"
+        },
+        "effective_limits": {
+          "additionalProperties": true,
+          "title": "Effective Limits",
+          "type": "object"
+        },
+        "remaining_budget": {
+          "additionalProperties": true,
+          "title": "Remaining Budget",
+          "type": "object"
+        },
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "rate_limits": {
+          "additionalProperties": true,
+          "title": "Rate Limits",
+          "type": "object"
+        },
+        "supported_operations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supported Operations",
+          "type": "array"
+        },
+        "standing_constraints": {
+          "additionalProperties": true,
+          "title": "Standing Constraints",
+          "type": "object"
+        }
+      },
+      "required": [
+        "principal",
+        "customer_ids",
+        "mandate",
+        "effective_limits",
+        "remaining_budget",
+        "environment",
+        "rate_limits",
+        "supported_operations",
+        "standing_constraints"
+      ],
+      "title": "AgentContext",
+      "type": "object"
+    }
+  },
+  "search_products": {
+    "description": "Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; mandate categories filter before the result limit; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "required_claims": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Claims"
+        },
+        "exclude_allergens": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclude Allergens"
+        },
+        "limit": {
+          "default": 10,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "search_productsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Product": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Catalog salesUnitGtin, preserving leading zeros.",
+              "title": "Gtin"
+            },
+            "unit_gtins": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Catalog units[].unitId to gtin.",
+              "title": "Unit Gtins",
+              "type": "object"
+            },
+            "name_en": {
+              "title": "Name En",
+              "type": "string"
+            },
+            "name_fi": {
+              "default": "",
+              "title": "Name Fi",
+              "type": "string"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Category"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "base_unit": {
+              "title": "Base Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Whole sales-unit step; organiser lot sizes below one count as one, including KG.",
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "vendor_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vendor Name"
+            },
+            "brand": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Brand"
+            },
+            "country": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Country"
+            },
+            "temperature_condition": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Temperature Condition"
+            },
+            "units": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "unitId to sizeInBaseUnits.",
+              "title": "Units",
+              "type": "object"
+            },
+            "claims": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Claims",
+              "type": "array"
+            },
+            "allergens_contains": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Allergens Contains",
+              "type": "array"
+            },
+            "allergen_status": {
+              "additionalProperties": {
+                "items": {
+                  "enum": [
+                    "contains",
+                    "may_contain",
+                    "undeclared",
+                    "free_from"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Allergen Status",
+              "type": "object"
+            },
+            "has_allergen_declaration": {
+              "default": false,
+              "title": "Has Allergen Declaration",
+              "type": "boolean"
+            },
+            "free_from": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Free From",
+              "type": "array"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "base_volume_l": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base Volume L"
+            },
+            "base_net_weight_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Base Net Weight Kg"
+            },
+            "size_suspect": {
+              "default": false,
+              "title": "Size Suspect",
+              "type": "boolean"
+            },
+            "volume_suspect": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Volume evidence is suspect independently of weight; null on legacy records, recalculated when used.",
+              "title": "Volume Suspect"
+            },
+            "weight_suspect": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Weight evidence is suspect independently of volume; null on legacy records, recalculated when used.",
+              "title": "Weight Suspect"
+            },
+            "sales_volume_l": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Content of the CASE record when sold as a case.",
+              "title": "Sales Volume L"
+            },
+            "sales_net_weight_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sales Net Weight Kg"
+            },
+            "variable_unit": {
+              "default": false,
+              "title": "Variable Unit",
+              "type": "boolean"
+            },
+            "deposits": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Deposits",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Product-group average, not an individual product measurement.",
+              "title": "Co2 Kg Per Kg"
+            }
+          },
+          "required": [
+            "id",
+            "name_en",
+            "sales_unit",
+            "base_unit"
+          ],
+          "title": "Product",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "result": {
+          "items": {
+            "$ref": "#/$defs/Product"
+          },
+          "title": "Result",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "search_productsOutput",
+      "type": "object"
+    }
+  },
+  "find_offers": {
+    "description": "Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; without it, contradictory sizes are shown together and the larger units-needed estimate is for display and human review only. Nested name counts retain inner packages while consuming the outer multiplier once; shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "inputSchema": {
+      "$defs": {
+        "NeedSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "customer_id": {
+              "description": "Required non-blank Valio customer identifier.",
+              "minLength": 1,
+              "title": "Customer Id",
+              "type": "string"
+            },
+            "deliver_by": {
+              "description": "Delivery date between today and today + 60 days, Europe/Helsinki.",
+              "format": "date",
+              "title": "Deliver By",
+              "type": "string"
+            },
+            "intent": {
+              "description": "Buyer need; the outside agent structures this request.",
+              "minLength": 1,
+              "title": "Intent",
+              "type": "string"
+            },
+            "search_terms": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional FTS terms, combined with AND.",
+              "title": "Search Terms"
+            },
+            "required_claims": {
+              "description": "All must exist as catalog nutritionalClaim IDs.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Claims",
+              "type": "array"
+            },
+            "exclude_allergens": {
+              "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Exclude Allergens",
+              "type": "array"
+            },
+            "quantity": {
+              "$ref": "#/$defs/Quantity"
+            },
+            "max_candidates": {
+              "default": 10,
+              "description": "Strict integer maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.",
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Max Candidates",
+              "type": "integer"
+            },
+            "preferences": {
+              "$ref": "#/$defs/Preferences",
+              "description": "Soft preferences; differences mark substitutes and require approval by default."
+            }
+          },
+          "required": [
+            "customer_id",
+            "deliver_by",
+            "intent",
+            "quantity"
+          ],
+          "title": "NeedSpec",
+          "type": "object"
+        },
+        "PackSizePreference": {
+          "additionalProperties": false,
+          "properties": {
+            "min": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Min"
+            },
+            "max": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max"
+            }
+          },
+          "title": "PackSizePreference",
+          "type": "object"
+        },
+        "Preferences": {
+          "additionalProperties": false,
+          "properties": {
+            "brands": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Brands",
+              "type": "array"
+            },
+            "max_price_per_unit": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum net EUR per L or KG; strict number.",
+              "title": "Max Price Per Unit"
+            },
+            "pack_size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PackSizePreference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "L or KG per sales unit."
+            },
+            "labels": {
+              "description": "Preferred catalog packaging label IDs.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            }
+          },
+          "title": "Preferences",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "description": "Requested positive quantity, at most 1,000,000.",
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Value",
+              "type": "number"
+            },
+            "unit": {
+              "description": "Litres, kilograms or product sales units.",
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "need": {
+          "$ref": "#/$defs/NeedSpec"
+        }
+      },
+      "required": [
+        "need"
+      ],
+      "title": "find_offersArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Availability": {
+          "additionalProperties": false,
+          "properties": {
+            "available_amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.",
+              "title": "Available Amount"
+            },
+            "availability_known": {
+              "default": true,
+              "description": "False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.",
+              "title": "Availability Known",
+              "type": "boolean"
+            },
+            "logistic_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logistic Model"
+            },
+            "closing_time": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closing Time"
+            },
+            "available_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Earliest unblocked upstream delivery date.",
+              "title": "Available Date"
+            },
+            "enough": {
+              "title": "Enough",
+              "type": "boolean"
+            },
+            "coverage": {
+              "description": "Fraction of requested sales units covered by on-time stock.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "available_amount",
+            "enough",
+            "coverage"
+          ],
+          "title": "Availability",
+          "type": "object"
+        },
+        "ConstraintSource": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "source": {
+              "enum": [
+                "request",
+                "customer_policy"
+              ],
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "source"
+          ],
+          "title": "ConstraintSource",
+          "type": "object"
+        },
+        "CoveredQuantity": {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "minimum": 0,
+              "title": "Value",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "CoveredQuantity",
+          "type": "object"
+        },
+        "EffectiveConstraints": {
+          "additionalProperties": false,
+          "properties": {
+            "required_claims": {
+              "items": {
+                "$ref": "#/$defs/ConstraintSource"
+              },
+              "title": "Required Claims",
+              "type": "array"
+            },
+            "exclude_allergens": {
+              "items": {
+                "$ref": "#/$defs/ConstraintSource"
+              },
+              "title": "Exclude Allergens",
+              "type": "array"
+            }
+          },
+          "title": "EffectiveConstraints",
+          "type": "object"
+        },
+        "FulfilmentPlan": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "single",
+                "split",
+                "partial"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/PlanLine"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Lines",
+              "type": "array"
+            },
+            "total": {
+              "description": "Sum of fixed net EUR line totals at lookup time.",
+              "minimum": 0,
+              "title": "Total",
+              "type": "number"
+            },
+            "coverage": {
+              "$ref": "#/$defs/CoveredQuantity",
+              "description": "Sum of line covers in the need's unit; whole packs may over-cover."
+            },
+            "uncovered": {
+              "$ref": "#/$defs/CoveredQuantity",
+              "description": "Requested quantity still missing by the deadline; zero for a complete plan."
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "policy_preview": {
+              "$ref": "#/$defs/PolicyResult",
+              "description": "Side-effect-free current policy evaluation for the caller, including mandate and daily limits. Stock and policy may change before placement; the order result is authoritative."
+            }
+          },
+          "required": [
+            "kind",
+            "lines",
+            "total",
+            "coverage",
+            "uncovered",
+            "policy_preview"
+          ],
+          "title": "FulfilmentPlan",
+          "type": "object"
+        },
+        "LiveCalls": {
+          "additionalProperties": false,
+          "properties": {
+            "price": {
+              "default": 0,
+              "description": "Actual outbound price HTTP requests, including failed attempts.",
+              "title": "Price",
+              "type": "integer"
+            },
+            "availability": {
+              "default": 0,
+              "description": "Actual outbound availability HTTP requests.",
+              "title": "Availability",
+              "type": "integer"
+            }
+          },
+          "title": "LiveCalls",
+          "type": "object"
+        },
+        "MandateRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "autonomy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "approval_required",
+                    "autonomous_within_limits"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Autonomy"
+            }
+          },
+          "required": [
+            "id",
+            "issuer",
+            "limits",
+            "valid_until"
+          ],
+          "title": "MandateRecord",
+          "type": "object"
+        },
+        "NeedSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "customer_id": {
+              "description": "Required non-blank Valio customer identifier.",
+              "minLength": 1,
+              "title": "Customer Id",
+              "type": "string"
+            },
+            "deliver_by": {
+              "description": "Delivery date between today and today + 60 days, Europe/Helsinki.",
+              "format": "date",
+              "title": "Deliver By",
+              "type": "string"
+            },
+            "intent": {
+              "description": "Buyer need; the outside agent structures this request.",
+              "minLength": 1,
+              "title": "Intent",
+              "type": "string"
+            },
+            "search_terms": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional FTS terms, combined with AND.",
+              "title": "Search Terms"
+            },
+            "required_claims": {
+              "description": "All must exist as catalog nutritionalClaim IDs.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Claims",
+              "type": "array"
+            },
+            "exclude_allergens": {
+              "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Exclude Allergens",
+              "type": "array"
+            },
+            "quantity": {
+              "$ref": "#/$defs/Quantity"
+            },
+            "max_candidates": {
+              "default": 10,
+              "description": "Strict integer maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.",
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Max Candidates",
+              "type": "integer"
+            },
+            "preferences": {
+              "$ref": "#/$defs/Preferences",
+              "description": "Soft preferences; differences mark substitutes and require approval by default."
+            }
+          },
+          "required": [
+            "customer_id",
+            "deliver_by",
+            "intent",
+            "quantity"
+          ],
+          "title": "NeedSpec",
+          "type": "object"
+        },
+        "OfferCard": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GS1 GTIN of the sales unit, from salesUnitGtin.",
+              "title": "Gtin"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Effective whole sales-unit step used by this offer and its plans, including KG.",
+              "minimum": 1,
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "size_per_sales_unit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.",
+              "title": "Size Per Sales Unit"
+            },
+            "size_unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Size Unit",
+              "type": "string"
+            },
+            "size_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "price_ratio, catalog, name_parse, base_unit or sales_unit.",
+              "title": "Size Source"
+            },
+            "size_confirmed_by_price": {
+              "default": false,
+              "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
+              "title": "Size Confirmed By Price",
+              "type": "boolean"
+            },
+            "units_needed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Whole sales units rounded to the effective allowed lot step, including KG.",
+              "title": "Units Needed"
+            },
+            "unit_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net catalog price per sales unit, fixed on quote creation.",
+              "title": "Unit Price"
+            },
+            "unit_price_with_tax": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit Price With Tax"
+            },
+            "price_per_l_or_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Price Per L Or Kg"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net line total in currency.",
+              "title": "Total"
+            },
+            "purchase_total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net cost of all sales units needed to cover the request, including overbuy; unit_price is per sales unit.",
+              "title": "Purchase Total"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Upstream currency; missing currency is a PRICE_ERROR.",
+              "title": "Currency"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            },
+            "net_price_found": {
+              "default": false,
+              "title": "Net Price Found",
+              "type": "boolean"
+            },
+            "availability": {
+              "$ref": "#/$defs/Availability"
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Co2 Kg Per Kg"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "matched_because": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matched Because",
+              "type": "array"
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decisions predicate probability; never inferred from a name alone.",
+              "title": "Fit"
+            },
+            "fit_question": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fit Question"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Provenance"
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "score": {
+              "default": 0,
+              "title": "Score",
+              "type": "number"
+            },
+            "score_breakdown": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Weighted price, coverage, reliability, co2 and fit contributions; sums to score.",
+              "title": "Score Breakdown",
+              "type": "object"
+            },
+            "rank_label": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best",
+                    "better",
+                    "good"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rank Label"
+            }
+          },
+          "required": [
+            "product_id",
+            "name",
+            "sales_unit",
+            "size_unit",
+            "availability",
+            "provenance"
+          ],
+          "title": "OfferCard",
+          "type": "object"
+        },
+        "Overbuy": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "minimum": 0,
+              "title": "Amount",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "unit"
+          ],
+          "title": "Overbuy",
+          "type": "object"
+        },
+        "PackSizePreference": {
+          "additionalProperties": false,
+          "properties": {
+            "min": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Min"
+            },
+            "max": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max"
+            }
+          },
+          "title": "PackSizePreference",
+          "type": "object"
+        },
+        "PlanLine": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "units": {
+              "description": "Whole sales quantity in allowed_lot_size steps, including KG; limited by on-time stock when known.",
+              "exclusiveMinimum": 0,
+              "title": "Units",
+              "type": "number"
+            },
+            "covers": {
+              "$ref": "#/$defs/CoveredQuantity"
+            }
+          },
+          "required": [
+            "product_id",
+            "units",
+            "covers"
+          ],
+          "title": "PlanLine",
+          "type": "object"
+        },
+        "PolicyResult": {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "CONFIRMED",
+                "PENDING_APPROVAL",
+                "REJECTED"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "hits": {
+              "items": {
+                "$ref": "#/$defs/RuleHit"
+              },
+              "title": "Hits",
+              "type": "array"
+            }
+          },
+          "required": [
+            "outcome",
+            "hits"
+          ],
+          "title": "PolicyResult",
+          "type": "object"
+        },
+        "Preferences": {
+          "additionalProperties": false,
+          "properties": {
+            "brands": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Brands",
+              "type": "array"
+            },
+            "max_price_per_unit": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum net EUR per L or KG; strict number.",
+              "title": "Max Price Per Unit"
+            },
+            "pack_size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PackSizePreference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "L or KG per sales unit."
+            },
+            "labels": {
+              "description": "Preferred catalog packaging label IDs.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            }
+          },
+          "title": "Preferences",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "description": "Upstream endpoint or catalog source.",
+              "title": "Source",
+              "type": "string"
+            },
+            "fetched_at": {
+              "description": "Upstream timeNow when supplied; otherwise local UTC receipt time.",
+              "format": "date-time",
+              "title": "Fetched At",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "source",
+            "fetched_at"
+          ],
+          "title": "Provenance",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "description": "Requested positive quantity, at most 1,000,000.",
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Value",
+              "type": "number"
+            },
+            "unit": {
+              "description": "Litres, kilograms or product sales units.",
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "Retrieval": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "default": "intent",
+              "enum": [
+                "terms",
+                "intent",
+                "intent_broadened"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "terms_used": {
+              "description": "Search words or phrases actually tried; broadened terms are lower-case and omit numbers, units and stop words.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Terms Used",
+              "type": "array"
+            }
+          },
+          "title": "Retrieval",
+          "type": "object"
+        },
+        "RuleHit": {
+          "additionalProperties": false,
+          "properties": {
+            "rule": {
+              "title": "Rule",
+              "type": "string"
+            },
+            "detail": {
+              "title": "Detail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule",
+            "detail"
+          ],
+          "title": "RuleHit",
+          "type": "object"
+        },
+        "Warning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable warning code.",
+              "title": "Code",
+              "type": "string"
+            },
+            "text": {
+              "description": "Human-readable explanation.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "text"
+          ],
+          "title": "Warning",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "links": {
+          "additionalProperties": true,
+          "title": "Links",
+          "type": "object"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "mandate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MandateRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Creating agent; legacy unowned records are operator-only.",
+          "title": "Agent Id"
+        },
+        "lookup_id": {
+          "description": "Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.",
+          "title": "Lookup Id",
+          "type": "string"
+        },
+        "need": {
+          "$ref": "#/$defs/NeedSpec"
+        },
+        "effective_constraints": {
+          "$ref": "#/$defs/EffectiveConstraints"
+        },
+        "exclusion_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Removal counts by constraint source and evidence reason; counts may overlap.",
+          "title": "Exclusion Counts",
+          "type": "object"
+        },
+        "offers": {
+          "items": {
+            "$ref": "#/$defs/OfferCard"
+          },
+          "title": "Offers",
+          "type": "array"
+        },
+        "plans": {
+          "description": "Single, split or partial plans from all ranked priced offers, before the returned offer slice; no extra upstream calls.",
+          "items": {
+            "$ref": "#/$defs/FulfilmentPlan"
+          },
+          "title": "Plans",
+          "type": "array"
+        },
+        "no_match_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explains empty catalog results, including how many candidates each hard constraint removed.",
+          "title": "No Match Reason"
+        },
+        "excluded_count": {
+          "description": "FTS matches removed by hard catalog filters, before shortlist truncation.",
+          "title": "Excluded Count",
+          "type": "integer"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/Retrieval",
+          "description": "Deterministic retrieval mode and terms; older stored lookups default to intent with no recorded terms."
+        },
+        "matched_count": {
+          "default": 0,
+          "description": "All search matches passing hard constraints, before catalog-pool truncation.",
+          "minimum": 0,
+          "title": "Matched Count",
+          "type": "integer"
+        },
+        "priced_count": {
+          "default": 0,
+          "description": "Shortlisted products checked for live prices, including cached evidence.",
+          "minimum": 0,
+          "title": "Priced Count",
+          "type": "integer"
+        },
+        "screened_count": {
+          "default": 0,
+          "description": "Candidates actually submitted to Decisions, including failed requests or missing answers; zero when screening is skipped.",
+          "minimum": 0,
+          "title": "Screened Count",
+          "type": "integer"
+        },
+        "live_calls": {
+          "$ref": "#/$defs/LiveCalls"
+        },
+        "decision_calls": {
+          "title": "Decision Calls",
+          "type": "integer"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "lookup_id",
+        "need",
+        "offers",
+        "excluded_count",
+        "live_calls",
+        "decision_calls"
+      ],
+      "title": "LookupResult",
+      "type": "object"
+    }
+  },
+  "create_quote": {
+    "description": "Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "inputSchema": {
+      "$defs": {
+        "PlanRef": {
+          "additionalProperties": false,
+          "properties": {
+            "lookup_id": {
+              "minLength": 1,
+              "title": "Lookup Id",
+              "type": "string"
+            },
+            "plan_index": {
+              "description": "Zero-based index in the stored lookup's plans.",
+              "minimum": 0,
+              "title": "Plan Index",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "lookup_id",
+            "plan_index"
+          ],
+          "title": "PlanRef",
+          "type": "object"
+        },
+        "QuoteLineRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "minLength": 1,
+              "title": "Product Id",
+              "type": "string"
+            },
+            "quantity_sales_units": {
+              "description": "Explicit whole sales quantity, at most 1,000,000, in allowedLotSize steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE.",
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Quantity Sales Units",
+              "type": "number"
+            }
+          },
+          "required": [
+            "product_id",
+            "quantity_sales_units"
+          ],
+          "title": "QuoteLineRequest",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "deliver_by": {
+          "title": "Deliver By",
+          "type": "string"
+        },
+        "lines": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/QuoteLineRequest"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lines"
+        },
+        "need_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Need Ref"
+        },
+        "plan_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
+        }
+      },
+      "required": [
+        "customer_id",
+        "deliver_by"
+      ],
+      "title": "create_quoteArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Availability": {
+          "additionalProperties": false,
+          "properties": {
+            "available_amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.",
+              "title": "Available Amount"
+            },
+            "availability_known": {
+              "default": true,
+              "description": "False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.",
+              "title": "Availability Known",
+              "type": "boolean"
+            },
+            "logistic_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logistic Model"
+            },
+            "closing_time": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closing Time"
+            },
+            "available_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Earliest unblocked upstream delivery date.",
+              "title": "Available Date"
+            },
+            "enough": {
+              "title": "Enough",
+              "type": "boolean"
+            },
+            "coverage": {
+              "description": "Fraction of requested sales units covered by on-time stock.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "available_amount",
+            "enough",
+            "coverage"
+          ],
+          "title": "Availability",
+          "type": "object"
+        },
+        "LiveCalls": {
+          "additionalProperties": false,
+          "properties": {
+            "price": {
+              "default": 0,
+              "description": "Actual outbound price HTTP requests, including failed attempts.",
+              "title": "Price",
+              "type": "integer"
+            },
+            "availability": {
+              "default": 0,
+              "description": "Actual outbound availability HTTP requests.",
+              "title": "Availability",
+              "type": "integer"
+            }
+          },
+          "title": "LiveCalls",
+          "type": "object"
+        },
+        "MandateRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "autonomy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "approval_required",
+                    "autonomous_within_limits"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Autonomy"
+            }
+          },
+          "required": [
+            "id",
+            "issuer",
+            "limits",
+            "valid_until"
+          ],
+          "title": "MandateRecord",
+          "type": "object"
+        },
+        "OfferCard": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GS1 GTIN of the sales unit, from salesUnitGtin.",
+              "title": "Gtin"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Effective whole sales-unit step used by this offer and its plans, including KG.",
+              "minimum": 1,
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "size_per_sales_unit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.",
+              "title": "Size Per Sales Unit"
+            },
+            "size_unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Size Unit",
+              "type": "string"
+            },
+            "size_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "price_ratio, catalog, name_parse, base_unit or sales_unit.",
+              "title": "Size Source"
+            },
+            "size_confirmed_by_price": {
+              "default": false,
+              "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
+              "title": "Size Confirmed By Price",
+              "type": "boolean"
+            },
+            "units_needed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Whole sales units rounded to the effective allowed lot step, including KG.",
+              "title": "Units Needed"
+            },
+            "unit_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net catalog price per sales unit, fixed on quote creation.",
+              "title": "Unit Price"
+            },
+            "unit_price_with_tax": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit Price With Tax"
+            },
+            "price_per_l_or_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Price Per L Or Kg"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net line total in currency.",
+              "title": "Total"
+            },
+            "purchase_total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net cost of all sales units needed to cover the request, including overbuy; unit_price is per sales unit.",
+              "title": "Purchase Total"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Upstream currency; missing currency is a PRICE_ERROR.",
+              "title": "Currency"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            },
+            "net_price_found": {
+              "default": false,
+              "title": "Net Price Found",
+              "type": "boolean"
+            },
+            "availability": {
+              "$ref": "#/$defs/Availability"
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Co2 Kg Per Kg"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "matched_because": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matched Because",
+              "type": "array"
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decisions predicate probability; never inferred from a name alone.",
+              "title": "Fit"
+            },
+            "fit_question": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fit Question"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Provenance"
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "score": {
+              "default": 0,
+              "title": "Score",
+              "type": "number"
+            },
+            "score_breakdown": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Weighted price, coverage, reliability, co2 and fit contributions; sums to score.",
+              "title": "Score Breakdown",
+              "type": "object"
+            },
+            "rank_label": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best",
+                    "better",
+                    "good"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rank Label"
+            }
+          },
+          "required": [
+            "product_id",
+            "name",
+            "sales_unit",
+            "size_unit",
+            "availability",
+            "provenance"
+          ],
+          "title": "OfferCard",
+          "type": "object"
+        },
+        "Overbuy": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "minimum": 0,
+              "title": "Amount",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "unit"
+          ],
+          "title": "Overbuy",
+          "type": "object"
+        },
+        "PlanRef": {
+          "additionalProperties": false,
+          "properties": {
+            "lookup_id": {
+              "minLength": 1,
+              "title": "Lookup Id",
+              "type": "string"
+            },
+            "plan_index": {
+              "description": "Zero-based index in the stored lookup's plans.",
+              "minimum": 0,
+              "title": "Plan Index",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "lookup_id",
+            "plan_index"
+          ],
+          "title": "PlanRef",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "description": "Upstream endpoint or catalog source.",
+              "title": "Source",
+              "type": "string"
+            },
+            "fetched_at": {
+              "description": "Upstream timeNow when supplied; otherwise local UTC receipt time.",
+              "format": "date-time",
+              "title": "Fetched At",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "source",
+            "fetched_at"
+          ],
+          "title": "Provenance",
+          "type": "object"
+        },
+        "Warning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable warning code.",
+              "title": "Code",
+              "type": "string"
+            },
+            "text": {
+              "description": "Human-readable explanation.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "text"
+          ],
+          "title": "Warning",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "links": {
+          "additionalProperties": true,
+          "title": "Links",
+          "type": "object"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "mandate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MandateRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detached RFC 7515 EdDSA JWS over the spec 10/13 RFC 8785 payload: id, customer_id, deliver_by, lines (product_id, decimal-string units and unit_price, currency, gtin, provenance), decimal-string total, expires_at, price_commitment. Protected header: alg, kid, quote_version=2, quote_integrity (SHA-256 of canonical immutable quote fields, excluding signature/status/live_calls, numbers as decimal strings). Earlier unversioned spec and expanded-integrity signatures remain verifiable and usable until expiry. Public keys: /.well-known/jwks.json. Unsigned legacy quotes require re-quoting; existing orders remain replayable.",
+          "title": "Signature"
+        },
+        "price_commitment": {
+          "const": "gateway-locked",
+          "default": "gateway-locked",
+          "description": "Gateway holds the fixed price until expires_at; included in the signature.",
+          "title": "Price Commitment",
+          "type": "string"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Creating agent; legacy unowned records are operator-only.",
+          "title": "Agent Id"
+        },
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "deliver_by": {
+          "format": "date",
+          "title": "Deliver By",
+          "type": "string"
+        },
+        "need_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Need Ref"
+        },
+        "plan_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "warnings": {
+          "description": "Plan-level risks, including an uncovered part of the original need; retained through ordering.",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "ACCEPTED",
+            "EXPIRED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Earliest price validity, future cutoff or 30 minutes after creation.",
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Fixed-price lines; units_needed is the quoted sales quantity.",
+          "items": {
+            "$ref": "#/$defs/OfferCard"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "total": {
+          "title": "Total",
+          "type": "number"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "hard_constraint_violations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hard Constraint Violations",
+          "type": "array"
+        },
+        "live_calls": {
+          "$ref": "#/$defs/LiveCalls"
+        }
+      },
+      "required": [
+        "id",
+        "customer_id",
+        "deliver_by",
+        "status",
+        "created_at",
+        "expires_at",
+        "lines",
+        "total",
+        "currency",
+        "live_calls"
+      ],
+      "title": "Quote",
+      "type": "object"
+    }
+  },
+  "place_order": {
+    "description": "Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order after ownership and identity checks, even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "inputSchema": {
+      "properties": {
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quote_id",
+        "idempotency_key"
+      ],
+      "title": "place_orderArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Availability": {
+          "additionalProperties": false,
+          "properties": {
+            "available_amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.",
+              "title": "Available Amount"
+            },
+            "availability_known": {
+              "default": true,
+              "description": "False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.",
+              "title": "Availability Known",
+              "type": "boolean"
+            },
+            "logistic_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logistic Model"
+            },
+            "closing_time": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closing Time"
+            },
+            "available_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Earliest unblocked upstream delivery date.",
+              "title": "Available Date"
+            },
+            "enough": {
+              "title": "Enough",
+              "type": "boolean"
+            },
+            "coverage": {
+              "description": "Fraction of requested sales units covered by on-time stock.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "available_amount",
+            "enough",
+            "coverage"
+          ],
+          "title": "Availability",
+          "type": "object"
+        },
+        "LiveCalls": {
+          "additionalProperties": false,
+          "properties": {
+            "price": {
+              "default": 0,
+              "description": "Actual outbound price HTTP requests, including failed attempts.",
+              "title": "Price",
+              "type": "integer"
+            },
+            "availability": {
+              "default": 0,
+              "description": "Actual outbound availability HTTP requests.",
+              "title": "Availability",
+              "type": "integer"
+            }
+          },
+          "title": "LiveCalls",
+          "type": "object"
+        },
+        "MandateRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "autonomy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "approval_required",
+                    "autonomous_within_limits"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Autonomy"
+            }
+          },
+          "required": [
+            "id",
+            "issuer",
+            "limits",
+            "valid_until"
+          ],
+          "title": "MandateRecord",
+          "type": "object"
+        },
+        "OfferCard": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GS1 GTIN of the sales unit, from salesUnitGtin.",
+              "title": "Gtin"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Effective whole sales-unit step used by this offer and its plans, including KG.",
+              "minimum": 1,
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "size_per_sales_unit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.",
+              "title": "Size Per Sales Unit"
+            },
+            "size_unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Size Unit",
+              "type": "string"
+            },
+            "size_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "price_ratio, catalog, name_parse, base_unit or sales_unit.",
+              "title": "Size Source"
+            },
+            "size_confirmed_by_price": {
+              "default": false,
+              "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
+              "title": "Size Confirmed By Price",
+              "type": "boolean"
+            },
+            "units_needed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Whole sales units rounded to the effective allowed lot step, including KG.",
+              "title": "Units Needed"
+            },
+            "unit_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net catalog price per sales unit, fixed on quote creation.",
+              "title": "Unit Price"
+            },
+            "unit_price_with_tax": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit Price With Tax"
+            },
+            "price_per_l_or_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Price Per L Or Kg"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net line total in currency.",
+              "title": "Total"
+            },
+            "purchase_total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net cost of all sales units needed to cover the request, including overbuy; unit_price is per sales unit.",
+              "title": "Purchase Total"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Upstream currency; missing currency is a PRICE_ERROR.",
+              "title": "Currency"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            },
+            "net_price_found": {
+              "default": false,
+              "title": "Net Price Found",
+              "type": "boolean"
+            },
+            "availability": {
+              "$ref": "#/$defs/Availability"
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Co2 Kg Per Kg"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "matched_because": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matched Because",
+              "type": "array"
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decisions predicate probability; never inferred from a name alone.",
+              "title": "Fit"
+            },
+            "fit_question": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fit Question"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Provenance"
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "score": {
+              "default": 0,
+              "title": "Score",
+              "type": "number"
+            },
+            "score_breakdown": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Weighted price, coverage, reliability, co2 and fit contributions; sums to score.",
+              "title": "Score Breakdown",
+              "type": "object"
+            },
+            "rank_label": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best",
+                    "better",
+                    "good"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rank Label"
+            }
+          },
+          "required": [
+            "product_id",
+            "name",
+            "sales_unit",
+            "size_unit",
+            "availability",
+            "provenance"
+          ],
+          "title": "OfferCard",
+          "type": "object"
+        },
+        "Overbuy": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "minimum": 0,
+              "title": "Amount",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "unit"
+          ],
+          "title": "Overbuy",
+          "type": "object"
+        },
+        "PolicyResult": {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "CONFIRMED",
+                "PENDING_APPROVAL",
+                "REJECTED"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "hits": {
+              "items": {
+                "$ref": "#/$defs/RuleHit"
+              },
+              "title": "Hits",
+              "type": "array"
+            }
+          },
+          "required": [
+            "outcome",
+            "hits"
+          ],
+          "title": "PolicyResult",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "description": "Upstream endpoint or catalog source.",
+              "title": "Source",
+              "type": "string"
+            },
+            "fetched_at": {
+              "description": "Upstream timeNow when supplied; otherwise local UTC receipt time.",
+              "format": "date-time",
+              "title": "Fetched At",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "source",
+            "fetched_at"
+          ],
+          "title": "Provenance",
+          "type": "object"
+        },
+        "RuleHit": {
+          "additionalProperties": false,
+          "properties": {
+            "rule": {
+              "title": "Rule",
+              "type": "string"
+            },
+            "detail": {
+              "title": "Detail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule",
+            "detail"
+          ],
+          "title": "RuleHit",
+          "type": "object"
+        },
+        "Warning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable warning code.",
+              "title": "Code",
+              "type": "string"
+            },
+            "text": {
+              "description": "Human-readable explanation.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "text"
+          ],
+          "title": "Warning",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "links": {
+          "additionalProperties": true,
+          "title": "Links",
+          "type": "object"
+        },
+        "mandate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MandateRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "customer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Customer Id"
+        },
+        "commitment": {
+          "const": "gateway-simulated",
+          "default": "gateway-simulated",
+          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "title": "Commitment",
+          "type": "string"
+        },
+        "quote_signature_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SHA-256 hex digest of the quote's detached JWS.",
+          "title": "Quote Signature Digest"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload; total is a decimal string. Verifiable via the public JWKS. Present for new order decisions.",
+          "title": "Receipt"
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided At"
+        },
+        "decided_by_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "agent",
+                "operator",
+                "system"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided By Kind"
+        },
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "CONFIRMED",
+            "PENDING_APPROVAL",
+            "REJECTED",
+            "EXPIRED",
+            "CANCELLED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "total": {
+          "title": "Total",
+          "type": "number"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/OfferCard"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "warnings": {
+          "description": "Order-level risks retained from the quoted fulfilment plan.",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "evidence_revision": {
+          "default": 1,
+          "description": "Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.",
+          "minimum": 1,
+          "title": "Evidence Revision",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicyResult"
+        },
+        "live_calls": {
+          "$ref": "#/$defs/LiveCalls"
+        },
+        "approver": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approver"
+        },
+        "approval_side": {
+          "anyOf": [
+            {
+              "enum": [
+                "buyer",
+                "valio_operator"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Organisation side that signed the human decision; null before review or on legacy orders.",
+          "title": "Approval Side"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human name or placing agent ID responsible for cancellation.",
+          "title": "Cancelled By"
+        },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reason supplied when the order was cancelled.",
+          "title": "Cancel Reason"
+        },
+        "next_action": {
+          "anyOf": [
+            {
+              "enum": [
+                "WAIT_FOR_APPROVAL",
+                "STOP"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Next Action"
+        },
+        "poll_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Poll After Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "quote_id",
+        "agent_id",
+        "idempotency_key",
+        "status",
+        "created_at",
+        "expires_at",
+        "total",
+        "currency",
+        "lines",
+        "policy",
+        "live_calls",
+        "next_action",
+        "poll_after_seconds"
+      ],
+      "title": "Order",
+      "type": "object"
+    }
+  },
+  "get_order_status": {
+    "description": "Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.",
+    "inputSchema": {
+      "properties": {
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ],
+      "title": "get_order_statusArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Availability": {
+          "additionalProperties": false,
+          "properties": {
+            "available_amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.",
+              "title": "Available Amount"
+            },
+            "availability_known": {
+              "default": true,
+              "description": "False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.",
+              "title": "Availability Known",
+              "type": "boolean"
+            },
+            "logistic_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logistic Model"
+            },
+            "closing_time": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closing Time"
+            },
+            "available_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Earliest unblocked upstream delivery date.",
+              "title": "Available Date"
+            },
+            "enough": {
+              "title": "Enough",
+              "type": "boolean"
+            },
+            "coverage": {
+              "description": "Fraction of requested sales units covered by on-time stock.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "available_amount",
+            "enough",
+            "coverage"
+          ],
+          "title": "Availability",
+          "type": "object"
+        },
+        "LiveCalls": {
+          "additionalProperties": false,
+          "properties": {
+            "price": {
+              "default": 0,
+              "description": "Actual outbound price HTTP requests, including failed attempts.",
+              "title": "Price",
+              "type": "integer"
+            },
+            "availability": {
+              "default": 0,
+              "description": "Actual outbound availability HTTP requests.",
+              "title": "Availability",
+              "type": "integer"
+            }
+          },
+          "title": "LiveCalls",
+          "type": "object"
+        },
+        "MandateRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "autonomy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "approval_required",
+                    "autonomous_within_limits"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Autonomy"
+            }
+          },
+          "required": [
+            "id",
+            "issuer",
+            "limits",
+            "valid_until"
+          ],
+          "title": "MandateRecord",
+          "type": "object"
+        },
+        "OfferCard": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GS1 GTIN of the sales unit, from salesUnitGtin.",
+              "title": "Gtin"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Effective whole sales-unit step used by this offer and its plans, including KG.",
+              "minimum": 1,
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "size_per_sales_unit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.",
+              "title": "Size Per Sales Unit"
+            },
+            "size_unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Size Unit",
+              "type": "string"
+            },
+            "size_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "price_ratio, catalog, name_parse, base_unit or sales_unit.",
+              "title": "Size Source"
+            },
+            "size_confirmed_by_price": {
+              "default": false,
+              "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
+              "title": "Size Confirmed By Price",
+              "type": "boolean"
+            },
+            "units_needed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Whole sales units rounded to the effective allowed lot step, including KG.",
+              "title": "Units Needed"
+            },
+            "unit_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net catalog price per sales unit, fixed on quote creation.",
+              "title": "Unit Price"
+            },
+            "unit_price_with_tax": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit Price With Tax"
+            },
+            "price_per_l_or_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Price Per L Or Kg"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net line total in currency.",
+              "title": "Total"
+            },
+            "purchase_total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net cost of all sales units needed to cover the request, including overbuy; unit_price is per sales unit.",
+              "title": "Purchase Total"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Upstream currency; missing currency is a PRICE_ERROR.",
+              "title": "Currency"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            },
+            "net_price_found": {
+              "default": false,
+              "title": "Net Price Found",
+              "type": "boolean"
+            },
+            "availability": {
+              "$ref": "#/$defs/Availability"
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Co2 Kg Per Kg"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "matched_because": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matched Because",
+              "type": "array"
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decisions predicate probability; never inferred from a name alone.",
+              "title": "Fit"
+            },
+            "fit_question": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fit Question"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Provenance"
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "score": {
+              "default": 0,
+              "title": "Score",
+              "type": "number"
+            },
+            "score_breakdown": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Weighted price, coverage, reliability, co2 and fit contributions; sums to score.",
+              "title": "Score Breakdown",
+              "type": "object"
+            },
+            "rank_label": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best",
+                    "better",
+                    "good"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rank Label"
+            }
+          },
+          "required": [
+            "product_id",
+            "name",
+            "sales_unit",
+            "size_unit",
+            "availability",
+            "provenance"
+          ],
+          "title": "OfferCard",
+          "type": "object"
+        },
+        "Overbuy": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "minimum": 0,
+              "title": "Amount",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "unit"
+          ],
+          "title": "Overbuy",
+          "type": "object"
+        },
+        "PolicyResult": {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "CONFIRMED",
+                "PENDING_APPROVAL",
+                "REJECTED"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "hits": {
+              "items": {
+                "$ref": "#/$defs/RuleHit"
+              },
+              "title": "Hits",
+              "type": "array"
+            }
+          },
+          "required": [
+            "outcome",
+            "hits"
+          ],
+          "title": "PolicyResult",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "description": "Upstream endpoint or catalog source.",
+              "title": "Source",
+              "type": "string"
+            },
+            "fetched_at": {
+              "description": "Upstream timeNow when supplied; otherwise local UTC receipt time.",
+              "format": "date-time",
+              "title": "Fetched At",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "source",
+            "fetched_at"
+          ],
+          "title": "Provenance",
+          "type": "object"
+        },
+        "RuleHit": {
+          "additionalProperties": false,
+          "properties": {
+            "rule": {
+              "title": "Rule",
+              "type": "string"
+            },
+            "detail": {
+              "title": "Detail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule",
+            "detail"
+          ],
+          "title": "RuleHit",
+          "type": "object"
+        },
+        "Warning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable warning code.",
+              "title": "Code",
+              "type": "string"
+            },
+            "text": {
+              "description": "Human-readable explanation.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "text"
+          ],
+          "title": "Warning",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "links": {
+          "additionalProperties": true,
+          "title": "Links",
+          "type": "object"
+        },
+        "mandate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MandateRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "customer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Customer Id"
+        },
+        "commitment": {
+          "const": "gateway-simulated",
+          "default": "gateway-simulated",
+          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "title": "Commitment",
+          "type": "string"
+        },
+        "quote_signature_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SHA-256 hex digest of the quote's detached JWS.",
+          "title": "Quote Signature Digest"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload; total is a decimal string. Verifiable via the public JWKS. Present for new order decisions.",
+          "title": "Receipt"
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided At"
+        },
+        "decided_by_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "agent",
+                "operator",
+                "system"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided By Kind"
+        },
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "CONFIRMED",
+            "PENDING_APPROVAL",
+            "REJECTED",
+            "EXPIRED",
+            "CANCELLED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "total": {
+          "title": "Total",
+          "type": "number"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/OfferCard"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "warnings": {
+          "description": "Order-level risks retained from the quoted fulfilment plan.",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "evidence_revision": {
+          "default": 1,
+          "description": "Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.",
+          "minimum": 1,
+          "title": "Evidence Revision",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicyResult"
+        },
+        "live_calls": {
+          "$ref": "#/$defs/LiveCalls"
+        },
+        "approver": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approver"
+        },
+        "approval_side": {
+          "anyOf": [
+            {
+              "enum": [
+                "buyer",
+                "valio_operator"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Organisation side that signed the human decision; null before review or on legacy orders.",
+          "title": "Approval Side"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human name or placing agent ID responsible for cancellation.",
+          "title": "Cancelled By"
+        },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reason supplied when the order was cancelled.",
+          "title": "Cancel Reason"
+        },
+        "next_action": {
+          "anyOf": [
+            {
+              "enum": [
+                "WAIT_FOR_APPROVAL",
+                "STOP"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Next Action"
+        },
+        "poll_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Poll After Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "quote_id",
+        "agent_id",
+        "idempotency_key",
+        "status",
+        "created_at",
+        "expires_at",
+        "total",
+        "currency",
+        "lines",
+        "policy",
+        "live_calls",
+        "next_action",
+        "poll_after_seconds"
+      ],
+      "title": "Order",
+      "type": "object"
+    }
+  },
+  "get_order_evidence": {
+    "description": "Get this agent's portable transaction evidence manifest and authenticated artifact links, or download the ZIP at bundle_url. Includes signed quote/receipt/checkpoint, hash-only cross-customer audit links, UBL 2.1, historical JWKS, anchor metadata when present, and VERIFY.md. Verify with scripts/verify_evidence.py purchase.zip --trusted-jwks independently-trusted.json; bundled keys are not a trust root. No RPC means anchor_status=not_checked. Supplier acceptance is simulated; no supplier order was sent. Other agents' orders return ORDER_NOT_FOUND.",
+    "inputSchema": {
+      "properties": {
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ],
+      "title": "get_order_evidenceArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "EvidenceFile": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sha256": {
+              "title": "Sha256",
+              "type": "string"
+            },
+            "href": {
+              "title": "Href",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "sha256",
+            "href"
+          ],
+          "title": "EvidenceFile",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "customer_id": {
+          "title": "Customer Id",
+          "type": "string"
+        },
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "supplier_acceptance": {
+          "const": "simulated",
+          "title": "Supplier Acceptance",
+          "type": "string"
+        },
+        "bundle_url": {
+          "title": "Bundle Url",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/EvidenceFile"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "signature": {
+          "title": "Signature",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "order_id",
+        "quote_id",
+        "customer_id",
+        "environment",
+        "supplier_acceptance",
+        "bundle_url",
+        "files",
+        "signature"
+      ],
+      "title": "EvidenceManifest",
+      "type": "object"
+    }
+  },
+  "get_order_ubl": {
+    "description": "Export this agent's own order as UBL 2.1 XML, identical to GET /v1/orders/{id}/ubl. document=order (default) or response; response codes AP confirmed, RE rejected/cancelled/expired, CA pending. Includes sales-unit GTINs and UN/ECE unit codes. Party endpoint placeholders need data from Valio Aimo; gateway-simulated, no supplier transmission. Another agent's order is ORDER_NOT_FOUND.",
+    "inputSchema": {
+      "properties": {
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "document": {
+          "default": "order",
+          "enum": [
+            "order",
+            "response"
+          ],
+          "title": "Document",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ],
+      "title": "get_order_ublArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_order_ublOutput",
+      "type": "object"
+    }
+  },
+  "cancel_order": {
+    "description": "Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.",
+    "inputSchema": {
+      "properties": {
+        "order_id": {
+          "title": "Order Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
+        }
+      },
+      "required": [
+        "order_id"
+      ],
+      "title": "cancel_orderArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "Availability": {
+          "additionalProperties": false,
+          "properties": {
+            "available_amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.",
+              "title": "Available Amount"
+            },
+            "availability_known": {
+              "default": true,
+              "description": "False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.",
+              "title": "Availability Known",
+              "type": "boolean"
+            },
+            "logistic_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logistic Model"
+            },
+            "closing_time": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Closing Time"
+            },
+            "available_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Earliest unblocked upstream delivery date.",
+              "title": "Available Date"
+            },
+            "enough": {
+              "title": "Enough",
+              "type": "boolean"
+            },
+            "coverage": {
+              "description": "Fraction of requested sales units covered by on-time stock.",
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Coverage",
+              "type": "number"
+            }
+          },
+          "required": [
+            "available_amount",
+            "enough",
+            "coverage"
+          ],
+          "title": "Availability",
+          "type": "object"
+        },
+        "LiveCalls": {
+          "additionalProperties": false,
+          "properties": {
+            "price": {
+              "default": 0,
+              "description": "Actual outbound price HTTP requests, including failed attempts.",
+              "title": "Price",
+              "type": "integer"
+            },
+            "availability": {
+              "default": 0,
+              "description": "Actual outbound availability HTTP requests.",
+              "title": "Availability",
+              "type": "integer"
+            }
+          },
+          "title": "LiveCalls",
+          "type": "object"
+        },
+        "MandateRecord": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "limits": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Limits",
+              "type": "object"
+            },
+            "valid_until": {
+              "format": "date-time",
+              "title": "Valid Until",
+              "type": "string"
+            },
+            "autonomy": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "approval_required",
+                    "autonomous_within_limits"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Autonomy"
+            }
+          },
+          "required": [
+            "id",
+            "issuer",
+            "limits",
+            "valid_until"
+          ],
+          "title": "MandateRecord",
+          "type": "object"
+        },
+        "OfferCard": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "title": "Product Id",
+              "type": "string"
+            },
+            "gtin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "GS1 GTIN of the sales unit, from salesUnitGtin.",
+              "title": "Gtin"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "sales_unit": {
+              "title": "Sales Unit",
+              "type": "string"
+            },
+            "allowed_lot_size": {
+              "default": 1,
+              "description": "Effective whole sales-unit step used by this offer and its plans, including KG.",
+              "minimum": 1,
+              "title": "Allowed Lot Size",
+              "type": "number"
+            },
+            "size_per_sales_unit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.",
+              "title": "Size Per Sales Unit"
+            },
+            "size_unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Size Unit",
+              "type": "string"
+            },
+            "size_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "price_ratio, catalog, name_parse, base_unit or sales_unit.",
+              "title": "Size Source"
+            },
+            "size_confirmed_by_price": {
+              "default": false,
+              "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
+              "title": "Size Confirmed By Price",
+              "type": "boolean"
+            },
+            "units_needed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Whole sales units rounded to the effective allowed lot step, including KG.",
+              "title": "Units Needed"
+            },
+            "unit_price": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net catalog price per sales unit, fixed on quote creation.",
+              "title": "Unit Price"
+            },
+            "unit_price_with_tax": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit Price With Tax"
+            },
+            "price_per_l_or_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Price Per L Or Kg"
+            },
+            "total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net line total in currency.",
+              "title": "Total"
+            },
+            "purchase_total": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Net cost of all sales units needed to cover the request, including overbuy; unit_price is per sales unit.",
+              "title": "Purchase Total"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "currency": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Upstream currency; missing currency is a PRICE_ERROR.",
+              "title": "Currency"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            },
+            "net_price_found": {
+              "default": false,
+              "title": "Net Price Found",
+              "type": "boolean"
+            },
+            "availability": {
+              "$ref": "#/$defs/Availability"
+            },
+            "warnings": {
+              "items": {
+                "$ref": "#/$defs/Warning"
+              },
+              "title": "Warnings",
+              "type": "array"
+            },
+            "delivery_reliability": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Delivery Reliability"
+            },
+            "co2_kg_per_kg": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Co2 Kg Per Kg"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Labels",
+              "type": "array"
+            },
+            "matched_because": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Matched Because",
+              "type": "array"
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decisions predicate probability; never inferred from a name alone.",
+              "title": "Fit"
+            },
+            "fit_question": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fit Question"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Provenance"
+              },
+              "title": "Provenance",
+              "type": "object"
+            },
+            "score": {
+              "default": 0,
+              "title": "Score",
+              "type": "number"
+            },
+            "score_breakdown": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "Weighted price, coverage, reliability, co2 and fit contributions; sums to score.",
+              "title": "Score Breakdown",
+              "type": "object"
+            },
+            "rank_label": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "best",
+                    "better",
+                    "good"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rank Label"
+            }
+          },
+          "required": [
+            "product_id",
+            "name",
+            "sales_unit",
+            "size_unit",
+            "availability",
+            "provenance"
+          ],
+          "title": "OfferCard",
+          "type": "object"
+        },
+        "Overbuy": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "minimum": 0,
+              "title": "Amount",
+              "type": "number"
+            },
+            "unit": {
+              "enum": [
+                "L",
+                "KG",
+                "SALES_UNIT"
+              ],
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "amount",
+            "unit"
+          ],
+          "title": "Overbuy",
+          "type": "object"
+        },
+        "PolicyResult": {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "CONFIRMED",
+                "PENDING_APPROVAL",
+                "REJECTED"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "hits": {
+              "items": {
+                "$ref": "#/$defs/RuleHit"
+              },
+              "title": "Hits",
+              "type": "array"
+            }
+          },
+          "required": [
+            "outcome",
+            "hits"
+          ],
+          "title": "PolicyResult",
+          "type": "object"
+        },
+        "Provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "description": "Upstream endpoint or catalog source.",
+              "title": "Source",
+              "type": "string"
+            },
+            "fetched_at": {
+              "description": "Upstream timeNow when supplied; otherwise local UTC receipt time.",
+              "format": "date-time",
+              "title": "Fetched At",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "source",
+            "fetched_at"
+          ],
+          "title": "Provenance",
+          "type": "object"
+        },
+        "RuleHit": {
+          "additionalProperties": false,
+          "properties": {
+            "rule": {
+              "title": "Rule",
+              "type": "string"
+            },
+            "detail": {
+              "title": "Detail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule",
+            "detail"
+          ],
+          "title": "RuleHit",
+          "type": "object"
+        },
+        "Warning": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "Stable machine-readable warning code.",
+              "title": "Code",
+              "type": "string"
+            },
+            "text": {
+              "description": "Human-readable explanation.",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "text"
+          ],
+          "title": "Warning",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "links": {
+          "additionalProperties": true,
+          "title": "Links",
+          "type": "object"
+        },
+        "mandate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MandateRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "customer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Customer Id"
+        },
+        "commitment": {
+          "const": "gateway-simulated",
+          "default": "gateway-simulated",
+          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "title": "Commitment",
+          "type": "string"
+        },
+        "quote_signature_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SHA-256 hex digest of the quote's detached JWS.",
+          "title": "Quote Signature Digest"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload; total is a decimal string. Verifiable via the public JWKS. Present for new order decisions.",
+          "title": "Receipt"
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided At"
+        },
+        "decided_by_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "agent",
+                "operator",
+                "system"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided By Kind"
+        },
+        "quote_id": {
+          "title": "Quote Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "CONFIRMED",
+            "PENDING_APPROVAL",
+            "REJECTED",
+            "EXPIRED",
+            "CANCELLED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "total": {
+          "title": "Total",
+          "type": "number"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/OfferCard"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "warnings": {
+          "description": "Order-level risks retained from the quoted fulfilment plan.",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "evidence_revision": {
+          "default": 1,
+          "description": "Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.",
+          "minimum": 1,
+          "title": "Evidence Revision",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/PolicyResult"
+        },
+        "live_calls": {
+          "$ref": "#/$defs/LiveCalls"
+        },
+        "approver": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approver"
+        },
+        "approval_side": {
+          "anyOf": [
+            {
+              "enum": [
+                "buyer",
+                "valio_operator"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Organisation side that signed the human decision; null before review or on legacy orders.",
+          "title": "Approval Side"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human name or placing agent ID responsible for cancellation.",
+          "title": "Cancelled By"
+        },
+        "cancel_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reason supplied when the order was cancelled.",
+          "title": "Cancel Reason"
+        },
+        "next_action": {
+          "anyOf": [
+            {
+              "enum": [
+                "WAIT_FOR_APPROVAL",
+                "STOP"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Next Action"
+        },
+        "poll_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "readOnly": true,
+          "title": "Poll After Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "quote_id",
+        "agent_id",
+        "idempotency_key",
+        "status",
+        "created_at",
+        "expires_at",
+        "total",
+        "currency",
+        "lines",
+        "policy",
+        "live_calls",
+        "next_action",
+        "poll_after_seconds"
+      ],
+      "title": "Order",
+      "type": "object"
+    }
+  }
+}

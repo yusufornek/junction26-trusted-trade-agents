@@ -25,11 +25,14 @@ from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
 from .recovery import problem, validation_problem
+from .agent_context import AgentContext, agent_context
+from .discovery import MCPTransport, install_routes as install_discovery
+from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(gateway=None, *, settings=None, keys=None):
+def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
@@ -47,9 +50,31 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
                     pass
+        if not serve_mcp:
+            worker = asyncio.create_task(deliver_notifications())
+            try:
+                yield
+            finally:
+                stop.set()
+                await worker
+                if gateway is None:
+                    service.close()
+            return
+        from .mcp_server import create_server
+        app.state.mcp_server = create_server(service, agent_id=None)
+        app.state.mcp_server.keys = keys
+        from mcp.server.transport_security import TransportSecuritySettings
+        from urllib.parse import urlsplit
+        public = service.settings.public_url
+        security = TransportSecuritySettings(allowed_hosts=["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]", "[::1]:*"] +
+            ([urlsplit(public).netloc] if public else []),
+            allowed_origins=["http://localhost", "http://localhost:*", "http://127.0.0.1", "http://127.0.0.1:*", "http://[::1]", "http://[::1]:*"] + ([public] if public else []))
+        mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
+        app.state.mcp_http = mcp_http
         worker = asyncio.create_task(deliver_notifications())
         try:
-            yield
+            async with mcp_http.router.lifespan_context(mcp_http):
+                yield
         finally:
             stop.set()
             await worker
@@ -61,6 +86,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    app.state.mcp_served = serve_mcp
+    from .connections import router as connections_router
+    app.include_router(connections_router)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)
@@ -69,6 +97,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
     from .evidence import router as evidence_router
     app.include_router(buyer_router)
     app.include_router(evidence_router)
+    install_discovery(app)
+    from .developer_docs import install_routes as install_developer_docs
+    install_developer_docs(app)
+    if serve_mcp:
+        app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
@@ -84,7 +117,12 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     response = await domain_error(request, error)
                     response.headers["X-Correlation-Id"] = CORRELATION.get()
                     return response
-            response = await call_next(request)
+            public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
+                "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
+            response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
+            if public:
+                response.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, If-None-Match", "Access-Control-Expose-Headers": "ETag"})
             response.headers["X-Correlation-Id"] = CORRELATION.get()
             return response
         finally:
@@ -165,12 +203,12 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def meta():
         return manifest()
 
-    @app.get("/v1/me", response_model=dict, summary="Authenticated principal, customer scope and current token buckets")
-    def me(request: Request, principal: Principal = Depends(resolve_principal)):
+    @app.get("/v1/me", response_model=AgentContext, summary="Caller scope, mandate, effective limits, budget, environment and operations")
+    def me(request: Request, principal: Principal = Depends(resolve_principal),
+           agent_mandate: Annotated[str | None, Header()] = None):
         service = svc(request)
         service.limiter.consume(principal.id, "read")
-        return {"principal": principal.public(), "customer_ids": principal.customer_ids, "environment": "live",
-                "rate_limits": service.limiter.snapshot(principal.id)}
+        return agent_context(service, principal, agent_mandate)
 
     @app.get("/v1/agents/{agent_id}/track-record", response_model=AgentTrackRecord,
              description="Audit-derived record for orders placed in window_days (default 30). Operator, the agent and its buyer organisation may read it. Readiness is advisory; no automatic promotion.")

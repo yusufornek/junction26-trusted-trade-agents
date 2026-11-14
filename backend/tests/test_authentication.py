@@ -86,7 +86,8 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
             if path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
-                        "/.well-known/jwks-history.json", "/v1/meta"}:
+                        "/.well-known/jwks-history.json", "/v1/meta",
+                        "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt"}:
                 continue
             assert operation["security"] == [{"BearerAuth": []}]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")

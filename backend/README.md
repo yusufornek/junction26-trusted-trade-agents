@@ -1,12 +1,48 @@
 # Trusted Trade Agents backend MVP
 
+## Agent connections (spec 42)
+
+The console's Connect page uses operator-only `POST /v1/connections` with a required
+`Idempotency-Key` and `{agent_id, client, customer_ids, label?}`. Agent IDs use
+`^[a-z0-9][a-z0-9-]{1,47}$`; clients are `claude_desktop`, `claude_code`, `cursor`,
+`vscode`, `chatgpt`, `mcp_other`, or `rest`. The client choice records the setup tool;
+it grants no additional authority. Customer IDs must already occur in customer policy,
+an agent mandate or an organisation's scope. Empty customer lists are refused.
+
+Creation returns `201` with the console's `NewConnection` fields and a high-entropy
+`vak_` key. Copy the key immediately: only its SHA-256 digest and first eight characters
+are retained. Exact idempotent replays return the same connection with `key: null`;
+changed payloads return `409 IDEMPOTENCY_CONFLICT`. No key is recorded in the command
+ledger or audit. `GET /v1/connections` lists public `Connection` records newest first,
+including revoked connections. `DELETE /v1/connections/{connection_id}` revokes a key
+immediately for REST and MCP; repeated deletion preserves the first revocation timestamp.
+Creation/revocation are audited by `human:operator`. Agent history and mandates remain.
+
+A new agent receives an `approval_required` mandate for the selected customers and
+`approval.max_auto_daily_total_eur` (default 5,000 EUR). Existing agents retain their
+mandate and autonomy. Issued keys resolve through the same principal/policy path as
+`AGENT_KEYS`; environment keys continue to work. `last_used_at` updates on authentication,
+at most once per minute per key. Operator credentials are required for all three
+connection-management endpoints; agent keys cannot issue or revoke credentials.
+
+The gateway serves Streamable HTTP MCP at exactly `/mcp`, with its session manager in
+the gateway lifespan and an authenticated principal for each request. Bearer keys are
+required even for ping and tool listing; tools audit as `agent:<agent_id>`. No agent is
+bound at gateway startup. `GATEWAY_PUBLIC_URL` supplies the public origin for `mcp_url`
+(`<origin>/mcp`) and `rest_base_url` (`<origin>/v1`); otherwise the request origin is used.
+`create_app(..., serve_mcp=False)` disables MCP and returns `mcp_url: null`.
+Run one gateway process per database; do not start a second MCP process on its database.
+The `chatgpt` client value records a preference only: OAuth sign-in is not implemented
+by this connection API. Tests run offline against isolated databases and in-process MCP:
+`.venv/bin/python -m pytest tests/test_spec42_agent_connections.py -q`.
+
 ## Buyer view and portable evidence (specs 28–29)
 
 `GET /v1/buyer/{agents,mandates,spend,orders,approvals,activity}` accepts `buyer_user`
 credentials with roles `buyer_viewer`, `buyer_approver`, or `buyer_admin`; the operator
 may read all customers. Responses include `organisation_id` and `customer_ids`.
-Identities and organisations are configured in policy; credentials still come from
-`AGENT_KEYS`. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
+Identities and organisations are configured in policy; credentials come from
+`AGENT_KEYS` or operator-issued connections. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
 or `/reject` (the existing `/v1/approvals` routes also accept them). Approval retains
 the evidence-revision rule and records `human:buyer_approver:<credential ref>`, the
 organisation and `approval_side=buyer`. Viewers cannot review.
@@ -72,8 +108,8 @@ In separate terminals, starting in `backend/`:
 # MCP stdio; stdout is reserved for protocol messages
 .venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent
 
-# MCP Streamable HTTP: http://127.0.0.1:8001/mcp
-.venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent --http --host 127.0.0.1 --port 8001
+# Gateway Streamable HTTP is already available at http://127.0.0.1:8000/mcp.
+# Use the standalone --http entry only with a separate DB_PATH, never the gateway DB.
 
 # Entire offline suite, with Valio/OpenAI mocked using respx
 .venv/bin/python -m pytest tests -q
@@ -108,8 +144,9 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
-Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`, `get_order_ubl`.
-`cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
+Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`,
+`cancel_order`, `get_order_ubl`, `get_order_evidence`, `get_agent_context`.
+`cancel_order(order_id, reason="")` cancels only confirmed orders owned by the authenticated HTTP agent or stdio `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
 reservations, preserves fixed prices, and records the actor and reason without upstream calls.
 The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the installed 2.x API.
@@ -476,7 +513,7 @@ The command preserves existing values, uses `secrets.token_urlsafe(32)` for new 
 only added names. A second run changes nothing. The default target is repo-root `.env.local`;
 `AGENT_KEYS` is a comma-separated list of `agent-id:secret`, and `OPERATOR_TOKEN` is required to start
 the REST API. Process environment values take precedence. The server retains SHA-256 digests for
-constant-time comparisons; credentials belong only in the local env file, never policy or audit data.
+constant-time comparisons; environment credentials belong only in the local env file, never policy or audit data.
 Restart after provisioning or rotating credentials. Never share the operator token with buyer agents.
 
 An agent sends its own secret on every REST call. For example, with its key in `AGENT_SECRET`:
@@ -1179,3 +1216,68 @@ Reference split-order client (no operator credential, approval remains external)
 # Add --mandate /path/to/buyer-vc.jwt when using a buyer-issued mandate.
 .venv/bin/python -m pytest tests/test_webhooks.py tests/test_a2a_service.py tests/test_cross_interface.py -q
 ```
+
+
+## MCP discovery and connect kit (specs 37–38)
+
+Start the API from `backend/` with `.venv/bin/python -m uvicorn app.api:app --port 8000`.
+The same process now serves authenticated, stateless Streamable HTTP at `/mcp`, sharing the
+REST gateway, principal, budgets and idempotency state. Standalone MCP stdio and port 8001
+remain available with a separate database; never open the gateway's live database in a
+second process. The machine identity is `fi.valioaimo/trusted-trade-agents`, version `0.1.0`;
+the display title remains Valio Aimo Trusted Trade Agents. Tools are listed at runtime,
+including `get_agent_context` (the same advisory snapshot as authenticated `GET /v1/me`).
+
+A client starting with only the base address follows `/.well-known/ai-catalog.json` to
+`/mcp/server-card` and then `/mcp`. The card follows the vendored draft schema at commit
+`526201bbc80231daa40ffcdecfc9da4e54e5dc93`, also recorded in `/v1/meta` and the namespaced
+card extension. Startup validates the schema and compares runtime identity/transport.
+Public discovery is read-only, has wildcard CORS, cache validators and no customer authority.
+In production set `GATEWAY_PUBLIC_URL` to the HTTPS public origin; MCP's Host/Origin
+protection otherwise accepts only loopback addresses. Never disable that protection to
+work around a proxy configuration.
+
+`/developers` contains the connection guide, configurations, executable REST walkthrough,
+recovery and approval rules. `/llms.txt` links agents to it, OpenAPI and
+`/developers/tools.json`. Author the prose in `backend/docs/developers.html.in` and
+`backend/docs/llms.txt.in`; regenerate the committed static artifacts after tool changes:
+
+```bash
+.venv/bin/python scripts/build_developer_docs.py
+.venv/bin/python scripts/export_openapi.py
+.venv/bin/python -m pytest tests -q
+```
+
+Generation imports and registers tool schemas without opening a database or signing keys.
+The divergence acceptance test compares complete runtime schemas and generated HTML.
+
+The independent buyer is `clients/python/reference_buyer.py`, with pinned dependencies
+and environment names in that directory. From the repo root, install its requirements,
+export `GATEWAY_URL`, `AGENT_TOKEN`, optionally `AGENT_MANDATE` (VC-JWT), then run:
+
+```bash
+python clients/python/reference_buyer.py --scenario full_stock
+python clients/python/reference_buyer.py --scenario split_stock
+```
+
+The client requires context environment `sandbox`. An operator must prepare the fixture
+supplier/catalog and policy beforehand: full_stock covers 10 L autonomously; split_stock
+covers 400 L with a split plan and requires human approval. It follows `next_action`, polls
+pending orders, retains mutation keys on retries and verifies the Ed25519 receipt against
+public JWKS. It cannot approve its own order. This kit does not implement sandbox reset
+or credential issuance: use a separate deployment/storage/credentials and set
+`GATEWAY_ENVIRONMENT=sandbox`; that label alone does not provision or isolate data.
+Environment credentials expire by issuer removal/rotation; connection keys expire by
+revocation. A refused key returns 401 with
+replacement guidance. Offline verification of a saved order is also available:
+
+```bash
+python clients/python/verify_receipt.py order.json --jwks jwks.json --customer ID --agent AGENT_ID
+```
+
+Tests use only temporary storage, mocked supplier calls and in-process ASGI, including the
+real MCP SDK connection and a shell walkthrough whose HTTP transport is bridged to TestClient.
+Claude Code configuration syntax is checked, Desktop stdio executes as a subprocess in the
+MCP transport suite, and the installed generic CLI loader checks `app/mcp_entry.py` without
+launching the optional inspector UI. To use that UI, install `mcp[cli]==2.3.0` and run
+`MCP_AGENT_ID=issued-agent .venv/bin/mcp dev app/mcp_entry.py` on the gateway host.
