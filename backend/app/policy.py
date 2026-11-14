@@ -54,6 +54,23 @@ class Policy:
         content = self.db.file_content(self.runtime_path) if self.db is not None else None
         resource = self._load(self.runtime_path, defaults, content=content) if content is not None or self.runtime_path.exists() else defaults
         resource.known_warning_codes = sorted(WARNING_TEXT)
+        if self.db:
+            # Customer standing constraints bind even platform-side approvals.
+            # These values are a projection, never a rewrite of global policy.
+            import json
+            from .models import CustomerConstraints
+            with self.db.connect() as conn:
+                profiles = conn.execute("SELECT tenant_id,data FROM tenant_guardrail_profiles").fetchall()
+                customers = conn.execute("SELECT customer_id,tenant_id FROM tenant_customers").fetchall()
+            for row in profiles:
+                snapshot = json.loads(row["data"])
+                resource.tenant_anomaly_settings[row["tenant_id"]] = snapshot["guardrails"]["anomaly_sensitivity"]["value"]
+                for customer in customers:
+                    if not tenant_overlay or customer["tenant_id"] != row["tenant_id"]:
+                        continue
+                    constraints = resource.customers.setdefault(customer["customer_id"], CustomerConstraints())
+                    for field in ("required_claims", "exclude_allergens"):
+                        setattr(constraints, field, sorted(set(getattr(constraints, field)) | set(snapshot["profile"][field])))
         if tenant_overlay and self.db:
             from .tenancy import principal, TARGET_TENANT
             p = principal()

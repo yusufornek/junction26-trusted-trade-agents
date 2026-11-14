@@ -395,6 +395,8 @@ class Orders:
                 record = None
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             self.policy.check_supplier(agent_id, quote.supplier_id, policy)
+            from .guardrail_profiles import require_constraints
+            require_constraints(conn, quote.customer_id)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired: " + (quote.expiration_reason or "validity ended") + "; create a new quote before ordering", data={"reason": quote.expiration_reason or "validity_ended"})
             if quote.status != "OPEN":
@@ -658,6 +660,11 @@ class Orders:
             from .foundation import PRINCIPAL
             principal = PRINCIPAL.get()
             authorize_review(self.policy.get(), principal, order)
+            from .guardrail_profiles import authorize_approval, require_constraints
+            self_approval = False
+            if approve:
+                self_approval = authorize_approval(conn, principal, order)
+                require_constraints(conn, order.customer_id)
             profile = self.policy.get().customers.get(order.customer_id)
             if approve and (order.clinical_review == "required" or (profile and profile.clinical_review == "required")):
                 if not principal or principal.kind not in {"buyer_user", "tenant_user"} or principal.role not in {"buyer_approver", "approver", "tenant_admin"}:
@@ -724,6 +731,7 @@ class Orders:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
                 order.approver_user_id = principal.user_id if principal else None
+                order.self_approved = bool(approve and self_approval)
                 order.approver_role = principal.role if principal else None
                 order.approval_side = "buyer" if principal and principal.kind in {"buyer_user", "tenant_user"} else "valio_operator"
                 if approve and order.supplier_id != "valio":
@@ -734,6 +742,8 @@ class Orders:
             if approve and order.mandate is not None:
                 self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
+                    "self_approved": order.self_approved,
+                    "approval_warnings": ["SELF_APPROVAL_ALLOWED"] if order.self_approved else [],
                     "organisation_id": principal.organisation_id if principal else None,
                     "evidence_revision": order.evidence_revision, "approval_side": order.approval_side, "user_id": principal.user_id if principal else None, "role": principal.role if principal else None,
                     **mandate_evidence(order.mandate),

@@ -241,3 +241,79 @@ Relevant codes: `401 UNAUTHENTICATED`/`WRONG_AUDIENCE`, `403 CSRF_REQUIRED`, `HU
 `POLICY_CEILING`; `404 *_NOT_FOUND`; `409 LAST_TENANT_ADMIN`, `EMAIL_EXISTS`, `AGENT_EXISTS`,
 `CUSTOMER_ASSIGNED`, `CONFIRMATION_INVALID`, `EVIDENCE_CHANGED`; `410 LINK_EXPIRED`;
 `429 LOGIN_THROTTLED`/`RATE_LIMITED` with `Retry-After`. Login throttles email and client address.
+
+## Guardrail profiles and anomalies (spec 45)
+
+This contract covers the profile slice (R-1–R-4, R-9). Anomaly warning/fix cards,
+forecast bands and demo history come from the separate R-5–R-8 implementation.
+The frontend owner designs the screens.
+
+**Sign-up.** Public GET /v1/auth/signup/options returns labelled arrays named
+business_types, monthly_purchase_volume_bands and meals_per_day_bands. Each entry
+has value and label; submit the returned value unchanged. POST /v1/auth/signup:
+
+```json
+{
+  "name": "Example kitchen",
+  "email": "admin@example.test",
+  "password": "<human-chosen-password>",
+  "profile": {
+    "business_type": "hospital_or_school_kitchen",
+    "sites": 1,
+    "buyers_and_approvers": 3,
+    "monthly_purchase_volume_band": "5–25k",
+    "meals_per_day_band": "100–500",
+    "required_claims": ["FREE_FROM_LACTOSE"],
+    "exclude_allergens": ["AE"]
+  }
+}
+```
+
+201 returns tenant, user (role tenant_admin), customer_ids and guardrail_profile.
+Sign in using the existing login endpoint afterwards. Duplicate email returns 409
+EMAIL_EXISTS; invalid counts/codes return 422. The server assigns a new customer
+identity; sign-up cannot claim an existing business's wholesaler customer number.
+Use catalog vocabulary for claims/allergens. Hospital/school profiles may finish
+sign-up without constraints, but ordering returns 409 CONSTRAINTS_REQUIRED until
+both lists are nonempty. Error data gives missing_fields and profile_url.
+
+**Profile and presets.** GET /v1/tenant/profile returns the authenticated tenant's
+snapshot, or null for a legacy tenant. PUT takes the profile object above, with the
+standard two-call confirmation_token flow; only tenant_admin may change it.
+The response has tenant_id, profile, preset, guardrails, guardrail_version,
+profile_revision, author_user_id, updated_at and warnings. Each guardrail is
+{value,source}, e.g. four_eyes: {value:true,source:"preset:hotel_chain"}.
+Fields are per_order_ceiling_eur, daily_budget_eur, monthly_budget_eur,
+approver_amount_threshold_eur, four_eyes, substitutes_policy, anomaly_sensitivity
+and starting_autonomy. Groups/chains with sites > 1 also have per_site_budgets.
+Single restaurants default to four-eyes off and show SELF_APPROVAL_ALLOWED in
+warnings. Every new agent starts approval_required; the existing autonomous hotel
+demo agent retains its earned authority.
+
+Editing business details increments profile_revision and preserves active
+guardrail values. Applying a new preset or changing limits belongs to spec 44;
+do not describe a profile edit as a policy change. Removing standing constraints
+returns 409 GUARDRAIL_CHANGE_REQUIRED. Guardrail budgets are initial preset values;
+platform/agent policy and the merged spec 44 effective policy remain authoritative.
+
+The same snapshot appears as tenant.guardrail_profile in session/login,
+guardrail_profile in /v1/me (also MCP get_agent_context), /v1/tenant/policy and
+the operator's tenant list, and context.guardrail_profile on procurement artifacts.
+Customer-scoped tenant.profile_created/tenant.profile_updated webhook events carry
+it too. Dedicated human MCP/A2A management audiences depend on spec 43 part 2.
+
+**Approval.** Pending inbox entries now include approval_requirements with
+approver_amount_threshold_eur, required_role, four_eyes,
+eligible_approver_user_ids and conflicted_user_ids. Above the amount threshold,
+only tenant_admin can approve; equality is still allowed for an approver.
+403 APPROVAL_LIMIT returns data.threshold_eur, required_role and who_can_approve.
+403 FOUR_EYES means the authenticated person created a connection, owns the agent,
+or approved its last autonomy/policy loosening; data.who_can_approve identifies
+active independent reviewers. An empty list means no eligible reviewer exists.
+Both refusals happen before a confirmation preview, and can also occur after a
+previous preview when authority changes. Rejection remains available.
+
+With four-eyes off, successful self-approval returns self_approved:true on the
+order; audit records the flag and SELF_APPROVAL_ALLOWED warning. Approval webhook
+payloads include approval_requirements alongside evidence_revision and review_url.
+The existing evidence revision and confirmation-token flow remains required.

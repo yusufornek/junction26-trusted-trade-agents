@@ -36,7 +36,8 @@ from .signing import unb64
 
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
-                    "platform.upstream_rate_limited", "platform.audit_anchored", "platform.supplier_health"]
+                    "platform.upstream_rate_limited", "platform.audit_anchored", "platform.supplier_health",
+                    "tenant.profile_created", "tenant.profile_updated"]
 EVENT_TYPES = set(EventType.__args__)
 
 
@@ -307,8 +308,11 @@ class Webhooks:
         if sub["audience"] == "approver" and event_type == "order.approval_required":
             with self.db.connect() as conn:
                 order = self.gateway.orders._order(conn, event["aggregate_id"])
+                from .guardrail_profiles import approval_requirements
+                requirements = approval_requirements(conn, order)
             revision = event["payload"].get("evidence_revision", order.evidence_revision)
             envelope["payload"] = {**event["payload"], "evidence_revision": revision,
+                                   "approval_requirements": requirements,
                                    "review_url": f"/approvals/{order.id}?revision={revision}"}
         return canonical_json(envelope).decode()
 

@@ -184,6 +184,9 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         else:
             authorize_review(gateway.policy.get(), principal, order)
             if route == "orders.approve":
+                from .guardrail_profiles import authorize_approval, require_constraints
+                authorize_approval(conn, principal, order)
+                require_constraints(conn, order.customer_id)
                 # Rejecting needs no purchasing authority; approving still does.
                 gateway.mandates.authorize(conn, None, order.agent_id, order.customer_id,
                     products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)

@@ -97,6 +97,9 @@ class Connections:
                 raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
             if not agent and body.audience != "operator":
                 conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, tid, body.agent_id))
+            if body.audience == "buyer":
+                from .guardrail_profiles import register_owner
+                register_owner(conn, body.agent_id, tid, principal.user_id)
             legacy_known = set(policy.customers)
             for mandate in policy.agents.values():
                 legacy_known.update(mandate.customer_ids)
@@ -114,7 +117,7 @@ class Connections:
                 import yaml
                 policy.agents[body.agent_id] = mandate
                 self.gateway.policy._replace(yaml.safe_dump(
-                    policy.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
+                    policy.model_dump(mode="json", exclude={"known_warning_codes", "tenant_anomaly_settings"}), sort_keys=False))
             connection_id, now = "con_" + token_hex(4), audit.utcnow()
             env = "sbx" if self.gateway.settings.environment == "sandbox" else "live"
             prefix = f"vtg_{env}_{connection_id}_"

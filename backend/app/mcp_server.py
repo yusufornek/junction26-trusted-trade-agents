@@ -24,7 +24,11 @@ from .recurring import Deviations, RecurringRequest
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
-MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. Remote MCP supports OAuth 2.1 code/PKCE consent at /oauth/authorize; tenant humans use /mcp/tenant and Valio staff use /mcp/operator, each an isolated audience. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. "
+                "Sign-up at /v1/auth/signup stores a business profile and sourced guardrail preset; get_agent_context and transaction context expose that tenant's snapshot. "
+                "Hospital/school orders require claims and allergen exclusions (409 CONSTRAINTS_REQUIRED). Human approvals enforce tenant thresholds (403 APPROVAL_LIMIT) and independent reviewers (403 FOUR_EYES); four-eyes-off self-approvals are flagged and audited. "
+                "Remote MCP supports OAuth 2.1 code/PKCE consent at /oauth/authorize; buyer agents use /mcp, tenant humans use /mcp/tenant and Valio staff use /mcp/operator, each an isolated audience. "
+                "tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
                 "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
@@ -209,7 +213,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
         principal = PRINCIPAL.get()
         return principal.id if principal is not None else agent_id
 
-    @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
+    @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
     def get_agent_context() -> AgentContext:
         principal = PRINCIPAL.get()
         gateway.limiter.consume(principal.id, "read")
