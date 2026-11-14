@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
   Bell,
+  Gauge,
+  GitPullRequestArrow,
+  Users,
   ChefHat,
   Repeat,
   Bot,
@@ -38,6 +41,9 @@ const NAV = [
   { to: "/audit", icon: ScrollText, label: "Audit trail" },
   { to: "/policy", icon: ShieldCheck, label: "Policy" },
   { to: "/agents", icon: Bot, label: "Agents" },
+  { to: "/governance", icon: Gauge, label: "Governance" },
+  { to: "/changes", icon: GitPullRequestArrow, label: "Policy changes" },
+  { to: "/team", icon: Users, label: "Team" },
   { to: "/connect", icon: Plug, label: "Connect an agent" },
   { to: "/trust", icon: Fingerprint, label: "Trust" },
 ];
@@ -52,6 +58,9 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },
   "/policy": { title: "Policy", sub: "The guardrails the buyer owns, not the code." },
+  "/governance": { title: "Governance", sub: "Every agent, who answers for it, what it has done, and a switch to stop it." },
+  "/changes": { title: "Policy changes", sub: "Where each limit comes from, and the changes that wait for a second person." },
+  "/team": { title: "Team", sub: "The people who can sign in, what each role may do, and the organisations on this gateway." },
   "/agents": { title: "Agents", sub: "Who may buy, for which customer, and up to what limit." },
   "/connect": { title: "Connect an agent", sub: "Pick the assistant or tool you work in and give it a key to this gateway." },
   "/trust": { title: "Trust", sub: "Verify what the gateway recorded, without taking its word for it." },

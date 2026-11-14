@@ -465,7 +465,8 @@ async function send(path: string, init?: RequestInit): Promise<{ res: Response; 
   return { res, text: await res.text() };
 }
 
-export async function call<T>(path: string, init?: RequestInit): Promise<T> {
+/** autoConfirm false: the page shows the gateway's confirmation step itself (Policy changes asks before a rollback). */
+export async function call<T>(path: string, init?: RequestInit, autoConfirm = true): Promise<T> {
   if (MOCK) return (await import("./mock")).mockCall(path, init) as Promise<T>;
   const { res, text } = await send(path, init);
   let body: any = null;
@@ -483,7 +484,7 @@ export async function call<T>(path: string, init?: RequestInit): Promise<T> {
   // Since spec 43 a human decision (approve, reject, cancel, autonomy, policy) first answers with a summary and a
   // single-use token, deciding nothing. The console's button press is that person's confirmation, so the identical
   // body goes back once with the token; without this the inbox showed "approved" while the order stayed pending.
-  if (body?.confirmation_required === true && body.confirmation_token && init?.body) {
+  if (autoConfirm && body?.confirmation_required === true && body.confirmation_token && init?.body) {
     const original = JSON.parse(String(init.body));
     return call<T>(path, { ...init, body: JSON.stringify({ ...original, confirmation_token: body.confirmation_token }) });
   }
