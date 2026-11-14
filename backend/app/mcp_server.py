@@ -25,7 +25,7 @@ MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate pl
                 "(default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. "
                 "approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. "
                 "GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may "
-                "POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key prevents repeated changes). Quote/order bind and expose mandate metadata; "
+                "POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; "
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
@@ -113,6 +113,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
         "Domain failures return isError=true and RFC 9457 structured content with code/message, recovery_version=1, retryable, next_action, retry_after_seconds and violations. Follow next_action, not prose. Pending orders return WAIT_FOR_APPROVAL and poll_after_seconds. "
         "Per-principal lookup/mutation/read buckets are shared with REST. RATE_LIMITED, UPSTREAM_BUSY and UPSTREAM_RATE_LIMITED require RETRY_SAME_COMMAND after the supplied interval. Valio calls share a process-wide 5/s bucket; a 429 blocks uncached calls for Retry-After seconds (default 30), returning 503 UPSTREAM_RATE_LIMITED. Cached lookups keep flowing. /health exposes upstream blocked_until and calls_last_minute; stats count upstream_rate_limits, one audit entry per block. Exact idempotent replays use read tokens. Quote and cancel accept optional idempotency_key; same principal/key and changed payload returns IDEMPOTENCY_CONFLICT. Correlation metadata: _meta.correlation_id or HTTP X-Correlation-Id. "
+        "Every keyed command binds its principal, route including all target/path parameters, and payload. Exact replays recheck current authorization and scope before returning saved evidence. Policy YAML is published after the enclosing audit/command transaction commits, with durable SQLite recovery. "
         "Buyer VC-JWT: present --mandate FILE on stdio or Agent-Mandate on each HTTP request, with the agent Bearer credential. EdDSA, issuer, validity, revocation, sub/customer/category are verified at every step; errors are MANDATE_INVALID with the check. Policy can only tighten buyer limits. Orders and audit show mandate metadata; revoke via signed REST POST /v1/mandates/revocations. "
         "Lookup, quote and order require a mandate; unregistered agents receive AGENT_NOT_REGISTERED. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "

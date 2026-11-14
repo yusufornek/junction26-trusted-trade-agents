@@ -1,10 +1,15 @@
 import sqlite3
 import threading
+import fcntl
+import logging
+import os
 from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_files (path TEXT PRIMARY KEY, content TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_autonomy (
  agent_id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK(level IN ('approval_required','autonomous_within_limits'))
 );
@@ -85,6 +90,7 @@ class Database:
     def __init__(self, path: Path):
         self.on_commit = None
         self._connection = ContextVar("sqlite_connection", default=None)
+        self._staged_files = ContextVar("sqlite_staged_files", default=None)
         self.audit_verify_lock = threading.Lock()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +128,77 @@ class Database:
                 conn.execute("INSERT INTO mandate_revocations SELECT '',issuer,mandate_id,at FROM legacy_mandate_revocations")
                 conn.execute("DROP TABLE legacy_mandate_revocations")
 
+    def file_content(self, path):
+        """Committed policy, or the caller's own staged transaction snapshot.
+
+        No row means a historical file-only installation; the caller still loads it.
+        """
+        with self.connect() as conn:
+            row = conn.execute("SELECT content FROM runtime_files WHERE path=?", (self._file_key(path),)).fetchone()
+        return row[0] if row else None
+
+    def _file_key(self, path):
+        # Keep recovery local if a database is copied/restored into another directory.
+        return str(Path(path).resolve().relative_to(self.path.parent.resolve()))
+
+    @staticmethod
+    def _prepare_file(path, content):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", dir=path.parent, prefix=".policy-", delete=False) as file:
+                temporary = Path(file.name)
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            return temporary
+        except BaseException:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise
+
+    def stage_file(self, path, content):
+        """Enlist one durable file projection in the outermost writer transaction.
+
+        Prepare/fsync before commit, publish only afterwards. SQLite retains the
+        source of truth until publication, so a crash or a post-commit disk failure
+        cannot lose authority/audit consistency. Startup/the next write repairs
+        the projection. All policy-changing commands enter here via Policy._replace.
+        """
+        conn, staged = self._connection.get(), self._staged_files.get()
+        if conn is None or staged is None:
+            raise RuntimeError("File changes require a database writer transaction")
+        path = Path(path).resolve()
+        temporary = self._prepare_file(path, content)
+        staged.append((path, content, temporary))
+        conn.execute("INSERT INTO runtime_files VALUES(?,?) ON CONFLICT(path) DO UPDATE SET content=excluded.content",
+                     (self._file_key(path), content))
+
+    def _publish_files(self, conn, staged):
+        for row in conn.execute("SELECT path,content FROM runtime_files").fetchall():
+            path, content = (self.path.parent / row[0]).resolve(), row[1]
+            temporary = None
+            try:
+                if not path.exists() or path.read_bytes() != content.encode():
+                    temporary = next((temp for target, text, temp in reversed(staged)
+                                      if target == path and text == content), None)
+                    temporary = temporary or self._prepare_file(path, content)
+                    os.replace(temporary, path)
+                # Once published, preserve historical file-only loading and direct
+                # runtime-file administration. A crash before cleanup is replay-safe.
+                conn.execute("DELETE FROM runtime_files WHERE path=? AND content=?", (row[0], content))
+                conn.commit()
+            except OSError:
+                # This transaction already committed. Do not report a failed change
+                # or roll back authority in memory; retain the durable recovery row.
+                logging.getLogger(__name__).exception("Committed policy projection awaits recovery: %s", path)
+            except sqlite3.Error:
+                conn.rollback()  # Cleanup only: authority/audit already committed.
+                logging.getLogger(__name__).exception("Published policy recovery row awaits cleanup: %s", path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
     @contextmanager
     def connect(self, write=False):
         active = self._connection.get()
@@ -130,6 +207,8 @@ class Database:
             # back while the enclosing command can retain the refusal's audit entry.
             from uuid import uuid4
             savepoint = "nested_" + uuid4().hex
+            staged = self._staged_files.get()
+            offset = len(staged) if staged is not None else 0
             if write:
                 active.execute(f"SAVEPOINT {savepoint}")
             try:
@@ -137,29 +216,55 @@ class Database:
             except BaseException:
                 if write:
                     active.execute(f"ROLLBACK TO {savepoint}")
+                    for _, _, temporary in staged[offset:]:
+                        temporary.unlink(missing_ok=True)
+                    del staged[offset:]
                 raise
             finally:
                 if write:
                     active.execute(f"RELEASE {savepoint}")
             return
-        conn = sqlite3.connect(self.path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
+        # SQLite releases its writer lock at commit, before file publication.
+        # Retain a process-shared lock through publication so the next writer
+        # cannot base an update on the previous policy projection.
+        writer_lock = self.path.with_suffix(self.path.suffix + ".writer.lock").open("a+b") if write else None
+        conn = None
+        try:
+            if writer_lock is not None:
+                fcntl.flock(writer_lock, fcntl.LOCK_EX)
+            conn = sqlite3.connect(self.path, timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+        except BaseException:
+            if conn is not None:
+                conn.close()
+            if writer_lock is not None:
+                writer_lock.close()
+            raise
         committed = False
         token = self._connection.set(conn) if write else None
+        staged = []
+        file_token = self._staged_files.set(staged) if write else None
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
             committed = True
+            if write:
+                self._publish_files(conn, staged)
         except BaseException:
             conn.rollback()
             raise
         finally:
             if token is not None:
                 self._connection.reset(token)
+                self._staged_files.reset(file_token)
+            for _, _, temporary in staged:
+                temporary.unlink(missing_ok=True)
             conn.close()
+            if writer_lock is not None:
+                writer_lock.close()
         if committed and write and self.on_commit is not None:
             try:
                 self.on_commit()

@@ -14,6 +14,328 @@ from app.models import PolicyUpdateRequest
 from conftest import agent_headers, quote_request
 
 
+KEYED_WRITES = ("create_quote", "place_order", "cancel", "approve", "reject", "update", "reset", "revoke", "change", "find_offers")
+
+
+@pytest.mark.parametrize("command", KEYED_WRITES)
+def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command):
+    """Real commands, current scope loss, and same refusal as a newly keyed call."""
+    from app.db import DomainError
+    from app.foundation import PRINCIPAL
+    from conftest import OPERATOR_HEADERS
+    from test_graduated_autonomy import organisations, update
+    from test_verifiable_mandate import ISSUER
+    from app.mandates import sign_jwt
+    from app.signing import b64
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    organisations(gateway)
+    # Keep the matrix exhaustive when another keyed command is installed.
+    assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
+                                   "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change"}
+    actor = "external"
+    headers = agent_headers(actor)
+    method, url, body = "POST", "", {}
+    if command in {"create_quote", "place_order", "cancel", "approve", "reject"}:
+        lookup = gateway.find_offers(need)
+        request = quote_request(need, need_ref=lookup.lookup_id, qty=200 if command in {"approve", "reject"} else 1)
+        if command == "create_quote":
+            url, body = "/v1/quotes", request.model_dump(mode="json")
+        else:
+            quote = gateway.orders.create_quote(request)
+            if command == "place_order":
+                url, body = "/v1/orders", {"quote_id": quote.id}
+            else:
+                order = gateway.orders.place_order(quote.id, "setup")
+                if command == "cancel":
+                    url, body = f"/v1/orders/{order.id}/cancel", {"cancelled_by": "Agent", "reason": "Duplicate"}
+                else:
+                    actor, headers = "buyer", agent_headers("buyer")
+                    url, body = f"/v1/approvals/{order.id}/{command}", {"approver": "Buyer"}
+    elif command in {"update", "reset"}:
+        actor, headers = "operator", OPERATOR_HEADERS
+        if command == "update":
+            method, url = "PUT", "/v1/policy"
+            body = {"policy": gateway.policy._editable(gateway.policy.get()), "updated_by": "Operator"}
+        else:
+            url, body = "/v1/policy/reset", {"updated_by": "Operator"}
+    elif command == "change":
+        actor, headers = "hotel-agent", agent_headers("hotel-agent")
+        url, body = "/v1/agents/external/autonomy", {"level": "approval_required", "reason": "Pilot"}
+    elif command == "revoke":
+        key = Ed25519PrivateKey.generate()
+        update(gateway, customers={"1": {"mandate_issuers": {ISSUER: [{"kid": "buyer-1", "kty": "OKP", "crv": "Ed25519",
+            "alg": "EdDSA", "x": b64(key.public_key().public_bytes_raw())}]}}})
+        token = sign_jwt(key, {"iss": ISSUER, "jti_revoked": ["mandate"], "iat": int(audit.utcnow().timestamp())}, kid="buyer-1")
+        url, body = "/v1/mandates/revocations", {"jwt": token}
+
+    with TestClient(create_app(gateway)) as client:
+        def call(key):
+            if command != "find_offers":
+                response = client.request(method, url, json=body, headers={**headers, "Idempotency-Key": key})
+                return response.status_code, response.json()
+            principal = gateway.settings.keys.resolve(headers["Authorization"].split()[1], gateway.policy.get())
+            context = PRINCIPAL.set(principal)
+            try:
+                return 200, gateway.find_offers(need, command_key=key).model_dump(mode="json")
+            except DomainError as error:
+                return error.status, {"code": error.code}
+            finally:
+                PRINCIPAL.reset(context)
+
+        status, first = call("review-key")
+        assert status == 200, first
+        calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+        assert call("review-key") == (status, first)
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
+        if command in {"update", "reset"}:
+            # Actual credential validity is established again by both transport calls.
+            headers = {"Authorization": "Bearer withdrawn-operator-key"}
+        elif command == "revoke":
+            update(gateway, customers={})
+        elif command == "cancel":
+            with gateway.db.connect(write=True) as conn:
+                conn.execute("UPDATE orders SET data=json_set(data,'$.agent_id','other') WHERE id=?", (order.id,))
+        elif command in {"approve", "reject", "change"}:
+            policy = gateway.policy._editable(gateway.policy.get())
+            policy["identities"]["external"]["organisation_id"] = "other"
+            update(gateway, **policy)
+        else:
+            policy = gateway.policy._editable(gateway.policy.get())
+            policy["agents"]["external"]["customer_ids"] = ["2"]
+            update(gateway, **policy)
+        fresh_status, fresh = call("fresh-key")
+        replay_status, replay = call("review-key")
+        assert fresh_status in {401, 403, 404, 422}
+        assert (replay_status, replay.get("code")) == (fresh_status, fresh["code"])
+        assert not {"track_record", "lines", "policy", "offers"} & replay.keys()
+
+
+@pytest.mark.parametrize("section", ["policy", "reset", "customers", "agents", "issuers", "autonomy", "rate_limits"])
+@pytest.mark.parametrize("failure", ["command", "audit", "commit"])
+def test_review_policy_file_waits_for_outer_commit(gateway, monkeypatch, section, failure):
+    """Every policy writer shares staging; neither audit nor enclosing failures publish it."""
+    from app import db as db_module
+    from app.models import AutonomyChange, PolicyResetRequest
+    from app.auth import Principal
+    from app.foundation import PRINCIPAL
+    from test_graduated_autonomy import approval_first
+
+    approval_first(gateway)
+    before = gateway.policy.runtime_path.read_bytes()
+    before_audit = len(gateway.audit())
+    body = gateway.policy._editable(gateway.policy.get())
+    if section == "customers":
+        body["customers"] = {"1": {"note": "New customer policy"}}
+    elif section == "agents":
+        body["agents"]["external"]["max_auto_daily_total_eur"] = 1
+    elif section == "issuers":
+        body["customers"] = {"1": {"mandate_issuers": {"urn:buyer": [{"kid": "test", "kty": "OKP", "crv": "Ed25519", "x": "A" * 43}]}}}
+    elif section == "rate_limits":
+        body["rate_limits"]["mutation"]["capacity"] = 5
+    else:
+        body["approval"]["max_auto_total_eur"] = 1
+
+    staged = []
+    original_replace = gateway.policy._replace
+    def stage(content):
+        original_replace(content)
+        staged.append(content)
+        # A separate reader must still see precisely the old file and old audit.
+        assert gateway.policy.runtime_path.read_bytes() == before
+        with sqlite3.connect(gateway.db.path) as observer:
+            assert observer.execute("SELECT COUNT(*) FROM audit").fetchone()[0] == before_audit
+    monkeypatch.setattr(gateway.policy, "_replace", stage)
+    if failure != "commit":
+        table = "commands" if failure == "command" else "audit"
+        with gateway.db.connect(write=True) as conn:
+            conn.execute(f"CREATE TRIGGER fail_review BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT,'review failure'); END")
+    else:
+        original_connect = sqlite3.connect
+        class FailingCommit(sqlite3.Connection):
+            def commit(self):
+                if self.execute("SELECT COUNT(*) FROM commands WHERE key='file-review'").fetchone()[0]:
+                    raise sqlite3.OperationalError("review failure")
+                return super().commit()
+        monkeypatch.setattr(db_module.sqlite3, "connect", lambda *a, **kw: original_connect(*a, **kw, factory=FailingCommit))
+    token = PRINCIPAL.set(Principal("web-console", operator=True, kind="operator", role="valio_operator"))
+    try:
+        with pytest.raises(sqlite3.Error, match="review failure"):
+            if section == "autonomy":
+                gateway.autonomy.change("external", AutonomyChange(level="autonomous_within_limits", reason="Pilot"),
+                                        PRINCIPAL.get(), command_key="file-review")
+            else:
+                request = PolicyResetRequest(updated_by="Operator") if section == "reset" else PolicyUpdateRequest(policy=body, updated_by="Operator")
+                gateway.policy.update(request, reset=section == "reset", command_key="file-review")
+    finally:
+        PRINCIPAL.reset(token)
+    assert gateway.policy.runtime_path.read_bytes() == before
+    assert len(gateway.audit()) == before_audit
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM commands WHERE key='file-review'").fetchone()[0] == 0
+    assert staged or failure == "audit"
+
+
+def test_review_policy_projection_recovers_after_commit(gateway, monkeypatch, tmp_path):
+    from app import db as db_module
+    from app.db import Database
+    from app.policy import Policy
+    from app.foundation import PRINCIPAL
+    from app.auth import Principal
+
+    before = gateway.policy.get()
+    body = gateway.policy._editable(before)
+    body["approval"]["max_auto_total_eur"] = 17
+    replace = db_module.os.replace
+    published = []
+    def disk_unavailable(source, destination):
+        # Publication must follow the enclosing command/audit commit.
+        with sqlite3.connect(gateway.db.path) as observer:
+            assert observer.execute("SELECT COUNT(*) FROM commands WHERE key='committed-file'").fetchone()[0] == 1
+            assert observer.execute("SELECT COUNT(*) FROM audit WHERE action='POLICY_UPDATED'").fetchone()[0] == 1
+        published.append(destination)
+        raise OSError("Temporarily unavailable projection")
+    monkeypatch.setattr(db_module.os, "replace", disk_unavailable)
+    token = PRINCIPAL.set(Principal("web-console", operator=True, kind="operator", role="valio_operator"))
+    try:
+        result = gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"), command_key="committed-file")
+    finally:
+        PRINCIPAL.reset(token)
+    assert published and result.approval.max_auto_total_eur == 17
+    assert not gateway.policy.runtime_path.exists()
+    assert gateway.policy.get().approval.max_auto_total_eur == 17
+    monkeypatch.setattr(db_module.os, "replace", replace)
+    # Copying a committed DB must recover beside the copy, never the original path.
+    restored = tmp_path / "restored" / "app.db"
+    restored.parent.mkdir()
+    with sqlite3.connect(gateway.db.path) as source, sqlite3.connect(restored) as destination:
+        source.backup(destination)
+    db = Database(restored)
+    recovered = Policy(gateway.policy.path, restored.parent / "policy.yaml", db)
+    assert recovered.get().approval.max_auto_total_eur == 17
+    assert (restored.parent / "policy.yaml").exists()
+    assert not gateway.policy.runtime_path.exists()
+    assert not list(gateway.db.path.parent.glob(".policy-*"))
+
+
+def test_review_policy_nested_rollback_discards_only_its_file(gateway):
+    from app.models import PolicyUpdateRequest
+    body = gateway.policy._editable(gateway.policy.get())
+    assert not gateway.policy.runtime_path.exists()
+    with gateway.db.connect(write=True):
+        body["approval"]["max_auto_total_eur"] = 17
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Outer"))
+        with pytest.raises(RuntimeError, match="nested failure"):
+            with gateway.db.connect(write=True):
+                body["approval"]["max_auto_total_eur"] = 99
+                gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Inner"))
+                raise RuntimeError("nested failure")
+        assert gateway.policy.get().approval.max_auto_total_eur == 17
+        assert not gateway.policy.runtime_path.exists()
+    assert gateway.policy._load(gateway.policy.runtime_path).approval.max_auto_total_eur == 17
+    assert len(gateway.audit()) == 1
+    assert not list(gateway.db.path.parent.glob(".policy-*"))
+
+
+def test_review_policy_writers_keep_both_autonomy_changes(gateway, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from app.auth import Principal
+    from app.models import AutonomyChange
+    from app.service import Gateway
+
+    peer = Gateway(gateway.settings)
+    entered, release = threading.Event(), threading.Event()
+    stage = gateway.policy._replace
+    def held(content):
+        stage(content)
+        entered.set()
+        assert release.wait(5)
+    monkeypatch.setattr(gateway.policy, "_replace", held)
+    operator = Principal("web-console", operator=True, kind="operator", role="valio_operator")
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(gateway.autonomy.change, "external",
+                AutonomyChange(level="approval_required", reason="Review external"), operator, command_key="first-writer")
+            assert entered.wait(5)
+            second = pool.submit(peer.autonomy.change, "hotel-chain-agent",
+                AutonomyChange(level="approval_required", reason="Review hotel"), operator, command_key="second-writer")
+            release.set()
+            assert first.result().agent_id == "external"
+            assert second.result().agent_id == "hotel-chain-agent"
+        assert gateway.policy.get().agents["external"].autonomy == "approval_required"
+        assert gateway.policy.get().agents["hotel-chain-agent"].autonomy == "approval_required"
+        assert len([e for e in gateway.audit() if e.action == "AUTONOMY_CHANGED"]) == 2
+        assert gateway.policy._load(gateway.policy.runtime_path).agents == peer.policy.get().agents
+    finally:
+        release.set()
+        peer.close()
+
+
+def test_review_first_policy_write_failure_keeps_file_absent(gateway):
+    body = gateway.policy._editable(gateway.policy.get())
+    body["approval"]["max_auto_total_eur"] = 1
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("CREATE TRIGGER fail_first BEFORE INSERT ON commands BEGIN SELECT RAISE(ABORT,'first failure'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="first failure"):
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"), command_key="first-file")
+    assert not gateway.policy.runtime_path.exists()
+    assert not gateway.audit()
+    assert not list(gateway.db.path.parent.glob(".policy-*"))
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runtime_files").fetchone()[0] == 0
+
+
+def test_review_legacy_order_replay_rechecks_customer_scope(gateway, need, upstream):
+    from app.db import DomainError
+    quote = make_quote(gateway, need)
+    gateway.orders.place_order(quote.id, "legacy-order")
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("DELETE FROM commands WHERE key='legacy-order'")
+    body = gateway.policy._editable(gateway.policy.get())
+    body["agents"]["external"]["customer_ids"] = ["2"]
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"))
+    with pytest.raises(DomainError, match="CUSTOMER_NOT_IN_MANDATE"):
+        gateway.orders.place_order(quote.id, "legacy-order")
+
+
+@pytest.mark.parametrize("command", ["create_quote", "change"])
+def test_review_legacy_command_envelopes_keep_loading(gateway, need, upstream, command):
+    from dataclasses import asdict
+    from hashlib import sha256
+    from app.canonical import canonical_json
+    from app.foundation import PRINCIPAL
+    from app.models import AutonomyChange
+    from conftest import OPERATOR_HEADERS
+
+    principal = gateway.settings.keys.resolve(OPERATOR_HEADERS["Authorization"].split()[1], gateway.policy.get())
+    token = PRINCIPAL.set(principal)
+    try:
+        if command == "change":
+            request = AutonomyChange(level="approval_required", reason="Pilot review")
+            arguments = {"request": request.model_dump(mode="json"), "principal": json.loads(json.dumps(asdict(principal)))}
+            def call(target="external"):
+                return gateway.autonomy.change(target, request, principal, command_key="legacy")
+        else:
+            lookup = gateway.find_offers(need, actor="agent:web-console")
+            request = quote_request(need, qty=1, need_ref=lookup.lookup_id)
+            arguments = {"request": request.model_dump(mode="json")}
+            def call():
+                return gateway.orders.create_quote(request, "web-console", operator=True, command_key="legacy")
+        first = call()
+        legacy_digest = sha256(canonical_json({"command": command, "arguments": arguments})).hexdigest()
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE commands SET digest=?,result=json_remove(result,'$.fingerprint_version') WHERE key='legacy'", (legacy_digest,))
+        assert call().model_dump(mode="json") == first.model_dump(mode="json")
+        if command == "change":
+            from app.db import DomainError
+            with pytest.raises(DomainError, match="IDEMPOTENCY_CONFLICT"):
+                call("hotel-chain-agent")
+            assert gateway.policy.get().agents["hotel-chain-agent"].autonomy == "autonomous_within_limits"
+    finally:
+        PRINCIPAL.reset(token)
+
+
 def make_quote(gateway, need, agent="external", qty=1):
     lookup = gateway.find_offers(need, actor=f"agent:{agent}")
     return gateway.orders.create_quote(quote_request(need, need_ref=lookup.lookup_id, qty=qty), agent)

@@ -187,7 +187,8 @@ class Mandates:
                              data={"error": error.code, **error.data, "live_calls": {"price": 0, "availability": 0}})
             raise
 
-    def revoke(self, token, actor):
+    def authorize_revocation(self, conn, token):
+        """Validate current issuer trust without reapplying a cached revocation."""
         try:
             header, claims, message, signature = decode(token)
             issuer, ids, issued_at = claims.get("iss"), claims.get("jti_revoked"), claims.get("iat")
@@ -195,25 +196,30 @@ class Mandates:
                     any(not isinstance(item, str) or not item for item in ids) or
                     not number(issued_at) or issued_at > audit.utcnow().timestamp()):
                 invalid("revocation")
-            with self.db.connect(write=True) as conn:
-                customers = []
-                for customer_id, customer in self.policy.get().customers.items():
-                    try:
-                        check_signature(header, message, signature, customer.mandate_issuers.get(issuer, []))
-                    except DomainError:
-                        continue
-                    customers.append(customer_id)
-                if not customers:
-                    invalid("signature")
-                for customer_id in customers:
-                    for mandate_id in ids:
-                        conn.execute("INSERT OR IGNORE INTO mandate_revocations(customer_id,issuer,mandate_id,at) VALUES(?,?,?,?)",
-                                     (customer_id, issuer, mandate_id, audit.utcnow().isoformat()))
-                audit.append(conn, actor, "MANDATE_REVOKED", "Buyer revoked purchasing authority.",
-                             data={"issuer": issuer, "jti_revoked": ids, "customer_ids": customers})
-            return {"issuer": issuer, "jti_revoked": ids}
+            customers = []
+            for customer_id, customer in self.policy.get().customers.items():
+                try:
+                    check_signature(header, message, signature, customer.mandate_issuers.get(issuer, []))
+                except DomainError:
+                    continue
+                customers.append(customer_id)
+            if not customers:
+                invalid("signature")
+            return issuer, ids, customers
         except DomainError:
             raise DomainError("REVOCATION_INVALID", "Revocation signature or claims are invalid", 422) from None
+
+    def revoke(self, token, actor):
+        with self.db.connect(write=True) as conn:
+            issuer, ids, customers = self.authorize_revocation(conn, token)
+            for customer_id in customers:
+                for mandate_id in ids:
+                    conn.execute("INSERT OR IGNORE INTO mandate_revocations(customer_id,issuer,mandate_id,at) VALUES(?,?,?,?)",
+                                 (customer_id, issuer, mandate_id, audit.utcnow().isoformat()))
+            audit.append(conn, actor, "MANDATE_REVOKED", "Buyer revoked purchasing authority.",
+                         data={"issuer": issuer, "jti_revoked": ids, "customer_ids": customers})
+        return {"issuer": issuer, "jti_revoked": ids}
+
 
 
 def evidence(record):

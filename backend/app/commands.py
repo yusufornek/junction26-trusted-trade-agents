@@ -24,9 +24,104 @@ def json_value(value):
     return value
 
 
+def replay_authorization(gateway, route, conn, arguments, principal, saved):
+    """Recheck authority, never transitions/expiry or the original business effect.
+
+    Registration fails closed for new keyed writes until they have a guard here.
+    The guards use the same domain authorization functions as fresh commands.
+    """
+    from .auth import check_owner, require_operator
+    from .autonomy import authorize_review
+    owner = principal.owner if principal else arguments.get("agent_id")
+    agent = principal.id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
+    if route == "autonomy.change":
+        gateway.autonomy._target(conn, arguments["agent_id"], principal or arguments["principal"], change=True)
+    elif route == "policy.update":
+        if principal is not None:
+            require_operator(principal)
+    elif route == "mandates.revoke":
+        gateway.mandates.authorize_revocation(conn, arguments["token"])
+    elif route == "gateway.find_offers":
+        gateway.mandates.authorize(conn, arguments["mandate"], agent, arguments["need"].customer_id,
+                                  products=[offer["product_id"] for offer in saved["value"]["offers"]],
+                                  bound=("lookup", saved["value"]["lookup_id"]))
+    elif route == "orders.create_quote":
+        request = arguments["request"]
+        row = conn.execute("SELECT data FROM lookups WHERE id=?", (request.need_ref,)).fetchone()
+        if row is None:
+            raise DomainError("NEED_NOT_FOUND", "need_ref must be a lookup_id returned by this gateway", 404)
+        from .models import LookupResult
+        lookup = LookupResult.model_validate_json(row[0], context={"stored": True})
+        check_owner(lookup, None if arguments["operator"] else agent, "LOOKUP_NOT_FOUND")
+        quote_id = saved["value"]["id"]
+        bound = ("quote", quote_id) if gateway.mandates.stored(conn, "quote", quote_id) else ("lookup", request.need_ref)
+        gateway.mandates.authorize(conn, arguments["mandate"], agent, request.customer_id,
+                                  products=[line["product_id"] for line in saved["value"]["lines"]],
+                                  bound=bound)
+    elif route == "orders.place_order":
+        quote = check_owner(gateway.orders._quote(conn, arguments["quote_id"]),
+                            None if arguments["operator"] else agent, "QUOTE_NOT_FOUND")
+        order_id = saved["value"]["id"]
+        bound = ("order", order_id) if gateway.mandates.stored(conn, "order", order_id) else ("quote", quote.id)
+        def authorize(_counter):
+            if (arguments["mandate"] is not None or gateway.mandates.stored(conn, *bound) is not None
+                    or agent in gateway.policy.get().agents):
+                gateway.mandates.authorize(conn, arguments["mandate"], agent, quote.customer_id,
+                    products=[line["product_id"] for line in saved["value"]["lines"]], bound=bound)
+            # Spec 06 R-2 explicitly permits returning an existing policy-row order
+            # after its mandate was removed. It never grants a new purchase.
+        gateway.orders._run("PLACE_ORDER", f"agent:{agent}",
+                            {"quote_id": quote.id, "idempotency_key": arguments["idempotency_key"]}, authorize)
+    elif route in {"orders.approve", "orders.reject", "orders.cancel"}:
+        order = gateway.orders._order(conn, arguments["order_id"])
+        if route == "orders.cancel":
+            actor = arguments["actor"]
+            check_owner(order, actor.removeprefix("agent:") if actor.startswith("agent:") else owner,
+                        "ORDER_NOT_FOUND")
+        else:
+            authorize_review(gateway.policy.get(), principal, order)
+            if route == "orders.approve":
+                # Rejecting needs no purchasing authority; approving still does.
+                gateway.mandates.authorize(conn, None, order.agent_id, order.customer_id,
+                    products=[line.product_id for line in order.lines], bound=("order", order.id))
+    else:
+        raise RuntimeError(f"No replay authorization registered for {route}")
+
+
+KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
+                          "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change"})
+
+
+def fingerprint(scope, route, arguments):
+    # agent_id may identify a route target (autonomy), so it is never discarded.
+    # Principal metadata and presented credentials are authority, not request payload.
+    payload = {"principal": scope, "route": route, "arguments": json_value({k: v for k, v in arguments.items()
+               if k not in {"principal", "actor", "operator", "mandate", "idempotency_key"}})}
+    return sha256(canonical_json(payload)).hexdigest()
+
+
+def matches_command(previous, digest, name, route, arguments, saved):
+    if previous["digest"] == digest:
+        return True
+    if saved.get("fingerprint_version") is not None:
+        return False
+    # Earlier command envelopes remain replayable. Their other path parameters
+    # were hashed already; autonomy's omitted target must also match the saved result.
+    legacy = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
+              if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
+    return (previous["digest"] == sha256(canonical_json(legacy)).hexdigest()
+            and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
+
+
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy") if getattr(gateway, key) is target) if target is not gateway else "gateway"
+    route = f"{namespace}.{name}"
+    if category != "read" and route not in KEYED_ROUTES:
+        raise RuntimeError(f"No replay authorization registered for {route}")
+    if category != "read":
+        gateway.keyed_routes = getattr(gateway, "keyed_routes", set()) | {route}
 
     def linked(result):
         from .models import Order
@@ -43,13 +138,11 @@ def install(gateway, target, name, category):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         arguments = bound.arguments
-        principal = PRINCIPAL.get()
+        principal = PRINCIPAL.get() or arguments.get("principal")
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
-        payload = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
-                   if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
-        digest = sha256(canonical_json(payload)).hexdigest()
+        digest = fingerprint(scope, route, arguments)
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
         try:
@@ -58,35 +151,34 @@ def install(gateway, target, name, category):
                 return linked(operation(*args, **kwargs))
             if not key.strip():
                 raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
+            if route not in KEYED_ROUTES:
+                raise DomainError("VALIDATION_ERROR", "This read operation does not accept an idempotency key", 422)
             # SQLite serialises command lookup, domain changes and saved results as one commit.
             error = None
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
-                if previous:
-                    if previous["digest"] != digest:
-                        raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
                 try:
                     gateway.limiter.consume(identity, "read" if previous else category)
                     if previous:
-                        if target is gateway.orders and name in {"approve", "reject"}:
-                            # Replay returns the original result, but never the original authority.
-                            from .autonomy import authorize_review
-                            authorize_review(gateway.policy.get(), principal,
-                                             gateway.orders._order(conn, arguments["order_id"]))
+                        saved = json.loads(previous["result"])
+                        if not matches_command(previous, digest, name, route, arguments, saved):
+                            if previous["command"] == name and route == "autonomy.change" and "fingerprint_version" not in saved:
+                                replay_authorization(gateway, route, conn, arguments, principal, saved)
+                            raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
+                        replay_authorization(gateway, route, conn, arguments, principal, saved)
                         if name == "place_order":
                             # Preserve buyer mandate revalidation and the historical replay audit.
                             return linked(operation(*args, **kwargs))
                         from . import models
-                        saved = json.loads(previous["result"])
                         model = getattr(models, saved["model"]) if saved["model"] else None
-                        return model.model_validate(saved["value"]) if model else saved["value"]
+                        return model.model_validate(saved["value"], context={"stored": True}) if model else saved["value"]
                     result = linked(operation(*args, **kwargs))
                 except DomainError as caught:
                     error = caught
                 else:
                     conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
                                  (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
-                                                                     "value": json_value(result)})))
+                                                                     "value": json_value(result), "fingerprint_version": 2})))
             if error:
                 raise error
             return result

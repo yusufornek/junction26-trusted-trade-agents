@@ -138,9 +138,17 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   the effective resource with new update metadata. Both writes append `POLICY_UPDATED` by
   `human:operator`, with the typed name in `data.stated_name`; `data.diff` maps changed dotted field paths to `{before, after}` and also records
   the optional comment and whether the operation was a reset.
-- Effective policy is loaded from gitignored `backend/var/policy.yaml` before `backend/policy.yaml`.
-  Writes atomically replace the runtime file; committed defaults remain unchanged. REST and MCP
-  reread it for subsequent operations without restart. With a custom database path, the runtime
+- Existing installations load gitignored `backend/var/policy.yaml` before `backend/policy.yaml`.
+  Managed writes prepare/fsync a temporary file and save the policy in SQLite `runtime_files`, in the
+  same transaction as the audit, events and keyed command result. The runtime YAML is atomically
+  replaced only after the outer transaction commits; audit/result/commit failure leaves it unchanged.
+  A process-shared writer lock covers commit and publication. SQLite holds the pending content,
+  including for REST/MCP reads inside the transaction, until publication succeeds. A crash or disk error
+  after commit leaves a recoverable projection: startup or the next write republishes the committed YAML.
+  Such a committed change returns success and is effective immediately; the projection failure is logged.
+  After publication the recovery row is removed and existing file-only loading remains compatible.
+  Recovery paths are relative to the database directory so restored databases stay isolated.
+  Committed defaults remain unchanged. With a custom database path, the runtime
   policy lives beside that database so independent gateway instances stay isolated.
   PUTs omitting `agents`, `customers` or `shortlist.live_max` keep the current values, including older frontend
   request shapes. Older runtime files missing those fields inherit the committed defaults; an
@@ -822,10 +830,21 @@ REST and MCP use `app.commands` for principal-scoped idempotency and token costs
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
 (optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
-same command and payload. Exact successful replays use read tokens and return the stored result;
+same principal, command route (including every target/path parameter) and payload.
+The shared replay guard rechecks current authorization before exposing any saved result: ownership,
+customer mandates, buyer organisation/role, trusted revocation issuer and operator permissions as applicable.
+Revoked/invalid credentials are rejected again at the transport boundary. Quote/order/approval guards
+also reverify their bound buyer VC. Cancellation and rejection retain their original authorization rules;
+they do not require a still-valid purchasing VC. New keyed commands cannot register without a replay guard.
+Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
-audit. Approval/rejection replays recheck the reviewer's current organisation and customer scope
-before returning the saved order. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
+audit. Spec 06 R-2's existing-order exception remains: removing a policy-row mandate alone does not deny
+the original order retry; ownership and any signed buyer credential still apply, and an existing row's
+changed customer scope is enforced. Rejection/cancellation still need no purchasing credential.
+Autonomy replay never repeats a promotion/demotion, and rechecks the target's current organisation,
+customers and existence. Changing the autonomy target under the same key returns `409 IDEMPOTENCY_CONFLICT`.
+Earlier command envelopes still load; legacy autonomy entries must also match the saved target.
+Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
 domain events commit atomically. Refusals do not cache a successful command result.
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
