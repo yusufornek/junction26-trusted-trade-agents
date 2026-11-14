@@ -67,9 +67,17 @@ class Mandates:
     def bind(self, conn, kind, object_id, token):
         if token is None:
             return
-        digest = hashlib.sha256(token.encode()).hexdigest()
-        conn.execute("INSERT OR IGNORE INTO mandate_credentials VALUES(?,?)", (digest, token))
+        digest = self.used(conn, token)
         conn.execute("INSERT INTO object_mandates VALUES(?,?,?)", (kind, object_id, digest))
+
+    @staticmethod
+    def used(conn, token):
+        """Persist only successful use, atomically with its object/audit write."""
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        sequence = conn.execute("SELECT COALESCE(MAX(last_used),0)+1 FROM mandate_credentials").fetchone()[0]
+        conn.execute("INSERT INTO mandate_credentials(digest,jwt,last_used) VALUES(?,?,?) "
+                     "ON CONFLICT(digest) DO UPDATE SET last_used=excluded.last_used", (digest, token, sequence))
+        return digest
 
     def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None):
         policy = policy or self.policy.get()
@@ -159,6 +167,7 @@ class Mandates:
                 categories = claims["vc"]["credentialSubject"].get("categories")
                 products = self.catalog.search(query, required_claims, exclude_allergens, limit, categories=categories)[0]
                 self.verify(conn, token, agent_id, customer_id, products=[p.id for p in products])
+                self.used(conn, token)
                 audit.append(conn, actor, "LOOKUP_SEARCH", "Searched the local catalog under buyer authority.",
                              data={**evidence(record), "products": [p.id for p in products],
                                    "live_calls": {"price": 0, "availability": 0}})

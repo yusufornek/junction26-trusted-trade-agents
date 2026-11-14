@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
@@ -26,6 +27,17 @@ def unb64(value):
 def quote_payload(quote):
     """Reconstruct from the JSON resource, also used by the standalone verifier."""
     q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
+    return {"id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
+            "lines": [{"product_id": line["product_id"], "units": decimal_string(line["units_needed"]),
+                       "unit_price": decimal_string(line["unit_price"]), "currency": line["currency"],
+                       "gtin": line.get("gtin"), "provenance": line["provenance"]} for line in q["lines"]],
+            "total": decimal_string(q["total"]), "expires_at": q["expires_at"],
+            "price_commitment": q["price_commitment"]}
+
+
+def quote_integrity(quote):
+    """Immutable resource evidence, separate from the spec 10 promise payload."""
+    q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
     def immutable(value):
         if isinstance(value, dict):
             return {k: immutable(v) for k, v in value.items()}
@@ -34,15 +46,28 @@ def quote_payload(quote):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return decimal_string(value)
         return value
-    # Keep the spec 10 promise fields, and authenticate the complete immutable
-    # decision/export evidence too. Only lifecycle state and request counters vary.
-    integrity = immutable({k: v for k, v in q.items() if k not in {"signature", "status", "live_calls"}})
-    return {"id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
-            "lines": [{"product_id": line["product_id"], "units": decimal_string(line["units_needed"]),
-                       "unit_price": decimal_string(line["unit_price"]), "currency": line["currency"],
-                       "gtin": line.get("gtin"), "provenance": line["provenance"]} for line in q["lines"]],
-            "total": decimal_string(q["total"]), "expires_at": q["expires_at"],
-            "price_commitment": q["price_commitment"], "integrity": integrity}
+    return immutable({k: v for k, v in q.items() if k not in {"signature", "status", "live_calls"}})
+
+
+def verify_quote(quote, jwks):
+    """Verify versioned evidence and both previously issued, unversioned formats."""
+    q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
+    signature = q["signature"]
+    header = json.loads(unb64(signature.split(".")[0]))
+    payload = quote_payload(q)
+    if "quote_version" in header:
+        verify_jws(signature, payload, jwks)
+        expected = hashlib.sha256(canonical_json(quote_integrity(q))).hexdigest()
+        if header["quote_integrity"] != expected:
+            raise ValueError("Quote evidence does not match its protected digest")
+    else:
+        try:
+            verify_jws(signature, payload, jwks)
+        except InvalidSignature:
+            # Earlier builds added this member without a version. Verify the
+            # original bytes; never re-sign or silently invalidate a live promise.
+            verify_jws(signature, {**payload, "integrity": quote_integrity(q)}, jwks)
+    return True
 
 
 def receipt_payload(order):
@@ -55,7 +80,10 @@ def receipt_payload(order):
 def verify_jws(jws, payload, jwks):
     protected, detached, signature = jws.split(".")
     header = json.loads(unb64(protected))
-    if detached or set(header) != {"alg", "kid"} or header["alg"] != "EdDSA":
+    legacy = set(header) == {"alg", "kid"}
+    versioned_quote = (set(header) == {"alg", "kid", "quote_version", "quote_integrity"}
+                       and header["quote_version"] == 2 and isinstance(header["quote_integrity"], str))
+    if detached or not (legacy or versioned_quote) or header["alg"] != "EdDSA":
         raise ValueError("Unsupported detached JWS header")
     matches = [k for k in jwks["keys"] if k.get("kid") == header["kid"]]
     if len(matches) != 1:
@@ -122,11 +150,18 @@ class SigningKeys:
                          for entry in registry["keys"] if entry["kid"] == registry["active"] or
                          datetime.fromisoformat(entry["publish_until"]) > now]}
 
-    def sign(self, payload):
+    def sign_quote(self, quote):
+        # A standard detached JWS verifier still uses exactly the spec payload.
+        # The protected extension authenticates the additional decision evidence.
+        return self.sign(quote_payload(quote), protected_fields={
+            "quote_version": 2,
+            "quote_integrity": hashlib.sha256(canonical_json(quote_integrity(quote))).hexdigest()})
+
+    def sign(self, payload, *, protected_fields=None):
         registry = self._registry()
         kid = registry["active"]
         private = serialization.load_pem_private_key((self.directory / (kid + ".pem")).read_bytes(), password=None)
-        protected = b64(canonical_json({"alg": "EdDSA", "kid": kid}))
+        protected = b64(canonical_json({"alg": "EdDSA", "kid": kid, **(protected_fields or {})}))
         signature = private.sign((protected + "." + b64(canonical_json(payload))).encode("ascii"))
         return protected + ".." + b64(signature)
 

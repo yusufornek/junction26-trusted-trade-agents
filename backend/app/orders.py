@@ -13,7 +13,7 @@ from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
 from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
-from .signing import quote_payload, receipt_payload, signature_digest, verify_jws
+from .signing import receipt_payload, signature_digest, verify_quote
 from .foundation import CORRELATION, procurement_context, trace_id
 
 
@@ -69,7 +69,7 @@ class Orders:
         raw = json.loads(row[0])
         check_owner(SimpleNamespace(agent_id=raw.get("agent_id")), agent_id, "QUOTE_NOT_FOUND")
         try:
-            verify_jws(raw["signature"], quote_payload(raw), self.signing.jwks())
+            verify_quote(raw, self.signing.jwks())
             quote = Quote.model_validate(raw)
             if (quote.expires_at.utcoffset() is None or quote.currency != "EUR" or
                     any(line.currency != quote.currency for line in quote.lines)):
@@ -78,8 +78,8 @@ class Orders:
                 bound = self.lookup_need(conn, quote.need_ref)
                 if bound.need.customer_id != quote.customer_id or bound.need.deliver_by != quote.deliver_by:
                     raise ValueError("Inconsistent need binding")
-            # A legacy absence is allowed only when itself authenticated by the
-            # immutable payload. _violations still enforces current customer rules.
+            # Historical spec 10 promises remain usable; _violations still
+            # enforces current customer rules even when need_ref is absent.
             return quote
         except (InvalidSignature, ValueError, TypeError, KeyError, AttributeError):
             raise DomainError("QUOTE_SIGNATURE_INVALID", "Stored quote signature does not match its promise") from None
@@ -244,7 +244,7 @@ class Orders:
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
-            quote.signature = self.signing.sign(quote_payload(quote))
+            quote.signature = self.signing.sign_quote(quote)
             self.mandates.bind(conn, "quote", quote.id, mandate)
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
             audit.append(conn, actor, "CREATE_QUOTE", f"Locked {len(lines)} fixed-price lines for {quote.total:.2f} EUR.",
@@ -279,8 +279,9 @@ class Orders:
                 # must not prevent it, but current buyer authority still applies.
                 bound = ("order", order.id) if self.mandates.stored(conn, "order", order.id) else ("quote", quote_id)
                 if mandate is not None or self.mandates.stored(conn, *bound) is not None:
-                    self.mandates.authorize(conn, mandate, agent_id, order.customer_id or quote.customer_id,
+                    _, _, used_mandate = self.mandates.authorize(conn, mandate, agent_id, order.customer_id or quote.customer_id,
                         products=[line.product_id for line in order.lines], bound=bound, policy=policy)
+                    self.mandates.used(conn, used_mandate)
                 audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
                              order_id=order.id, quote_id=order.quote_id,
                              data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
@@ -501,6 +502,8 @@ class Orders:
                 self._sign_receipt(order, quote, "operator")
             self._save_order(conn, order)
             self._reserve(conn, order)
+            if approve and order.mandate is not None:
+                self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
                     "evidence_revision": order.evidence_revision, **mandate_evidence(order.mandate),
                     "rule_hits": [h.model_dump() for h in order.policy.hits],

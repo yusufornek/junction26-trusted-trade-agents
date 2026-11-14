@@ -100,6 +100,12 @@ class Database:
             anchor_columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_anchors)")}
             if "raw_transaction" not in anchor_columns:
                 conn.execute("ALTER TABLE audit_anchors ADD COLUMN raw_transaction TEXT")
+            credential_columns = {row[1] for row in conn.execute("PRAGMA table_info(mandate_credentials)")}
+            if "last_used" not in credential_columns:
+                conn.execute("ALTER TABLE mandate_credentials ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0")
+                # Retain the old insertion ordering for historical credentials
+                # until a successful use supplies a more recent sequence.
+                conn.execute("UPDATE mandate_credentials SET last_used=rowid")
             revocation_columns = {row[1] for row in conn.execute("PRAGMA table_info(mandate_revocations)")}
             if "customer_id" not in revocation_columns:
                 conn.execute("ALTER TABLE mandate_revocations RENAME TO legacy_mandate_revocations")

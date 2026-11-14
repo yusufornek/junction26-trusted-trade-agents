@@ -5767,14 +5767,14 @@ components:
           - type: string
           - type: 'null'
           title: Signature
-          description: 'Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload: decimal-string
-            units/money, provenance, price_commitment, plus integrity containing every
-            immutable resource field (all except signature, status, live_calls; numeric
-            values normalized to decimal strings). Authenticates ownership, currency,
-            need binding and decision/export evidence. kid is in the protected header;
-            public keys at /.well-known/jwks.json. Legacy unsigned or narrower-payload
-            quotes remain readable but require re-quoting for new placement; existing
-            orders remain replayable.'
+          description: 'Detached RFC 7515 EdDSA JWS over the spec 10/13 RFC 8785 payload:
+            id, customer_id, deliver_by, lines (product_id, decimal-string units and
+            unit_price, currency, gtin, provenance), decimal-string total, expires_at,
+            price_commitment. Protected header: alg, kid, quote_version=2, quote_integrity
+            (SHA-256 of canonical immutable quote fields, excluding signature/status/live_calls,
+            numbers as decimal strings). Earlier unversioned spec and expanded-integrity
+            signatures remain verifiable and usable until expiry. Public keys: /.well-known/jwks.json.
+            Unsigned legacy quotes require re-quoting; existing orders remain replayable.'
         price_commitment:
           type: string
           const: gateway-locked

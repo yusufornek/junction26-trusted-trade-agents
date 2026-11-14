@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.signing import quote_payload, verify_jws  # noqa: E402
+from app.signing import verify_quote  # noqa: E402
 
 
 def timestamp(value):
@@ -32,7 +32,7 @@ def main(argv=None):
                 jwks = json.load(response)
         else:
             jwks = json.loads(Path(args.jwks).read_text())
-        verify_jws(quote["signature"], quote_payload(quote), jwks)
+        verify_quote(quote, jwks)
     except Exception as error:
         print(f"signature check failed: {type(error).__name__}", file=sys.stderr)
         return 1

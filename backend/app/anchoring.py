@@ -79,6 +79,8 @@ class Anchoring:
             raise AnchorError("Anchoring RPC failed") from None
 
     def list(self):
+        if not self.config.enabled:
+            return []
         with self.db.connect() as conn:
             return [dict(row) for row in conn.execute("SELECT entries,head_hash,chain_id,tx_hash,block_number,status,explorer_url,at "
                                                      "FROM audit_anchors ORDER BY id DESC")]
@@ -105,7 +107,7 @@ class Anchoring:
         if not isinstance(tx_hash, str) or tx_hash.lower() != expected_hash.lower():
             raise AnchorError("Anchoring transaction hash mismatch")
 
-    def anchor_once(self):
+    def anchor_once(self, *, current_head=False):
         if not self.config.enabled:
             raise AnchorError("Missing anchoring variables: " + ", ".join(self.config.missing))
         anchor_id = None
@@ -113,10 +115,20 @@ class Anchoring:
             # Serialize CLI and worker attempts across processes without a database transaction over RPC.
             with (self.db.path.parent / ".anchor.lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
+                # Capture the CLI's target before confirmation appends its own
+                # audit event. Receipt-only worker polls keep their prior behavior.
+                checkpoint = audit.verify(self.db) if current_head else None
+                if checkpoint is not None and not checkpoint["valid"]:
+                    raise AnchorError("Audit chain is invalid")
                 with httpx.Client(timeout=10, trust_env=False) as client:
                     chain_id = int(self.config.chain_id)
                     with self.db.connect() as conn:
-                        pending = conn.execute("SELECT id,tx_hash,raw_transaction,chain_id FROM audit_anchors WHERE tx_hash IS NOT NULL AND block_number IS NULL AND status IN ('sent','failed') ORDER BY id LIMIT 1").fetchone()
+                        # Prefer an already submitted CLI target so repeated calls
+                        # reconcile its durable hash instead of submitting it again.
+                        pending = conn.execute("SELECT id,entries,head_hash,tx_hash,raw_transaction,chain_id FROM audit_anchors "
+                            "WHERE tx_hash IS NOT NULL AND block_number IS NULL AND status IN ('sent','failed') "
+                            "ORDER BY (entries=? AND head_hash=?) DESC,id LIMIT 1",
+                            (checkpoint["entries"] if checkpoint else -1, checkpoint["head_hash"] if checkpoint else "")).fetchone()
                     if pending:
                         anchor_id = pending["id"]
                         if pending["chain_id"] != chain_id or int(self._rpc(client, "eth_chainId", []), 16) != chain_id:
@@ -129,40 +141,46 @@ class Anchoring:
                             if known is None:
                                 self._broadcast(client, pending["raw_transaction"], tx_hash)
                                 self._confirm(client, anchor_id, tx_hash)
-                    else:
+                        if not current_head or (pending["entries"] == checkpoint["entries"] and
+                                                pending["head_hash"] == checkpoint["head_hash"]):
+                            return next(row for row in self.list() if row["tx_hash"] == tx_hash)
+                    # A newer head needs its own transaction even while an older
+                    # checkpoint is pending. The node's pending nonce includes it.
+                    anchor_id = None
+                    if checkpoint is None:
                         checkpoint = audit.verify(self.db)
-                        if not checkpoint["valid"]:
-                            raise AnchorError("Audit chain is invalid")
-                        with self.db.connect(write=True) as conn:
-                            cursor = conn.execute("INSERT INTO audit_anchors(entries,head_hash,chain_id,status,at) VALUES(?,?,?,'sent',?)",
-                                (checkpoint["entries"], checkpoint["head_hash"], chain_id, audit.utcnow().isoformat()))
-                            anchor_id = cursor.lastrowid
-                        if int(self._rpc(client, "eth_chainId", []), 16) != chain_id:
-                            raise AnchorError("Anchoring chain ID mismatch")
-                        account = Account.from_key(self.config.private_key)
-                        nonce = int(self._rpc(client, "eth_getTransactionCount", [account.address, "pending"]), 16)
-                        priority = int(self._rpc(client, "eth_maxPriorityFeePerGas", []), 16)
-                        history = self._rpc(client, "eth_feeHistory", ["0x1", "latest", []])
-                        base_fee = int(history["baseFeePerGas"][-1], 16)
-                        payload = f"{PREFIX}{checkpoint['entries']}:{checkpoint['head_hash']}"
-                        tx = {"type": 2, "chainId": chain_id, "nonce": nonce, "to": account.address, "value": 0,
-                              "data": "0x" + payload.encode("ascii").hex(), "maxPriorityFeePerGas": priority,
-                              "maxFeePerGas": 2 * base_fee + priority}
-                        tx["gas"] = int(self._rpc(client, "eth_estimateGas", [{**{k: hex(v) if isinstance(v, int) else v for k, v in tx.items()},
-                                                                             "from": account.address}]), 16)
-                        signed = account.sign_transaction(tx)
-                        expected_hash = "0x" + signed.hash.hex().removeprefix("0x")
-                        tx_hash = expected_hash
-                        raw_transaction = "0x" + signed.raw_transaction.hex().removeprefix("0x")
-                        explorer_url = self.config.explorer_tx_url.rstrip("/") + "/" + tx_hash
-                        # Persist before any send: an accepted transaction can outlive
-                        # a lost RPC response or process crash. Never allocate a new nonce.
-                        with self.db.connect(write=True) as conn:
-                            conn.execute("UPDATE audit_anchors SET tx_hash=?,explorer_url=?,raw_transaction=? WHERE id=?",
-                                         (tx_hash, explorer_url, raw_transaction, anchor_id))
-                        self._broadcast(client, raw_transaction, tx_hash)
-                        self._confirm(client, anchor_id, tx_hash)
-                return next(row for row in self.list() if row["tx_hash"] == (pending["tx_hash"] if pending else tx_hash))
+                    if not checkpoint["valid"]:
+                        raise AnchorError("Audit chain is invalid")
+                    with self.db.connect(write=True) as conn:
+                        cursor = conn.execute("INSERT INTO audit_anchors(entries,head_hash,chain_id,status,at) VALUES(?,?,?,'sent',?)",
+                            (checkpoint["entries"], checkpoint["head_hash"], chain_id, audit.utcnow().isoformat()))
+                        anchor_id = cursor.lastrowid
+                    if int(self._rpc(client, "eth_chainId", []), 16) != chain_id:
+                        raise AnchorError("Anchoring chain ID mismatch")
+                    account = Account.from_key(self.config.private_key)
+                    nonce = int(self._rpc(client, "eth_getTransactionCount", [account.address, "pending"]), 16)
+                    priority = int(self._rpc(client, "eth_maxPriorityFeePerGas", []), 16)
+                    history = self._rpc(client, "eth_feeHistory", ["0x1", "latest", []])
+                    base_fee = int(history["baseFeePerGas"][-1], 16)
+                    payload = f"{PREFIX}{checkpoint['entries']}:{checkpoint['head_hash']}"
+                    tx = {"type": 2, "chainId": chain_id, "nonce": nonce, "to": account.address, "value": 0,
+                          "data": "0x" + payload.encode("ascii").hex(), "maxPriorityFeePerGas": priority,
+                          "maxFeePerGas": 2 * base_fee + priority}
+                    tx["gas"] = int(self._rpc(client, "eth_estimateGas", [{**{k: hex(v) if isinstance(v, int) else v for k, v in tx.items()},
+                                                                         "from": account.address}]), 16)
+                    signed = account.sign_transaction(tx)
+                    expected_hash = "0x" + signed.hash.hex().removeprefix("0x")
+                    tx_hash = expected_hash
+                    raw_transaction = "0x" + signed.raw_transaction.hex().removeprefix("0x")
+                    explorer_url = self.config.explorer_tx_url.rstrip("/") + "/" + tx_hash
+                    # Persist before any send: an accepted transaction can outlive
+                    # a lost RPC response or process crash. Never allocate a new nonce.
+                    with self.db.connect(write=True) as conn:
+                        conn.execute("UPDATE audit_anchors SET tx_hash=?,explorer_url=?,raw_transaction=? WHERE id=?",
+                                     (tx_hash, explorer_url, raw_transaction, anchor_id))
+                    self._broadcast(client, raw_transaction, tx_hash)
+                    self._confirm(client, anchor_id, tx_hash)
+                return next(row for row in self.list() if row["tx_hash"] == tx_hash)
         except Exception:
             if anchor_id is not None:
                 with self.db.connect(write=True) as conn:
@@ -198,8 +216,12 @@ class Anchoring:
                     return result
                 checkpoint = audit.verify(self.db, int(entries), digest)
                 block = self._rpc(client, "eth_getBlockByNumber", [tx["blockNumber"], False])
+                timestamp = block["timestamp"]
+                if not isinstance(timestamp, str) or not timestamp.startswith("0x"):
+                    return result
+                block_time = datetime.fromtimestamp(int(timestamp, 16), timezone.utc)
                 result["anchor_match"] = checkpoint["checkpoint_match"]
-                result["anchor_block_time"] = datetime.fromtimestamp(int(block["timestamp"], 16), timezone.utc)
+                result["anchor_block_time"] = block_time
         except Exception:
             pass  # Unavailable or malformed chain evidence is never a positive verification.
         return result

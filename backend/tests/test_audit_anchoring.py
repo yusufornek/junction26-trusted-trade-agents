@@ -47,7 +47,7 @@ class RPC:
         if method == "eth_chainId": result = "0x13882"
         elif method == "eth_getTransactionCount":
             assert body["params"] == [Account.from_key(TEST_KEY).address, "pending"]
-            result = "0x7"
+            result = hex(7 + self.calls.count("eth_sendRawTransaction"))
         elif method == "eth_maxPriorityFeePerGas": result = "0x3"
         elif method == "eth_feeHistory": result = {"baseFeePerGas": ["0xa", "0xb"]}
         elif method == "eth_estimateGas": result = "0x186a0"
@@ -133,7 +133,15 @@ def test_ac_2_external_prefix_checkpoint_detects_edited_history(gateway, anchor,
         assert client.get("/v1/audit/verify", params={"anchor": "latest"}).json()["anchor_match"] is False
 
 
-def test_ac_3_unconfigured_is_off_cli_names_missing_variables(gateway, monkeypatch, capsys, respx_mock):
+@pytest.mark.parametrize("history", [False, True])
+def test_ac_3_unconfigured_is_off_cli_names_missing_variables(gateway, anchor, rpc, monkeypatch, capsys, respx_mock, history):
+    if history:
+        add_event(gateway)
+        rpc.mined = True
+        anchor.anchor_once()
+        assert anchor.list()
+    before = len(respx_mock.calls)
+    anchor.config = AnchorConfig()
     for name in (*REQUIRED, "ANCHOR_EVERY_N_ENTRIES"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(anchor_audit, "load_env", lambda: None)
@@ -144,8 +152,69 @@ def test_ac_3_unconfigured_is_off_cli_names_missing_variables(gateway, monkeypat
     assert anchor_audit.main(["--db", str(gateway.db.path)]) == 1
     error = capsys.readouterr().err
     assert all(name in error for name in REQUIRED)
-    assert not respx_mock.calls
+    assert len(respx_mock.calls) == before
     assert not Anchoring(gateway.db, AnchorConfig(private_key=TEST_KEY)).config.enabled
+
+
+@pytest.mark.parametrize("mined", [False, True])
+def test_review_cli_anchors_current_head_after_pending(gateway, anchor, rpc, monkeypatch, mined):
+    add_event(gateway, "FIRST")
+    anchor.anchor_once()
+    add_event(gateway, "SECOND")
+    checkpoint = audit.verify(gateway.db)
+    rpc.mined = mined
+    monkeypatch.setattr(anchor_audit, "load_env", lambda: None)
+    monkeypatch.setattr(anchor_audit.AnchorConfig, "from_env", lambda: anchor.config)
+    assert anchor_audit.main(["--db", str(gateway.db.path)]) == 0
+    assert any(row["entries"] == checkpoint["entries"] and row["head_hash"] == checkpoint["head_hash"]
+               and row["status"] in {"sent", "confirmed"} for row in anchor.list())
+    assert rpc.calls.count("eth_sendRawTransaction") == 2
+    assert rpc.transaction["nonce"] == 8
+
+
+def test_review_disabled_anchoring_hides_persisted_history(gateway, anchor, rpc):
+    add_event(gateway)
+    rpc.mined = True
+    anchor.anchor_once()
+    before = len(rpc.calls)
+    disabled = Anchoring(gateway.db, AnchorConfig())
+    assert disabled.list() == []
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM audit_anchors").fetchone()[0] == 1
+    assert len(rpc.calls) == before
+
+
+def test_review_cli_reuses_pending_current_head(gateway, anchor, rpc, monkeypatch):
+    add_event(gateway, "FIRST")
+    anchor.anchor_once()
+    add_event(gateway, "SECOND")
+    monkeypatch.setattr(anchor_audit, "load_env", lambda: None)
+    monkeypatch.setattr(anchor_audit.AnchorConfig, "from_env", lambda: anchor.config)
+    for _ in range(2):
+        assert anchor_audit.main(["--db", str(gateway.db.path)]) == 0
+    assert len(anchor.list()) == 2
+    assert rpc.calls.count("eth_sendRawTransaction") == 2
+
+
+@pytest.mark.parametrize("block", [None, {}, {"timestamp": "malformed"}, {"timestamp": None},
+                                    {"timestamp": "0x" + "f" * 50}])
+def test_review_block_time_required_for_anchor_match(gateway, anchor, rpc, respx_mock, block):
+    add_event(gateway)
+    rpc.mined = True
+    anchor.anchor_once()
+    original = rpc.respond
+    def respond(request):
+        body = json.loads(request.content)
+        if body["method"] == "eth_getBlockByNumber":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": block})
+        return original(request)
+    respx_mock.post(RPC_URL).mock(side_effect=respond)
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.get("/v1/audit/verify", params={"anchor": "latest"})
+    assert response.status_code == 200
+    assert response.json()["anchor_match"] is False
+    assert response.json().get("anchor_block_time") is None
+    assert anchor.verify("latest") == {"anchor_match": False, "anchor_block_time": None}
 
 
 def test_ac_4_automatic_failure_isolated_and_next_trigger_retries(gateway, anchor, rpc, need, upstream):

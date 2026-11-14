@@ -143,7 +143,9 @@ def test_ac_7_buyer_and_supplier_principals_and_key_provisioning(gateway, tmp_pa
     supplier = keys.resolve("supplier-secret", gateway.policy.get())
     assert (viewer.kind, viewer.role, viewer.organisation_id, viewer.customer_ids) == ("buyer_user", "buyer_viewer", "hotel", ("1", "42"))
     assert supplier.kind == supplier.role == "supplier_agent"
-    assert viewer.credential_ref.startswith("sha256:")
+    assert viewer.credential_ref == "agent:viewer:key:1"
+    assert supplier.credential_ref == "agent:supplier:key:1"
+    assert keys.resolve("viewer-secret").credential_ref == viewer.credential_ref
     env = tmp_path / ".env.local"
     provision(env, set(gateway.policy.get().identities))
     assert "viewer:" in env.read_text() and "supplier:" in env.read_text()

@@ -257,7 +257,7 @@ def test_ac_8_operator_buyer_identity(client, gateway, need, upstream):
 
 def test_ac_9_no_secret_leaks(client, gateway, need, upstream, caplog):
     objects(gateway, need, "agent-a")
-    outputs = [client.get(path, headers=OPERATOR_HEADERS).text for path in ("/v1/policy", "/v1/audit", "/v1/orders", "/openapi.json")]
+    outputs = [client.get(path, headers=OPERATOR_HEADERS).text for path in ("/v1/me", "/v1/policy", "/v1/audit", "/v1/orders", "/openapi.json")]
     outputs.extend([caplog.text, repr(gateway.settings), repr(gateway.settings.keys)])
     with gateway.db.connect() as conn:
         for table in ("lookups", "quotes", "orders", "audit"):
@@ -267,6 +267,20 @@ def test_ac_9_no_secret_leaks(client, gateway, need, upstream, caplog):
         assert secret not in text
         assert sha256(secret.encode()).hexdigest() not in text
     assert "AGENT_KEYS" not in client.get("/v1/policy", headers=OPERATOR_HEADERS).text
+
+
+@pytest.mark.parametrize("identity", ["agent-a", "agent-b", "operator"])
+def test_review_principal_reference_contains_no_digest(client, gateway, identity):
+    secret = OPERATOR_TOKEN if identity == "operator" else AGENT_TOKENS[identity]
+    response = client.get("/v1/me", headers={"Authorization": f"Bearer {secret}"})
+    assert response.status_code == 200
+    principal = gateway.settings.keys.resolve(secret, gateway.policy.get())
+    public = json.dumps(principal.public())
+    digest = sha256(secret.encode()).hexdigest()
+    assert digest not in response.text and digest not in public
+    assert secret not in response.text and secret not in public
+    assert principal.credential_ref and not principal.credential_ref.startswith("sha256:")
+    assert principal.credential_ref == gateway.settings.keys.resolve(secret).credential_ref
 
 
 def test_ac_10_idempotent_key_generation(tmp_path):

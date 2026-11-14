@@ -19,7 +19,7 @@ def main(argv=None):
         print("Missing anchoring variables: " + ", ".join(config.missing), file=sys.stderr)
         return 1
     try:
-        anchor = Anchoring(Database(args.db), config).anchor_once()
+        anchor = Anchoring(Database(args.db), config).anchor_once(current_head=True)
         print(f"{anchor['status']}: {anchor['explorer_url']}")
         return 0
     except AnchorError as error:

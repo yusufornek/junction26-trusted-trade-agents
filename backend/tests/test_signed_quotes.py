@@ -6,6 +6,7 @@ import json
 import struct
 import subprocess
 import sys
+from decimal import Decimal
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -38,18 +39,63 @@ def make_quote(gateway, need, qty=1):
     return gateway.orders.create_quote(quote_request(need, qty=qty, need_ref=lookup.lookup_id))
 
 
+def specified_payload(quote):
+    """Build the spec 10/13 promise independently of production payload helpers."""
+    q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
+    def decimal(value):
+        return format(Decimal(str(value)).normalize(), "f")
+    return {"id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
+            "lines": [{"product_id": line["product_id"], "units": decimal(line["units_needed"]),
+                       "unit_price": decimal(line["unit_price"]), "currency": line["currency"],
+                       "gtin": line.get("gtin"), "provenance": line["provenance"]} for line in q["lines"]],
+            "total": decimal(q["total"]), "expires_at": q["expires_at"],
+            "price_commitment": q["price_commitment"]}
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_review_outstanding_spec_payload_quote(gateway, need, upstream, tmp_path, expanded):
+    quote = make_quote(gateway, need)
+    data = quote.model_dump(mode="json")
+    payload = specified_payload(data)
+    if expanded:
+        def immutable(value):
+            if isinstance(value, dict):
+                return {k: immutable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [immutable(v) for v in value]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return format(Decimal(str(value)).normalize(), "f")
+            return value
+        payload["integrity"] = immutable({k: v for k, v in data.items() if k not in {"signature", "status", "live_calls"}})
+    data["signature"] = gateway.signing.sign(payload)
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
+    saved, keys = tmp_path / "quote.json", tmp_path / "jwks.json"
+    saved.write_text(json.dumps(data))
+    keys.write_text(json.dumps(gateway.signing.jwks()))
+    result = subprocess.run([sys.executable, str(BACKEND / "scripts/verify_quote.py"), str(saved),
+                             "--jwks", str(keys)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert gateway.orders.get_quote(quote.id).signature == data["signature"]
+    order = gateway.orders.place_order(quote.id, "outstanding-spec-promise")
+    assert order.status == "CONFIRMED"
+
+
 def test_ac_1_quote_jwk_and_each_signed_field(gateway, need, upstream):
     quote = make_quote(gateway, need)
     with TestClient(create_app(gateway)) as client:
         response = client.get("/.well-known/jwks.json")
         assert response.status_code == 200  # deliberately no auth
         jwks = response.json()
-    payload = quote_payload(quote)
-    assert set(payload) == {"id", "customer_id", "deliver_by", "lines", "total", "expires_at", "price_commitment", "integrity"}
+    payload = specified_payload(quote)
+    assert set(payload) == {"id", "customer_id", "deliver_by", "lines", "total", "expires_at", "price_commitment"}
     assert set(payload["lines"][0]) == {"product_id", "units", "unit_price", "currency", "gtin", "provenance"}
     assert all(isinstance(payload["lines"][0][k], str) for k in ("units", "unit_price"))
     independent_verify(quote.signature, payload, jwks)
-    for field in set(payload) - {"lines", "integrity"}:
+    protected = json.loads(base64.urlsafe_b64decode(quote.signature.split(".")[0] + "=="))
+    assert protected["quote_version"] == 2
+    assert len(protected["quote_integrity"]) == 64
+    for field in set(payload) - {"lines"}:
         changed = deepcopy(payload)
         changed[field] += "tamper"
         with pytest.raises(InvalidSignature):

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from app.db import DomainError
 from app.mandates import sign_jwt, decode
 from app.mcp_server import create_server
 from mcp.server.mcpserver.exceptions import ToolError
@@ -56,6 +57,71 @@ def headers(token):
 def quote(gateway, need, token, qty=100):
     lookup = gateway.find_offers(need, f"agent:{AGENT}", mandate=token)
     return gateway.orders.create_quote(quote_request(need, qty=qty, need_ref=lookup.lookup_id), AGENT, mandate=token)
+
+
+def test_review_search_only_mandate_stats(gateway, buyer):
+    token = issue(buyer)
+    gateway.mandates.search("milk", [], [], 1, token=token, agent_id=AGENT)
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        response = client.get("/v1/stats")
+    assert response.status_code == 200
+    row = next(a for a in response.json()["agents_seen"] if a["actor"] == f"agent:{AGENT}")
+    assert row["registered"] is True
+    assert row["mandate_id"] == decode(token)[1]["jti"]
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM mandate_credentials").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("operation", ["search", "lookup"])
+def test_review_latest_successful_mandate_use(gateway, need, upstream, buyer, operation):
+    first, second = issue(buyer), issue(buyer)
+    def use(token):
+        if operation == "search":
+            gateway.mandates.search("milk", [], [], 1, token=token, agent_id=AGENT)
+        else:
+            gateway.find_offers(need, f"agent:{AGENT}", mandate=token)
+    for token in (first, second, first):
+        use(token)
+    # Failed use must not displace the last successful authority.
+    bad = issue(buyer, exp=int(audit.utcnow().timestamp()) - 1)
+    with pytest.raises(DomainError) as error:
+        use(bad)
+    assert error.value.code == "MANDATE_INVALID"
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        row = next(a for a in client.get("/v1/stats").json()["agents_seen"] if a["actor"] == f"agent:{AGENT}")
+    assert row["registered"] is True
+    assert row["mandate_id"] == decode(first)[1]["jti"]
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM mandate_credentials").fetchone()[0] == 2
+
+
+def test_review_legacy_mandate_credentials_survive_usage_migration(gateway, buyer, tmp_path):
+    import hashlib
+    import sqlite3
+    from app.db import Database
+    from app.mandates import Mandates
+    from app.stats import read_stats
+    database = tmp_path / "legacy-credentials.db"
+    first, second = issue(buyer), issue(buyer)
+    digests = [hashlib.sha256(t.encode()).hexdigest() for t in (first, second)]
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE mandate_credentials (digest TEXT PRIMARY KEY, jwt TEXT NOT NULL)")
+        conn.executemany("INSERT INTO mandate_credentials VALUES(?,?)", zip(digests, (first, second)))
+        conn.execute("CREATE TABLE object_mandates (kind TEXT NOT NULL, object_id TEXT NOT NULL, "
+                     "digest TEXT NOT NULL REFERENCES mandate_credentials(digest), PRIMARY KEY(kind,object_id))")
+        conn.execute("INSERT INTO object_mandates VALUES('quote','historical',?)", (digests[1],))
+    db = Database(database)
+    mandates = Mandates(db, gateway.policy, gateway.catalog)
+    with db.connect(write=True) as conn:
+        assert mandates.stored(conn, "quote", "historical") == second
+        audit.append(conn, f"agent:{AGENT}", "LOOKUP_SEARCH", "Historical successful search")
+    assert read_stats(db, mandates=mandates).agents_seen[0].mandate_id == decode(second)[1]["jti"]
+    mandates.search("milk", [], [], 1, token=first, agent_id=AGENT)
+    restarted = Database(database)
+    assert read_stats(restarted, mandates=mandates).agents_seen[0].mandate_id == decode(first)[1]["jti"]
+    with restarted.connect() as conn:
+        assert mandates.stored(conn, "quote", "historical") == second
+        assert conn.execute("SELECT count(*) FROM mandate_credentials").fetchone()[0] == 2
 
 
 def test_ac_1_valid_buyer_authority_without_policy_row(gateway, need, upstream, buyer):

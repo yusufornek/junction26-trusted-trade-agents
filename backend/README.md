@@ -492,6 +492,10 @@ MCP `get_order_ubl(order_id, document)` returns the identical XML. Agents can ex
 only their own orders; the operator can export all orders. XSD tests use
 `xmlschema` with local-only loading of `vendor/ubl-2.1/xsd/maindoc/`.
 
+Public principal `credential_ref` values use a non-secret identity/key-slot
+reference (`agent:<id>:key:1` or `operator:<id>:key:1`). Bearer secrets and their
+SHA-256 digests are never included in these references or principal responses.
+
 ## Signed promises and tamper-evident audit
 
 Each quote carries `price_commitment: gateway-locked` and an Ed25519 detached
@@ -501,10 +505,15 @@ canonical JSON payload (`app.signing.quote_payload`) contains:
 
 - id, customer_id, deliver_by, total, expires_at, price_commitment;
 - lines: product_id, units (from units_needed), unit_price, currency, gtin, provenance.
-- integrity: every immutable quote resource field, including agent_id, currency,
-  need_ref, plan_ref, mandate, warnings, hard_constraint_violations and full lines
-  (totals, fit, tax prices, units and all decision/export evidence). It excludes
-  only signature, status and live_calls; all numeric values become decimal strings.
+
+The canonical payload preserves spec 10 (and the GTIN addition in spec 13). New
+quotes add protected JWS header members `quote_version: 2` and `quote_integrity`:
+the latter is SHA-256 hex of the RFC 8785 canonical immutable resource, excluding
+only signature, status and live_calls, with all numbers normalized to decimal
+strings. This also authenticates owner, need binding, warnings, fit, tax prices
+and export evidence without expanding the detached promise payload. A standard
+JWS verifier can reconstruct the specified payload independently; the supplied
+verifier also checks the protected evidence digest.
 
 Money and quantity values in the signed payload are normalized decimal strings
 (no exponent or unnecessary trailing zeros); the existing JSON resource keeps
@@ -515,8 +524,12 @@ signing input is `base64url(protected) + '.' + base64url(canonical_payload)`
 (RFC 7515 encoded payload, not RFC 7797). Quote status changes do not alter the
 signed price promise. Placement checks the persisted signature before stock
 lookup or committing; alteration is refused and audited as QUOTE_SIGNATURE_INVALID.
-Legacy unsigned or earlier narrower-payload quotes remain readable and must be
-re-quoted for a new order. Existing orders replay after ownership/identity checks
+Both earlier unversioned formats (the specified payload and the short-lived
+expanded payload with an integrity member) remain readable, verifiable offline
+and usable for placement until expiry, subject to current authority and policy.
+Their original signatures are preserved; they are never silently re-signed.
+Unsigned legacy quotes remain readable and require re-quoting for a new order.
+Existing orders replay after ownership/identity checks
 without requiring a historical quote key to remain published. Their stored buyer
 mandate is still revalidated, including when no header is supplied.
 An authenticated legacy absence of `need_ref` remains loadable and enforces its
@@ -673,7 +686,10 @@ including expiry, issuer, customer and category, while the approver must still
 be an authenticated operator. A revoked pending order can be rejected.
 Objects and successful audit entries expose `mandate {id, issuer, limits,
 valid_until}` with effective limits; stats `agents_seen` includes the currently
-valid, trusted, unrevoked `mandate_id`. Registration reflects current policy or
+valid, trusted, unrevoked `mandate_id` from the latest successful use (including
+local catalog searches). Credentials are deduplicated by digest; successful use
+updates a durable monotonic sequence, including repeated A → B → A use. Historical
+credential rows retain insertion ordering until reused. Registration reflects current policy or
 current buyer authority; historical evidence stays on objects and audit entries.
 New revocations apply only to customers trusting the actual signing key, even
 when an issuer ID or key ID is reused with different keys. Legacy unscoped
@@ -715,7 +731,10 @@ From `backend/`, anchor once:
 
 The command prints `sent:` or `confirmed:` and the explorer link. Without
 configuration it exits 1 and names the missing variables. Run again to poll a
-sent transaction. The computed hash and signed bytes are stored before broadcast;
+sent transaction. Each invocation captures its current head before receipt
+reconciliation; if an older pending checkpoint exists, it reconciles that hash
+then submits the captured head using the pending nonce. Background receipt polls
+only reconcile existing submissions. The computed hash and signed bytes are stored before broadcast;
 after an uncertain send, retry checks that hash and may rebroadcast identical
 bytes if the node does not know it, without allocating a new nonce. Existing
 anchor rows lacking signed bytes still load and reconcile by their recorded hash.
@@ -723,6 +742,8 @@ Confirmed receipts update `audit_anchors`
 and append exactly one `AUDIT_ANCHORED` event. RPC errors produce sanitized
 messages and a failed row; retry preserves a previously broadcast transaction
 hash. `GET /v1/audit/anchors` lists checkpoints for authenticated callers.
+When configuration is removed, it returns an empty list without deleting history
+or making RPC calls. Positive verification requires a valid block timestamp.
 
 With `ANCHOR_EVERY_N_ENTRIES` set, a post-commit background worker anchors after
 N new audit entries. RPC work runs outside the request database transaction;

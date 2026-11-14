@@ -74,7 +74,7 @@ class Credentials:
             policy.agents[principal.id].customer_ids if policy and principal.id in policy.agents else [])
         return Principal(principal.id, principal.operator, identity.kind if identity and not principal.operator else principal.kind,
                          organisation, tuple(customers), identity.role if identity and not principal.operator else principal.role,
-                         "sha256:" + digest.hex())
+                         ("operator:" if principal.operator else "agent:") + principal.id + ":key:1")
 
 
 bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")

@@ -35,7 +35,7 @@ def read_stats(db, since=None, *, registered_agents=(), mandates=None):
             from .mandates import decode
             # Authority is current even if the latest historical use falls outside
             # the reporting window. Never infer it from an audit metadata object.
-            for row in conn.execute("SELECT DISTINCT jwt FROM mandate_credentials ORDER BY rowid DESC"):
+            for row in conn.execute("SELECT jwt FROM mandate_credentials ORDER BY last_used DESC, rowid DESC"):
                 try:
                     claims = decode(row[0])[1]
                     subject = claims["vc"]["credentialSubject"]
