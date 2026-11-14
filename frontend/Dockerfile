@@ -5,6 +5,8 @@ RUN npm ci
 # Explicit copies keep local dependencies, generated files and secrets out.
 COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
 COPY frontend/src/ ./src/
+# Favicons and the share image: Vite copies public/ into dist as-is.
+COPY frontend/public/ ./public/
 RUN npm run build
 
 FROM caddy:2

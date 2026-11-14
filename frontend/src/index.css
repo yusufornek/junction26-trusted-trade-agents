@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Icons are not markup: scanning their text (an SVG's transform="…") invents utility classes. */
+@source not "../public";
 
 /* Design language — see docs/DECISIONS.md.
    Luotsi: teal and slate on white, from the Luotsi brand kit (Luotsi-7a-Kit/README.md).

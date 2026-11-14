@@ -68,3 +68,9 @@ jobs:
             echo "$path $code"
             [ "$code" = 200 ] || { echo "::error::$SITE_URL$path answered $code"; exit 1; }
           done
+          # A file missing from the console image still answers 200, with the app page: check the type.
+          for path in /favicon.svg /og-image.png; do
+            type=$(curl -s -o /dev/null -w '%{content_type}' --max-time 10 "$SITE_URL$path")
+            echo "$path $type"
+            case "$type" in text/html*|"") echo "::error::$SITE_URL$path is not in the console image"; exit 1;; esac
+          done
