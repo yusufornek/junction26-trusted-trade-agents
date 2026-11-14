@@ -151,8 +151,8 @@ class Policy:
                                 detail=f"Agent {agent_id} has no mandate for customer {customer_id}"))
             rejected = True
         if agent_id is not None and mandate is None:
-            hits.append(RuleHit(rule="unregistered_agent", detail=f"Agent {agent_id} has no mandate; human approval is required."))
-            approval = True
+            hits.append(RuleHit(rule="unregistered_agent", detail=f"Agent {agent_id} has no mandate; ordering requires a mandate."))
+            rejected = True
         if mandate is not None and autonomous_total + Decimal(str(total)) > Decimal(str(mandate.max_auto_daily_total_eur)):
             hits.append(RuleHit(rule="max_auto_daily_total_eur", detail=(
                 f"Agent {agent_id}: {autonomous_total:.2f} + {total:.2f} exceeds "

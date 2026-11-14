@@ -2,6 +2,16 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **Ordering requires a mandate.** An agent without a mandate can look up offers and get quotes;
+  `place_order` answers `403 AGENT_NOT_REGISTERED` and the attempt is audited. Registered agents
+  (`hotel-chain-agent`, `web-console`) act for customer "1" with a rolling 24-hour autonomous limit of 5,000 EUR
+  — a clear line for the pitch: identity first, then policy (spec 06 R-2).
+- 2026-11-14 — **Every substitute outside the buyer's stated preferences goes to a human** (brand, pack size,
+  price cap, label) — it matches the brief's example of what needs sign-off; the operator can switch the rule
+  in the policy (`OUTSIDE_PREFERENCE` in `warnings_need_approval`) (spec 08).
+- 2026-11-14 — **Demo starts from a clean state:** `backend/scripts/reset_demo.py` archives the local database
+  and runtime policy under `backend/var/archive/` and rebuilds the catalog — the audit log stays append-only
+  and the demo screen shows only the demo's own orders (spec 14).
 - 2026-11-13 — **Pitch opening: A.I.mo vs our agent, side by side.** Give the challenge's exact sentence ("1,000 L
   lactose-free milk by Monday …") first to A.I.mo in My Aimo, then to our buyer agent. A.I.mo returns product lists
   (drinking milk mixed with sour/curdled milk, no quantity, price, stock or order); our agent returns 1,000 × 1 L

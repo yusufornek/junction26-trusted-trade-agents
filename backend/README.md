@@ -5,7 +5,7 @@ One Python core serves FastAPI and the MCP 2.3 server. It searches the local cat
 runs the approval policy. The upstream mock has no search or order endpoint: quotes, orders,
 approvals and reservations exist only in this gateway.
 
-## Run
+## Commands
 
 No installation is needed in the supplied environment. From the **repository root**:
 
@@ -29,12 +29,21 @@ In separate terminals, starting in `backend/`:
 
 # Regenerate the shared frontend contract; no startup or credentials required
 .venv/bin/python scripts/export_openapi.py
+
+# Archive demo state and rebuild a clean catalog (stop the API first)
+.venv/bin/python scripts/reset_demo.py
 ```
 
 The build reads the unchanged gzip/CSV files in `../data/` and writes `backend/var/app.db` (gitignored).
 Rebuilding replaces only catalog/FTS rows, retaining orders and audit. The real 17,546-row catalog
 built in 1.719 seconds in the supplied environment. API docs: `http://127.0.0.1:8000/docs`.
 `GET /health` returns the catalog row count; build the catalog before demonstrating lookup.
+
+`scripts/reset_demo.py` moves the database, any WAL/SHM sidecars and runtime policy into a new
+`var/archive/YYYYMMDD-HHMMSS/` folder, then rebuilds the catalog with empty transaction/audit state.
+The effective policy returns to `policy.yaml` defaults. Every earlier archive is preserved.
+The script refuses an answering API port (default 8000); use `--port PORT` for another port or
+`--force` to continue anyway. It prints the archive path, product count and API start command.
 
 Startup loads `VALIO_API_BASE`, `VALIO_API_KEY`, and `OPENAI_API_KEY` from repo-root `.env.local`
 if present. Existing environment variables take precedence. The parser accepts comments, optional
@@ -75,9 +84,9 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    `need_ref` then defaults to that lookup. Exactly one of `lines` or `plan_ref` is required.
    Customer and delivery date must match the lookup. Invalid plan indices return 422.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
-   header `Idempotency-Key`, and optional `X-Agent-Id` (default `external`, unregistered and always
-   requiring human approval). Use a registered identity such as `hotel-chain-agent` for autonomous
-   purchases. Fixed prices remain the quoted prices. Repeated keys return the existing order;
+   header `Idempotency-Key`, and `X-Agent-Id` identifying a registered agent such as
+   `hotel-chain-agent`. The default `external` is unregistered: ordering requires a mandate
+   (`403 AGENT_NOT_REGISTERED`); lookups and quotes are open. Fixed prices remain the quoted prices. Repeated keys return the existing order;
    reuse with another quote/agent is a conflict.
 4. If `PENDING_APPROVAL`, inspect `GET /v1/approvals`. A human calls
    `POST /v1/approvals/{order_id}/approve` or `/reject`, body
@@ -142,8 +151,9 @@ REST uses `X-Agent-Id` (also accepted by `POST /v1/offers` for lookup audit attr
 identity using `--agent-id` at launch; tools cannot change it per call. The frontend buyer flow
 should send `X-Agent-Id: web-console`.
 
-Unregistered agents may search and quote, but their orders always require human approval with
-`unregistered_agent`; hard rejection rules still take precedence. Registered agents may quote or
+Ordering requires a mandate. Unregistered agents may search and quote; placement returns
+`403 AGENT_NOT_REGISTERED`, creates no order or reservation, and audits the failed attempt under
+`agent:<id>`. Plan previews show `REJECTED` with `unregistered_agent`. Registered agents may quote or
 order only for their listed customers; violations return `403 CUSTOMER_NOT_IN_MANDATE`, audit a
 failed attempt, and do not commit an order. Scope is rechecked at placement under the current policy.
 
@@ -154,8 +164,10 @@ are summed before adding the new total. Exceeding the daily ceiling adds `max_au
 with the prior spend, new total and ceiling. Cancelled, pending, rejected, expired and human-approved
 orders do not consume that budget. Equal-to-limit totals pass. This check and insertion share the
 SQLite writer lock across REST/MCP instances, so concurrent split orders cannot bypass the ceiling.
-Idempotent replays retain their existing result and never add spend. A human may approve an order
-held for a missing mandate or spend limit through the normal inbox.
+Idempotent replays retain their existing result, even after mandate removal, and never add spend.
+A human may approve an order held for a spend limit through the normal inbox. If the placing agent
+lost its mandate, approval returns `403 AGENT_NOT_REGISTERED` with rule hits in `data`; the order
+stays pending and a human can reject it.
 
 ## Fulfilment plans and substitutes (spec 08)
 
@@ -275,5 +287,5 @@ This local development gateway has one named human approver role and no authenti
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
 Signed quotes, verifiable-credential mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
 automatic re-planning after commitment, recipe-aware substitutions, payments, deployment and separate buyer-agent code are deferred.
-The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}`.
+The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}` with optional `data` for domain evidence.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.

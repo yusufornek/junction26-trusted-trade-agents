@@ -39,7 +39,10 @@ def create_app(gateway=None):
 
     @app.exception_handler(DomainError)
     async def domain_error(request, error):
-        return JSONResponse(status_code=error.status, content={"code": error.code, "message": error.message})
+        content = {"code": error.code, "message": error.message}
+        if error.data:
+            content["data"] = error.data
+        return JSONResponse(status_code=error.status, content=content)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
@@ -108,7 +111,8 @@ def create_app(gateway=None):
     def product(id: str, request: Request):
         return svc(request).catalog.get(id)
 
-    @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices")
+    @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
+              description="Quotes and lookups are open to unregistered agents. Ordering requires a mandate.")
     def create_quote(body: QuoteRequest, request: Request, x_agent_id: Annotated[str, Header()] = "external"):
         return svc(request).orders.create_quote(body, x_agent_id)
 
@@ -116,7 +120,10 @@ def create_app(gateway=None):
     def get_quote(id: str, request: Request):
         return svc(request).orders.get_quote(id)
 
-    @app.post("/v1/orders", response_model=Order, summary="Accept an unexpired quote; policy may require approval")
+    @app.post("/v1/orders", response_model=Order, summary="Accept an unexpired quote under an agent mandate",
+              description="Ordering requires a mandate: unregistered agents receive 403 AGENT_NOT_REGISTERED, "
+                          "with no order or reservation created. Existing idempotent orders are returned on retry. "
+                          "Registered agents are subject to policy and may require human approval.")
     def place_order(body: OrderRequest, request: Request,
                     idempotency_key: Annotated[str, Header(min_length=1, description="Retry key: same quote and agent returns the same order.")],
                     x_agent_id: Annotated[str, Header()] = "external"):
@@ -145,7 +152,9 @@ def create_app(gateway=None):
         service = svc(request)
         return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)]
 
-    @app.post("/v1/approvals/{order_id}/approve", response_model=Order)
+    @app.post("/v1/approvals/{order_id}/approve", response_model=Order,
+              description="Re-evaluate the placing agent's policy. A revoked mandate returns 403 AGENT_NOT_REGISTERED "
+                          "with rule hits in data; the order remains pending and can be rejected.")
     def approve(order_id: str, body: ApprovalRequest, request: Request):
         return svc(request).orders.approve(order_id, body.approver, body.comment)
 

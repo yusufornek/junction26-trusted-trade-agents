@@ -50,6 +50,7 @@ def test_full_rest_flow_1000_l(gateway, need, upstream):
         assert client.get("/health", headers={"Origin": "http://localhost:5173"}).headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
+@pytest.mark.parametrize("registered_agents", [("mcp-agent",)], indirect=True)
 def test_mcp_tools_use_shared_core(gateway, need, upstream):
     server = create_server(gateway)
 

@@ -61,6 +61,7 @@ def test_quote_live_recheck_and_fit_carry(gateway, need, upstream):
     assert gateway.orders.get_quote(quote.id) == quote
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_expired_quote_persists_and_audits(gateway, need, upstream, monkeypatch):
     quote = fitted_quote(gateway, need)
     monkeypatch.setattr(audit, "utcnow", lambda: quote.expires_at + timedelta(seconds=1))
@@ -128,6 +129,7 @@ def test_no_fit_needs_approval_and_no_override_of_sale_block(gateway, need, upst
     assert gateway.orders.get_order(order.id).status == "PENDING_APPROVAL"
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_hard_constraint_violation_rejected(gateway, need, upstream):
     result = gateway.find_offers(need)
     quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=result.lookup_id, product_id="2"))
@@ -136,6 +138,7 @@ def test_hard_constraint_violation_rejected(gateway, need, upstream):
     assert "hard_constraint_violation" in {h.rule for h in order.policy.hits}
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_unknown_upstream_rejected_and_bad_price_cannot_quote(gateway, need, upstream):
     upstream.unknown = True
     quote = gateway.orders.create_quote(quote_request(need, qty=1))

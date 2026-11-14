@@ -64,11 +64,11 @@ def test_exceptions_ac_1_single_preview_identity_no_side_effects_and_legacy(gate
         assert plan["kind"] == "single" and plan["lines"][0]["units"] == 1000
         assert plan["policy_preview"] == {"outcome": "CONFIRMED", "hits": []}
         unknown = client.post("/v1/offers", json=need.model_dump(mode="json")).json()
-        assert unknown["plans"][0]["policy_preview"]["outcome"] == "PENDING_APPROVAL"
+        assert unknown["plans"][0]["policy_preview"]["outcome"] == "REJECTED"
         assert unknown["plans"][0]["policy_preview"]["hits"][0]["rule"] == "unregistered_agent"
 
         async def check_mcp():
-            for identity, expected in [(AGENT, "CONFIRMED"), ("unknown-mcp", "PENDING_APPROVAL")]:
+            for identity, expected in [(AGENT, "CONFIRMED"), ("unknown-mcp", "REJECTED")]:
                 result = await create_server(gateway, identity).call_tool(
                     "find_offers", {"need": need.model_dump(mode="json")})
                 assert not result.is_error

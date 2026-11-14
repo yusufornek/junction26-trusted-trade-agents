@@ -24,7 +24,7 @@ def create_server(gateway, agent_id="mcp-agent"):
     server = MCPServer("Valio Aimo Trusted Trade Agents", instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. "
-        "Unregistered agents always need human approval. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
+        "Ordering requires a mandate; unregistered agents can look up offers and create quotes. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
         "Previews include mandate and daily limits; stock and policy may change, so placement is authoritative. "
         "Quote a plan with plan_ref {lookup_id, plan_index}, or pass explicit lines and lookup_id as need_ref to preserve fit and constraints. " + WARNINGS))
@@ -39,7 +39,7 @@ def create_server(gateway, agent_id="mcp-agent"):
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{agent_id}")
 
-    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents may quote but always need human approval to order. Quantity is in sales units. Explicit lines may pass lookup_id as need_ref to carry fit, preferences and hard constraints. No negotiation or signing in MVP.")
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents may look up offers and quote, while ordering requires a mandate. Quantity is in sales units. Explicit lines may pass lookup_id as need_ref to carry fit, preferences and hard constraints. No negotiation or signing in MVP.")
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
         try:
@@ -48,7 +48,7 @@ def create_server(gateway, agent_id="mcp-agent"):
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Accept an unexpired fixed-price quote. Unregistered agents always need human approval (unregistered_agent). Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval happens in the REST inbox; no upstream order endpoint exists.")
+    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookups and quotes are open. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval happens in the REST inbox; no upstream order endpoint exists.")
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
             return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id)

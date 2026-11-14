@@ -49,28 +49,42 @@ def test_ac_1_registered_agent_within_limits_confirms(gateway, need, upstream):
     assert order.policy.hits == []
 
 
-def test_ac_2_unregistered_agent_requires_human_and_is_attributed(gateway, need, upstream):
+def test_ac_2_unregistered_agent_cannot_order_but_can_lookup_and_quote(gateway, need, upstream):
     upstream.price = 14
+    upstream.model, upstream.amount = "Stock", 1000
     with TestClient(create_app(gateway)) as client:
-        # Unregistered agents may look and quote, and REST defaults to external.
-        lookup = client.post("/v1/offers", json=need.model_dump(mode="json")).json()
-        quote = client.post("/v1/quotes", json=quote_request(need, qty=100, need_ref=lookup["lookup_id"]).model_dump(mode="json")).json()
-        response = client.post("/v1/orders", json={"quote_id": quote["id"]}, headers={"Idempotency-Key": "external"})
-        assert response.status_code == 200
-        order = response.json()
-        assert order["agent_id"] == "external" and order["status"] == "PENDING_APPROVAL"
-        assert [h["rule"] for h in order["policy"]["hits"]] == ["unregistered_agent"]
+        # REST defaults to external; lookups and quotes remain open.
+        lookup_response = client.post("/v1/offers", json=need.model_dump(mode="json"))
+        assert lookup_response.status_code == 200
+        lookup = lookup_response.json()
+        assert lookup["plans"]
+        for plan in lookup["plans"]:
+            assert plan["policy_preview"]["outcome"] == "REJECTED"
+            assert "unregistered_agent" in [h["rule"] for h in plan["policy_preview"]["hits"]]
+        quote_response = client.post("/v1/quotes", json=quote_request(
+            need, qty=100, need_ref=lookup["lookup_id"]).model_dump(mode="json"))
+        assert quote_response.status_code == 200
+        quote = quote_response.json()
+        calls = len(upstream.price_calls), len(upstream.availability_calls)
+        response = client.post("/v1/orders", json={"quote_id": quote["id"]},
+                               headers={"Idempotency-Key": "external"})
+        assert response.status_code == 403 and response.json()["code"] == "AGENT_NOT_REGISTERED"
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls))
+        assert gateway.orders.get_quote(quote["id"]).status == "OPEN"
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT count(*) FROM orders").fetchone()[0] == 0
+            assert conn.execute("SELECT count(*) FROM reservations").fetchone()[0] == 0
+        event = gateway.audit()[-1]
+        assert event.action == "PLACE_ORDER_FAILED" and event.actor == "agent:external"
+        assert event.quote_id == quote["id"] and event.data["error"] == "AGENT_NOT_REGISTERED"
+        assert "ordering requires a mandate" in event.summary
         assert client.get("/v1/stats").json()["agents_seen"] == [
-            {"actor": "agent:external", "order_count": 1, "registered": False}]
+            {"actor": "agent:external", "order_count": 0, "registered": False}]
         client.post("/v1/offers", json=need.model_dump(mode="json"), headers={"X-Agent-Id": "web-console"})
         assert gateway.audit()[-1].actor == "agent:web-console"
         stats = client.get("/v1/stats").json()
         assert {entry["actor"]: entry["registered"] for entry in stats["agents_seen"]} == {
             "agent:web-console": True, "agent:external": False}
-        assert client.post(f"/v1/approvals/{order['id']}/approve", json={"approver": "Ada"}).json()["status"] == "CONFIRMED"
-        # The approval audit keeps the mandate rule the human signed off.
-        approve = [e for e in gateway.audit(order_id=order["id"]) if e.action == "APPROVE"][-1]
-        assert "unregistered_agent" in [h["rule"] for h in approve.data["rule_hits"]]
 
 
 def test_ac_3_daily_limit_serializes_orders_and_uses_rolling_window(gateway, need, upstream, monkeypatch):
@@ -239,7 +253,7 @@ def test_ac_9_mcp_uses_fixed_server_identity_for_mandate(gateway, need, upstream
 
     async def run():
         for server, identity, expected in ((registered, AGENT, "CONFIRMED"),
-                                           (unregistered, "outsider", "PENDING_APPROVAL")):
+                                           (unregistered, "outsider", "AGENT_NOT_REGISTERED")):
             tools = await server.list_tools()
             assert all("agent_id" not in t.input_schema["properties"] for t in tools)
             assert "unregistered" in next(t.description for t in tools if t.name == "place_order").lower()
@@ -248,12 +262,58 @@ def test_ac_9_mcp_uses_fixed_server_identity_for_mandate(gateway, need, upstream
             assert gateway.audit()[-1].actor == f"agent:{identity}"
             quote = await server.call_tool("create_quote", {"customer_id": "1", "deliver_by": str(need.deliver_by),
                 "need_ref": offers.structured_content["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
-            placed = await server.call_tool("place_order", {"quote_id": quote.structured_content["id"], "idempotency_key": identity})
-            assert not placed.is_error
-            assert placed.structured_content["agent_id"] == identity
-            assert placed.structured_content["status"] == expected
+            assert not quote.is_error
+            args = {"quote_id": quote.structured_content["id"], "idempotency_key": identity}
+            if expected == "AGENT_NOT_REGISTERED":
+                with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
+                    await server.call_tool("place_order", args)
+                event = gateway.audit()[-1]
+                assert event.action == "PLACE_ORDER_FAILED" and event.actor == f"agent:{identity}"
+                assert event.data["error"] == "AGENT_NOT_REGISTERED"
+            else:
+                placed = await server.call_tool("place_order", args)
+                assert not placed.is_error
+                assert placed.structured_content["agent_id"] == identity
+                assert placed.structured_content["status"] == expected
         with pytest.raises(ToolError, match="CUSTOMER_NOT_IN_MANDATE"):
             await registered.call_tool("create_quote", {"customer_id": "2", "deliver_by": str(need.deliver_by),
                 "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
 
     asyncio.run(run())
+
+
+def test_ac_11_revoked_mandate_blocks_approval_but_allows_replay_and_rejection(gateway, need, upstream):
+    set_mandate(gateway, per_order=500)
+    upstream.price = 14
+    upstream.model, upstream.amount = "Stock", 1000
+    order = place(gateway, need, "revoke-pending")
+    assert order.status == "PENDING_APPROVAL"
+    with gateway.db.connect() as conn:
+        reservations = [tuple(row) for row in conn.execute("SELECT * FROM reservations")]
+    assert reservations == [(order.id, "1", 100)]
+
+    with TestClient(create_app(gateway)) as client:
+        body = gateway.policy.get().model_dump(mode="json")
+        del body["agents"][AGENT]
+        assert client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"}).status_code == 200
+        # Placement replays still return the existing order after the mandate is removed.
+        calls = len(upstream.availability_calls)
+        replay = client.post("/v1/orders", json={"quote_id": order.quote_id}, headers={
+            "Idempotency-Key": "revoke-pending", "X-Agent-Id": AGENT})
+        assert replay.status_code == 200 and replay.json()["id"] == order.id
+        assert len(upstream.availability_calls) == calls
+
+        denied = client.post(f"/v1/approvals/{order.id}/approve", json={"approver": "Ada"})
+        assert denied.status_code == 403 and denied.json()["code"] == "AGENT_NOT_REGISTERED"
+        hits = denied.json()["data"]["rule_hits"]
+        assert "unregistered_agent" in [hit["rule"] for hit in hits]
+        event = gateway.audit(order_id=order.id)[-1]
+        assert event.action == "APPROVE_FAILED" and event.data["rule_hits"] == hits
+        pending = client.get(f"/v1/orders/{order.id}").json()
+        assert pending["status"] == "PENDING_APPROVAL" and pending["approver"] is None
+        with gateway.db.connect() as conn:
+            assert [tuple(row) for row in conn.execute("SELECT * FROM reservations")] == reservations
+        rejected = client.post(f"/v1/approvals/{order.id}/reject", json={"approver": "Ada"})
+        assert rejected.status_code == 200 and rejected.json()["status"] == "REJECTED"
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT count(*) FROM reservations").fetchone()[0] == 0

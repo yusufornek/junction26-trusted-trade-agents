@@ -163,6 +163,8 @@ class Orders:
                 return order
             quote = self._quote(conn, quote_id)
             policy = self.policy.get()
+            if agent_id not in policy.agents:
+                raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired; create a new quote before ordering")
@@ -292,10 +294,13 @@ class Orders:
                 order.lines = self._refresh_stock(conn, order.lines, quote.deliver_by, stock, order.id)
                 # Human review may accept delivery warnings, but never hard violations or unverifiable stock.
                 # Evaluate as the placing agent so the audit keeps the mandate rules the human signs off
-                # (unregistered agent, per-order and daily limits); only REJECTED blocks an approval.
+                # (per-order and daily limits); only REJECTED blocks an approval.
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, warnings=quote.warnings)
                 if evaluation.outcome == "REJECTED":
+                    if any(hit.rule == "unregistered_agent" for hit in evaluation.hits):
+                        raise DomainError("AGENT_NOT_REGISTERED", "Approval requires a mandate for the placing agent", 403,
+                                          data={"rule_hits": [h.model_dump() for h in evaluation.hits]})
                     raise DomainError("HARD_CONSTRAINT_VIOLATION", "Approval cannot override hard constraints or sales blocks",
                                       data={"rule_hits": [h.model_dump() for h in evaluation.hits]})
                 if any(w.code == "AVAILABILITY_ERROR" for o in order.lines for w in o.warnings):

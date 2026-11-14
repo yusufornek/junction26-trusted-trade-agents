@@ -21,5 +21,7 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 17 | Order timeline endpoint (`GET /v1/orders/{id}/timeline`) | Backend | done | spec `docs/specs/07-order-timeline.md` |
 | 18 | Price-complete shortlist — stable best offer | Backend | done | spec `docs/specs/09-price-complete-shortlist.md` |
 | 19 | Exceptions — fulfilment plans, policy preview, substitutes | Backend | done | spec `docs/specs/08-exceptions.md`; verified live 14.11 |
+| 20 | Ordering requires a mandate (`403 AGENT_NOT_REGISTERED` for unregistered agents) | Backend (Claude → Codex) | done | spec `docs/specs/06-agent-mandate.md` R-2; verified live 14.11 |
+| 21 | Demo reset script (`backend/scripts/reset_demo.py`) | Backend (Claude → Codex) | done | spec `docs/specs/14-demo-reset.md`; verified live 14.11 |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

@@ -184,6 +184,7 @@ def test_stats_small_flow_and_since(gateway, need, upstream):
         assert client.get("/v1/stats", params={"since": "bad"}).status_code == 422
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_stats_rejections_legacy_placements_and_timezone(gateway, need, upstream):
     result = gateway.find_offers(need)
     first = gateway.orders.create_quote(quote_request(need, qty=200, need_ref=result.lookup_id))
@@ -211,6 +212,7 @@ def test_stats_rejections_legacy_placements_and_timezone(gateway, need, upstream
         assert client.get("/v1/stats", params={"since": naive}).json() == client.get("/v1/stats", params={"since": aware}).json()
 
 
+@pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_stats_top_five_warnings_and_rules(gateway, need, upstream, respx_mock):
     upstream.shift = 1
     upstream.sales_block = True

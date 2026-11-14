@@ -1,6 +1,6 @@
 # 06 — Agent mandate (Core 3: what each agent may decide alone)
 
-Status: built (verified live 2026-11-14) · defaults await the team review · Found in the core audit on 2026-11-14.
+Status: built (verified live 2026-11-14) · R-2 revised and verified live 2026-11-14 (`external`: quote 200, order 403, attempt audited; `web-console`: CONFIRMED) · Found in the core audit on 2026-11-14.
 
 ## Purpose
 Today one policy applies to every caller and the spend limit is per order. Two gaps follow: an unknown agent has
@@ -13,8 +13,13 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
   limit is the lower of this and `approval.max_auto_total_eur`), `max_auto_daily_total_eur` (cumulative, see R-3)
   and `note` (free text, who granted it). Defaults in `backend/policy.yaml` register `hotel-chain-agent` and
   `web-console` (the operator console's own buyer flow) for customer `"1"` with a daily limit of 5,000 EUR.
-- **R-2 Unregistered agents can look and quote, a human decides their orders:** an order from an agent without
-  a mandate always goes to `PENDING_APPROVAL` with rule hit `unregistered_agent`.
+- **R-2 Ordering requires a mandate** (team decision 2026-11-14): an agent without a mandate can look up offers
+  and get quotes. `place_order` from such an agent answers `403 AGENT_NOT_REGISTERED`, creates no order and no
+  reservation, and is audited as a failed attempt under `agent:<id>`. Policy previews (`plans[].policy_preview`)
+  for such an agent show outcome `REJECTED` with rule hit `unregistered_agent`, so the agent learns it before
+  quoting. An idempotent retry of an order that already exists returns that order. A pending order whose agent
+  lost its mandate after placement answers `403 AGENT_NOT_REGISTERED` (with the rule hits) on approve; a human
+  can reject it.
 - **R-3 Cumulative limit:** when the sum of this agent's orders that were confirmed without a human in the last
   24 hours (cancelled ones excluded) plus the new order's total exceeds `max_auto_daily_total_eur`, the order
   goes to `PENDING_APPROVAL` with rule hit `max_auto_daily_total_eur` and the numbers in `detail`.
@@ -33,7 +38,9 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
 
 ## Acceptance criteria
 - **AC-1** Registered agent, order within all limits → `CONFIRMED`, no hits (unchanged behaviour).
-- **AC-2** Unregistered agent, same order → `PENDING_APPROVAL` with `unregistered_agent`.
+- **AC-2** Unregistered agent: lookup and quote succeed, the plan preview shows `REJECTED` with
+  `unregistered_agent`; `place_order` → `403 AGENT_NOT_REGISTERED`, no order row, no reservation, the failed
+  attempt is in the audit log under `agent:<id>`.
 - **AC-3** Registered agent with daily limit 2,500: first order 1,400 → `CONFIRMED`; second order 1,400 →
   `PENDING_APPROVAL` with `max_auto_daily_total_eur` ("1,400 + 1,400 exceeds 2,500").
 - **AC-4** After the first order is cancelled, the same second order → `CONFIRMED`.
@@ -44,10 +51,14 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
   audited.
 - **AC-8** `PUT /v1/policy` without `agents` keeps mandates; with a changed mandate the audit diff shows the
   field; invalid mandates → `422`.
-- **AC-9** Over MCP the identity from `--agent-id` is the one checked (registered vs. not).
+- **AC-9** Over MCP the identity from `--agent-id` is the one checked: a registered identity confirms, an
+  unregistered one gets `AGENT_NOT_REGISTERED` from `place_order`.
 - **AC-10** Console flow: an order placed from the buyer page is recorded as `agent:web-console` and confirms within its mandate.
 
+- **AC-11** A `PENDING_APPROVAL` order whose agent's mandate was removed afterwards: approve →
+  `403 AGENT_NOT_REGISTERED` carrying the `unregistered_agent` hit, the order stays pending; reject works.
+
 ## For the review
-Defaults chosen tonight and easy to change in `policy.yaml`: unregistered agents may quote but never
-auto-confirm; daily window = rolling 24 h; daily limit 5,000 EUR. A signed mandate (verifiable credential)
-remains a later step.
+Defaults easy to change in `policy.yaml`: daily window = rolling 24 h; daily limit 5,000 EUR. Decided on
+2026-11-14: ordering requires a mandate (R-2). A signed mandate (verifiable credential) remains a later step
+(spec 12).

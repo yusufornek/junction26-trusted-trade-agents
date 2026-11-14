@@ -295,6 +295,7 @@ class OrderTimeline(Model):
 class ErrorResponse(Model):
     code: str = Field(description="Stable domain error code, e.g. EXPIRED_QUOTE.")
     message: str
+    data: dict | None = Field(default=None, description="Additional error evidence, including approval rule_hits when available.")
 
 
 class Health(Model):
@@ -350,7 +351,7 @@ class PolicyDocument(Model):
     reject: RejectPolicy
     ranking_weights: RankingWeights
     shortlist: ShortlistPolicy = Field(default_factory=lambda: ShortlistPolicy(catalog_pool=40))
-    agents: dict[str, AgentMandate] = Field(default_factory=dict, description="Agent identity to mandate; unregistered agents always require human approval.")
+    agents: dict[str, AgentMandate] = Field(default_factory=dict, description="Agent identity to mandate; ordering requires a mandate. Lookups and quotes are open to unregistered agents.")
 
     @model_validator(mode="after")
     def known_codes(self):

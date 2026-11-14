@@ -29,6 +29,7 @@ def calls(upstream):
 
 
 @pytest.mark.parametrize("decision,status", [("approve", "CONFIRMED"), ("reject", "REJECTED")])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, decision, status):
     lookup, quote, order = place(gateway, need)
     response = client.post(f"/v1/approvals/{order.id}/{decision}", json={"approver": "Ada"})
@@ -56,6 +57,7 @@ def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, de
 
 
 @pytest.mark.parametrize("expired", [False, True])
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_timeline_ac2_quote_without_lookup(client, gateway, need, upstream, monkeypatch, expired):
     _, quote, order = place(gateway, need, with_lookup=False)
     if expired:
@@ -77,6 +79,7 @@ def test_timeline_ac2_quote_without_lookup(client, gateway, need, upstream, monk
     assert calls(upstream) == before
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_timeline_ac3_replay_failures_and_cancellation(client, gateway, need, upstream):
     _, quote, order = place(gateway, need)
     # A separate order, even by the same agent, must never enter this timeline.
@@ -108,6 +111,7 @@ def test_timeline_ac3_replay_failures_and_cancellation(client, gateway, need, up
     assert calls(upstream) == before
 
 
+@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
 def test_timeline_ac4_totals_sum_actual_step_calls(client, gateway, need, upstream, respx_mock, monkeypatch):
     # Both lookups share the process cache. Only the referenced one belongs to the order.
     gateway.find_offers(need)
