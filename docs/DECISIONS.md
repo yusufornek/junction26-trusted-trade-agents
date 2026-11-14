@@ -217,3 +217,13 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   Apache-2.0 forecaster.
 - Why: the challenge scores autonomy and guardrails (20 %) and exception robustness (15 %); Gökalp wants anomalies
   detected and turned into solutions, and personalised setup for small and large businesses.
+
+## 2026-11-14 — Capability specs instead of scenario features (specs 47–53)
+- Decision: the foundation is complete; new work turns scenarios (the brief's five, Astra's earlier five and fifteen)
+  into general capabilities that cover each scenario and every similar one: purchase intent integrity (47), untrusted
+  input containment (48), suitability constraint engine (49), commitment ceiling and tolerance (50), resource ledger
+  (51), document reconciliation (52), neutral ranking, private RFQ and supply watch (53). The earlier scenario-shaped
+  spec 47 is folded into 49, 51 and 52. Each capability is built in its own worktree with one focused test per
+  acceptance criterion; the full suite runs once before a push. Further scenarios come from an Astra sector research
+  round and an Astra unexpected-situations round, mapped to capabilities by Fable.
+- Why: scenario-specific code does not generalise to what judges try; heavy test fan-out was slowing delivery.

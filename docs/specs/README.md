@@ -53,5 +53,18 @@ change or extend.
 | 43 | [Accounts, tenants and audiences](43-accounts-tenants-audiences.md) | Buyer businesses sign in, manage their team and bind their own agents; buyer / tenant / operator audiences on every connection type; strict tenant isolation | in progress |
 | 44 | [Agent governance inside a buyer business](44-agent-governance.md) | Agent ownership, three policy layers with provenance, change requests for loosening, versions and simulation, agent register, pause, alerts, governance report | in progress |
 | 45 | [Guardrail profiles and anomaly detection](45-guardrail-profiles-and-anomalies.md) | Sign-up with business profile → preset guardrails, approver threshold, four-eyes; quantity/price/velocity/new-category anomalies with fixes; optional Timestral forecast band | in progress |
+| 46 | [The five brief scenarios](46-brief-scenarios.md) | On-hand stock, time feasibility, recipe-logic substitution with trade-off, stock-out watch, proactive suggestions, nutrition limits, five demo scripts | in progress |
+| 47 | [Purchase intent integrity](47-purchase-intent-integrity.md) | One intent = one commitment across retries, protocols, amendments, cancellation races, agent handover and partial fulfilment | in progress |
+| 48 | [Untrusted input containment](48-untrusted-input-containment.md) | Provenance on supplier/document text, authorised envelope on every state change, instruction-like content flags, quarantine | in progress |
+| 49 | [Suitability constraint engine](49-suitability-constraint-engine.md) | One declarative engine for allergens, nutrition, shelf life at consumption date, framework agreements, certifications; unknown data is never proof | in progress |
+| 50 | [Commitment ceiling and tolerance](50-commitment-ceiling.md) | Max payable with tolerances checked at re-quote, catch-weight allocation, confirmation, delivery and invoice | in progress |
+| 51 | [Resource ledger and reservations](51-resource-ledger.md) | Budgets, storage slots, returnable assets and pooled cases as atomically reserved resources | in progress |
+| 52 | [Document reconciliation](52-document-reconciliation.md) | Order ↔ confirmation ↔ delivery note ↔ receiving ↔ invoice matching, signed claims and disputes | in progress |
+| 53 | [Neutral ranking, private RFQ and supply watch](53-neutral-ranking-and-supply-watch.md) | Explainable affiliation-blind ranking with replay, sealed RFQs, supply events raising risks on affected orders | in progress |
+| 54 | [Supplier fact integrity and freshness](54-supplier-fact-integrity.md) | Response contracts, staged catalogue refresh, product fingerprints, typed quantities, source agreement, fact freshness, time authority | in progress |
+| 55 | [Decision authority integrity](55-decision-authority-integrity.md) | Scoped decision sets, natural-person four-eyes, delegation without cycles and escalation, shown-evidence binding, site context, policy epoch | in progress |
+| 56 | [Agent conduct guard and protected capacity](56-agent-conduct-guard.md) | Priority classes on supplier budgets, no-progress guard, cumulative baseline, new key context, daily buyer digest | in progress |
+| 57 | [Audit narrative for reviewers](57-audit-narrative.md) | Plain-language story of an order, agent or period from the audit log; every sentence cites its entries; highlights human decisions and guardrail hits | in progress |
+| 58 | [Make-or-buy decomposition](58-make-or-buy-decomposition.md) | Missing prepared component → make it from ingredients (and the reverse) with cost, labour, skill and allergen trade-off | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .
