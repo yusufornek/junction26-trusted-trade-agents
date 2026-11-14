@@ -622,11 +622,13 @@ class Orders:
         )
 
     def list_orders(self, pending_only=False, agent_id=None):
+        from .auth import customer_in_scope
         self.expire()
         with self.db.connect() as conn:
             sql = "SELECT data FROM orders" + (" WHERE status='PENDING_APPROVAL'" if pending_only else "") + " ORDER BY rowid DESC"
             orders = [Order.model_validate_json(r[0]) for r in conn.execute(sql)]
-            return [order for order in orders if agent_id is None or order.agent_id == agent_id]
+            return [order for order in orders if agent_id is None or (
+                order.agent_id == agent_id and customer_in_scope(agent_id, order.customer_id))]
 
     def approve(self, order_id, approver, comment="", evidence_revision=None, *, actor=None):
         return self._review(order_id, approver, comment, True, evidence_revision, actor=actor)

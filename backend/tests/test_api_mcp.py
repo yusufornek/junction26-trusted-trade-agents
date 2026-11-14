@@ -177,7 +177,11 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/suggestions", "/v1/suggestions/{id}/prepare",
                                     "/v1/suggestions/{id}/make-recurring", "/v1/suggestions/{id}/dismiss",
                                     "/v1/suggestions/{id}/snooze", "/v1/buyer/memory-preferences",
-                                    "/v1/buyer/memory", "/v1/connections", "/v1/connections/{connection_id}"}
+                                    "/v1/buyer/memory", "/v1/connections", "/v1/connections/{connection_id}",
+                                    "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
+                                    "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token",
+                                    "/oauth/register", "/v1/oauth/clients", "/v1/oauth/requests/{request_id}",
+                                    "/v1/oauth/requests/{request_id}/decision"}
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"].get("200", operation["responses"].get("201"))["content"]

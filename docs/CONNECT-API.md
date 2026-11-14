@@ -72,11 +72,33 @@ Claude Desktop, Claude Code, Cursor and VS Code connect to `https://<host>/mcp` 
 database, with the same keys. Caddy already forwards `/mcp*`. `docs/DEPLOY.md` rules out a second process on the
 same database. The console probes with a JSON-RPC `ping` to `/mcp`; any answer other than `404` counts as served.
 
-## Not covered: claude.ai on the web and ChatGPT
+## ChatGPT and claude.ai (OAuth)
 
-Both add remote MCP servers only through an OAuth sign-in window. The console marks them "needs sign-in" and points
-people to the clients above. Supporting them means OAuth 2.1 with dynamic client registration on the gateway, a
-separate decision.
+Show the public MCP URL (`GATEWAY_PUBLIC_URL` + `/mcp`) to paste into the client's remote MCP connector,
+with "Sign in with OAuth" instructions. No agent key is generated or copied for this path. The gateway's
+OAuth window asks the operator to sign in with the operator token, shows the client name and redirect host,
+and lets the operator choose an existing agent or a new agent id, allowed customers and scopes, then approve
+or deny. New agents start with `approval_required`; existing mandates remain unchanged. The operator token
+is entered only on the gateway's sign-in page and is never handed to the MCP client.
+
+Discovery starts at the `resource_metadata` URL in `/mcp`'s `401 WWW-Authenticate` header. Both protected
+resource metadata paths and `/.well-known/oauth-authorization-server` are public. Clients use authorization
+code + PKCE S256, `resource=<public MCP URL>`, and CIMD or `/oauth/register` (DCR requires
+`application_type: web` or `native`). Authorization responses include `iss` and echo the client's `state`.
+
+An approved grant appears in `GET /v1/connections` with `credential_kind: "oauth"`, `client: "chatgpt"`
+for ChatGPT callbacks or `"mcp_other"` otherwise, and `key_prefix: "oauth"` (a label, never a token prefix).
+It has no copyable key. Existing API-key connection response shapes stay unchanged. The same DELETE endpoint
+revokes the connection and all its OAuth token families immediately. Access tokens work only on `/mcp`.
+
+For a console-owned consent screen, set `FRONTEND_CONSENT_URL` to its HTTPS URL. Authorization redirects
+there with only `?request_id=...`. Using operator Bearer authentication, fetch
+`GET /v1/oauth/requests/{request_id}` for `{id, client_name, redirect_host, resource, scopes, expires_at,
+status, customer_ids, agents}`. Submit `POST /v1/oauth/requests/{request_id}/decision` with
+`{decision: "approve", agent_id, customer_ids, scopes?}` or `{decision: "deny"}`. Navigate once to the
+returned `redirect_url`; it contains a single-use authorization code or `error=access_denied` and must
+never be persisted or logged. A decided request cannot be replayed. Without this setting the backend's
+plain HTML consent page is used. Human accounts and tenants are a later step in spec 43.
 
 ## How the console checks a connection
 
