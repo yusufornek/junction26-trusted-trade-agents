@@ -48,6 +48,10 @@ def create_app(gateway=None, *, settings=None, keys=None):
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    from .buyer import router as buyer_router
+    from .evidence import router as evidence_router
+    app.include_router(buyer_router)
+    app.include_router(evidence_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

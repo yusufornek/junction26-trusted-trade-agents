@@ -80,6 +80,8 @@ class Mandates:
         return digest
 
     def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None):
+        from .buyer import check_suspension
+        check_suspension(self.db, agent_id)
         policy = policy or self.policy.get()
         if bound:
             original = self.stored(conn, *bound)
@@ -162,6 +164,8 @@ class Mandates:
         return MandateRecord(id=claims["jti"], issuer=claims["iss"], limits={}, valid_until=valid_until), subject
 
     def search(self, query, required_claims, exclude_allergens, limit, *, token, agent_id):
+        from .buyer import check_suspension
+        check_suspension(self.db, agent_id)
         if token is None:
             return self.catalog.search(query, required_claims, exclude_allergens, limit)[0]
         actor = f"agent:{agent_id}"

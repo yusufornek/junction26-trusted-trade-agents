@@ -1,5 +1,55 @@
 # Trusted Trade Agents backend MVP
 
+## Buyer view and portable evidence (specs 28–29)
+
+`GET /v1/buyer/{agents,mandates,spend,orders,approvals,activity}` accepts `buyer_user`
+credentials with roles `buyer_viewer`, `buyer_approver`, or `buyer_admin`; the operator
+may read all customers. Responses include `organisation_id` and `customer_ids`.
+Identities and organisations are configured in policy; credentials still come from
+`AGENT_KEYS`. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
+or `/reject` (the existing `/v1/approvals` routes also accept them). Approval retains
+the evidence-revision rule and records `human:buyer_approver:<credential ref>`, the
+organisation and `approval_side=buyer`. Viewers cannot review.
+
+Buyer admins use `POST /v1/buyer/agents/{agent_id}/suspend` or `/resume` with an
+optional `{reason}` body, and `POST /v1/buyer/mandates/{jti}/revoke` for a previously
+used buyer VC. These local emergency controls are durable, scoped and audited.
+Buyer writes accept `Idempotency-Key` through the shared command ledger.
+Suspension returns `403 AGENT_SUSPENDED`, `CONTACT_ADMIN` on the next procurement
+command; history remains readable. Revocation reuses spec 12's revocation ledger,
+so bound pending orders cannot be approved. Spend uses policy's rolling 24-hour
+autonomous ledger, effective daily limits, pending commitments and human-approved
+totals. Domain activity is newest first with actors and human-readable summaries.
+
+`GET /v1/orders/{order_id}/evidence` downloads a ZIP; `?format=json` returns its
+signed manifest. MCP `get_order_evidence` returns the same manifest with authenticated,
+immutable artifact and bundle links. The order agent, its scoped buyer organisation,
+and the operator can read it; other agents receive 404. The ZIP includes signed quote,
+receipt, audit entries and hash-only links for all undisclosed entries, signed checkpoint,
+UBL Order/OrderResponse, public JWKS, optional anchor metadata, and `VERIFY.md`.
+The signed manifest binds order/customer/environment, the artifact inventory and SHA-256
+digests. Snapshots remain downloadable after later activity and key rotations.
+
+From `backend/`, using **independently obtained trusted keys**:
+
+```sh
+.venv/bin/python scripts/verify_evidence.py purchase.zip --trusted-jwks /trusted/gateway-jwks.json
+# Optional network anchor verification and explicit local official schema directory:
+.venv/bin/python scripts/verify_evidence.py purchase.zip --trusted-jwks /trusted/gateway-jwks.json --rpc-url https://polygon-rpc.example --xsd-dir vendor/ubl-2.1
+```
+
+The JSON report separates `signature_valid`, `trusted_issuer_match`, `audit_consistent`,
+`anchor_status` (`matched`, `pending`, `not_checked`), `ubl_schema_valid` and
+`supplier_acceptance` (`simulated`), plus inventory and binding checks. It names failed
+artifacts/entries and identifies offline versus network checks. Exit 0 requires all
+executed checks to pass. Without RPC, the anchor is `not_checked`; a configured RPC
+with an unconfirmed transaction fails with `pending`. UBL schemas default to the vendored
+official UBL 2.1 directory and never load remote schema hints. Bundled keys are compared,
+never treated as the trust root. `/.well-known/jwks-history.json` retains all public keys
+indefinitely for historical evidence; `/.well-known/jwks.json` retains spec 10's current
+seven-day quote-key window. Save trusted historical keys before offline verification.
+The upstream has no order API: receipts and UBL records explicitly remain gateway-simulated.
+
 One Python core serves FastAPI and the MCP 2.3 server. It searches the local catalog, screens a
 40-product pool with Decisions, checks live Valio price/availability for suitable candidates (up to 25 by default), locks fixed-price quotes, then
 runs the approval policy. The upstream mock has no search or order endpoint: quotes, orders,

@@ -15,6 +15,7 @@ from .foundation import CORRELATION, PRINCIPAL, correlation_id
 from .recovery import problem, validation_problem
 from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
+from .evidence import EvidenceManifest, build_bundle
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
@@ -160,6 +161,11 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
         return gateway.orders.get_order(order_id, agent_id)
+
+    @server.tool(description="Get this agent's portable transaction evidence manifest and authenticated artifact links, or download the ZIP at bundle_url. Includes signed quote/receipt/checkpoint, hash-only cross-customer audit links, UBL 2.1, historical JWKS, anchor metadata when present, and VERIFY.md. Verify with scripts/verify_evidence.py purchase.zip --trusted-jwks independently-trusted.json; bundled keys are not a trust root. No RPC means anchor_status=not_checked. Supplier acceptance is simulated; no supplier order was sent. Other agents' orders return ORDER_NOT_FOUND.")
+    def get_order_evidence(order_id: str) -> EvidenceManifest:
+        manifest = build_bundle(gateway, order_id, PRINCIPAL.get() or Principal(agent_id))[0]
+        return EvidenceManifest.model_validate(manifest)
 
     @server.tool(description="Export this agent's own order as UBL 2.1 XML, identical to GET /v1/orders/{id}/ubl. document=order (default) or response; response codes AP confirmed, RE rejected/cancelled/expired, CA pending. Includes sales-unit GTINs and UN/ECE unit codes. Party endpoint placeholders need data from Valio Aimo; gateway-simulated, no supplier transmission. Another agent's order is ORDER_NOT_FOUND.")
     def get_order_ubl(order_id: str, document: Literal["order", "response"] = "order") -> str:

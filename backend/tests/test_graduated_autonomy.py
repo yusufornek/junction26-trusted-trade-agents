@@ -249,7 +249,7 @@ def test_ac_7_foreign_admin_hidden_own_buyer_admin_and_approver_scoped(gateway, 
         signed = client.post(f"/v1/approvals/{pending.id}/approve", json={"approver": "Buyer manager"}, headers=agent_headers("buyer"))
         assert signed.status_code == 200, signed.text
         assert signed.json()["status"] == "CONFIRMED" and signed.json()["approval_side"] == "buyer"
-        assert gateway.audit(order_id=pending.id)[-1].actor == "human:buyer"
+        assert gateway.audit(order_id=pending.id)[-1].actor == "human:buyer_approver:agent:buyer:key:1"
         assert change(client, headers=agent_headers("hotel-agent")).status_code == 200
         assert place(gateway, need).status == "CONFIRMED"
         assert len([e for e in gateway.audit() if e.action == "AUTONOMY_CHANGED"]) == 1

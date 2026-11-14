@@ -38,6 +38,7 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "EVIDENCE_CHANGED": "order.evidence_changed", "POLICY_UPDATED": "policy.updated",
                  "MANDATE_REVOKED": "mandate.revoked"}
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
+EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
@@ -46,16 +47,19 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         return
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
-    if kind == "autonomy":
+    if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
+    if kind == "mandate":
+        aggregate_id = ",".join(data.get("jti_revoked", []))
     if aggregate_id is None:
         return  # Historical/imported audit notes do not themselves change an aggregate.
     table = {"order": "orders", "quote": "quotes", "request": "lookups"}.get(kind)
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
-    if kind == "autonomy":
-        context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", [])}
+    if kind in {"autonomy", "agent", "mandate"}:
+        context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
+                   "organisation_id": data.get("organisation_id")}
     revision = conn.execute("SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM events WHERE aggregate_type=? AND aggregate_id=?",
                             (kind, aggregate_id)).fetchone()[0]
     event_id = obj.get("links", {}).get("event_id") if action in {"LOOKUP", "CREATE_QUOTE"} else None
