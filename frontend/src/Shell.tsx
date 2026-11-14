@@ -23,13 +23,22 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { api, hasToken, onAuthChange, setToken } from "./api";
+import { api, auth, hasSession, hasToken, onAuthChange, setToken, type Account } from "./api";
 import { Avatar } from "./charts";
 import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { Card, ErrorNote, useAsync } from "./ui";
 
 /** Set at build time from the server's DEMO_OPERATOR_TOKEN (deploy/docker-compose.yml); never committed. */
 const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
+
+/** What each role can open: organisation people get 403 on the operator's stats, policy and connection endpoints, so
+ *  those pages are not offered to them. Valio staff and the operator token see everything. */
+const ROLE_PAGES: Record<string, string[]> = {
+  tenant_admin: ["/approvals", "/orders", "/repeat", "/governance", "/changes", "/team", "/audit", "/trust"],
+  approver: ["/approvals", "/orders", "/repeat", "/governance", "/audit", "/trust"],
+  viewer: ["/orders", "/repeat", "/audit", "/trust"],
+  member: ["/orders", "/repeat", "/audit", "/trust"],
+};
 
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
@@ -80,6 +89,10 @@ export default function Shell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [signedIn, setSignedIn] = useState(hasToken);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [useToken, setUseToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<unknown>(null);
@@ -91,7 +104,31 @@ export default function Shell() {
   const [rangeOpen, setRangeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  useEffect(() => onAuthChange(() => setSignedIn(hasToken())), []);
+  useEffect(
+    () =>
+      onAuthChange(() => {
+        setSignedIn(hasToken());
+        if (!hasSession()) setAccount(null);
+      }),
+    [],
+  );
+  // A reload keeps an e-mail session (cookie + stored CSRF token): read who it is before showing any page.
+  useEffect(() => {
+    if (hasSession()) auth.session().then(setAccount, () => auth.signOut());
+  }, []);
+  const pages = account ? ROLE_PAGES[account.role] : undefined;
+  const allowed = (to: string) => !pages || pages.some((p) => to === p || to.startsWith(p + "/") || (p === "/orders" && to.startsWith("/products/")));
+  const nav = NAV.filter((n) => allowed(n.to));
+  // Organisation people land on their first page instead of an operator page that would only answer 403.
+  useEffect(() => {
+    if (signedIn && pages && !allowed(pathname) && pathname !== "/signup") navigate(pages[0], { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn, account, pathname]);
+  const signOut = () => {
+    auth.signOut();
+    setAccount(null);
+  };
+  const who = account?.user.email ?? "operator";
   // A phone menu that stays open after navigating would cover the page the person just asked for.
   useEffect(() => setMenuOpen(false), [pathname]);
 
@@ -111,14 +148,25 @@ export default function Shell() {
       setSigningIn(false);
     }
   };
-  const signIn = (event: React.FormEvent) => {
+  const signIn = async (event: React.FormEvent) => {
     event.preventDefault();
-    signInWith(tokenInput);
+    if (useToken) return signInWith(tokenInput);
+    setSigningIn(true);
+    setSignInError(null);
+    try {
+      setAccount(await auth.login(email.trim(), password));
+      setPassword("");
+    } catch (error) {
+      setSignInError(error);
+    } finally {
+      setSigningIn(false);
+    }
   };
 
   const health = useAsync(() => api.health(), []);
-  const approvals = useAsync(() => (signedIn ? api.approvals() : Promise.resolve([])), [signedIn], 10000);
+  const approvals = useAsync(() => (signedIn && allowed("/approvals") ? api.approvals() : Promise.resolve([])), [signedIn, account], 10000);
   const head =
+    (pathname === "/" && account ? { ...TITLES["/"], title: `Good day, ${account.user.email.split("@")[0]}` } : undefined) ??
     TITLES[pathname] ??
     (pathname.startsWith("/approvals/")
       ? TITLES["/approvals"]
@@ -147,7 +195,7 @@ export default function Shell() {
               <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
           </div>
-          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3 [@media(max-height:900px)]:mb-1`}>
+          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3 [@media(max-height:900px)]:mb-1 ${allowed("/buyer") ? "" : "hidden"}`}>
             <Plus size={20} className="shrink-0" />
             <RailLabel>New request</RailLabel>
           </button>
@@ -155,7 +203,7 @@ export default function Shell() {
           {/* Fourteen destinations no longer fit a laptop's height: the list scrolls between the fixed top and bottom
               rows, and rows tighten below 900 px so most screens need no scrolling at all. */}
           <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-color:rgba(255,255,255,0.3)_transparent] [scrollbar-width:thin] [@media(max-height:900px)]:gap-0.5">
-            {NAV.map(({ to, icon: Icon, label }) => (
+            {nav.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -184,14 +232,14 @@ export default function Shell() {
               <RailLabel>API reference</RailLabel>
             </a>
             {signedIn ? (
-              <button onClick={() => setToken("")} className={`${RAIL_ROW} ${RAIL_IDLE}`}>
+              <button onClick={signOut} className={`${RAIL_ROW} ${RAIL_IDLE}`}>
                 <LogOut size={18} className="shrink-0" />
                 <RailLabel>Sign out</RailLabel>
               </button>
             ) : null}
             <div className="mt-1 flex h-10 items-center gap-3">
               <span className="grid size-10 shrink-0 place-items-center rounded-full border border-white/25">
-                <Avatar name="operator" size={28} />
+                <Avatar name={who} size={28} />
               </span>
               <RailLabel>
                 <span className="text-[13px] text-white">Operator</span>
@@ -233,10 +281,10 @@ export default function Shell() {
         {menuOpen ? (
           // dvh, not vh: on iPhones vh includes the space under Safari's toolbar, which hid the last rows.
           <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100dvh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
-            <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+            <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10 ${allowed("/buyer") ? "" : "hidden"}`}>
               <Plus size={18} /> New request
             </button>
-            {NAV.map(({ to, icon: Icon, label }) => (
+            {nav.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -255,7 +303,7 @@ export default function Shell() {
               <CircleHelp size={18} /> API reference
             </a>
             {signedIn ? (
-              <button onClick={() => setToken("")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+              <button onClick={signOut} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
                 <LogOut size={18} /> Sign out
               </button>
             ) : null}
@@ -281,12 +329,12 @@ export default function Shell() {
               </span>
             ) : null}
           </button>
-          {pathname !== "/connect" ? (
+          {pathname !== "/connect" && allowed("/connect") ? (
             <button className="btn-dark h-9 !py-0" onClick={() => navigate("/connect")}>
               <Plug size={15} /> Connect an agent
             </button>
           ) : null}
-          <Avatar name="operator" size={36} />
+          <Avatar name={who} size={36} />
         </div>
 
         <header className="mb-6 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
@@ -344,21 +392,45 @@ export default function Shell() {
               <div className="flex flex-col gap-4">
                 <LuotsiWordmark className="block h-8 w-auto self-center text-brand" />
                 <div className="min-w-0">
-                  <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
-                  <p className="label">The token lives in memory only, so a reload asks again.</p>
+                  <h2 className="text-[15px] font-semibold">{useToken ? "Operator sign-in" : "Sign in"}</h2>
+                  <p className="label">
+                    {useToken
+                      ? "The token lives in memory only, so a reload asks again."
+                      : "With the e-mail your organisation or Valio gave you."}
+                  </p>
                 </div>
               </div>
-              <label className="flex flex-col gap-1.5">
-                <span className="label">Operator token</span>
-                <input
-                  className="field"
-                  type="password"
-                  autoComplete="off"
-                  required
-                  value={tokenInput}
-                  onChange={(event) => setTokenInput(event.target.value)}
-                />
-              </label>
+              {useToken ? (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label">Operator token</span>
+                  <input
+                    className="field"
+                    type="password"
+                    autoComplete="off"
+                    required
+                    value={tokenInput}
+                    onChange={(event) => setTokenInput(event.target.value)}
+                  />
+                </label>
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="label">E-mail</span>
+                    <input className="field" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="label">Password</span>
+                    <input
+                      className="field"
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
               <button className="btn-dark" disabled={signingIn}>
                 {signingIn ? "Signing in…" : "Sign in"}
               </button>
@@ -370,6 +442,16 @@ export default function Shell() {
                 </button>
               ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
+              <button
+                type="button"
+                className="self-center text-[13px] font-medium text-brand hover:underline"
+                onClick={() => {
+                  setUseToken(!useToken);
+                  setSignInError(null);
+                }}
+              >
+                {useToken ? "Sign in with e-mail instead" : "Use an operator token instead"}
+              </button>
               <p className="text-center text-[13px] text-ink-muted">
                 New kitchen?{" "}
                 <NavLink to="/signup" className="font-medium text-brand hover:underline">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bot, RotateCcw, Save, Users } from "lucide-react";
-import { api, type AgentMandate, type PolicyDocument, type PolicyResource } from "../api";
+import { api, type AgentMandate, type PolicyDocument, type PolicyResource, signedInEmail } from "../api";
 import { Avatar } from "../charts";
 import { Card, Empty, ErrorNote, Spinner, eur, ruleLabel, useAsync, when } from "../ui";
 
@@ -18,7 +18,7 @@ const pretty = (code: string) => code.replaceAll("_", " ").toLowerCase();
 export default function Policy() {
   const { data, error, loading, reload } = useAsync(() => api.policy(), []);
   const [draft, setDraft] = useState<PolicyDocument | null>(null);
-  const [author, setAuthor] = useState("Ada");
+  const [author, setAuthor] = useState(() => signedInEmail() || "Ada");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<unknown>(null);

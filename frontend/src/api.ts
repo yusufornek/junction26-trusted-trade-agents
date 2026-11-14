@@ -436,12 +436,77 @@ export class ApiError extends Error {
 export const MOCK = import.meta.env.VITE_MOCK === "1";
 
 let token = MOCK ? "mock" : "";
+/** A person signed in with e-mail (spec 43): the session is an HttpOnly cookie, and every state-changing request carries
+ *  this CSRF token. Kept in sessionStorage so a reload keeps the person signed in, as FRONTEND.md asks. */
+const CSRF_KEY = "luotsi.csrf";
+let csrf = (() => {
+  try {
+    return sessionStorage.getItem(CSRF_KEY) ?? "";
+  } catch {
+    return "";
+  }
+})();
+/** Organisation people read their own organisation's audit trail at /v1/tenant/audit; /v1/audit is operator-only. */
+let tenantScoped = false;
 const authListeners = new Set<() => void>();
-export const hasToken = () => Boolean(token);
+const notify = () => authListeners.forEach((listener) => listener());
+export const hasToken = () => Boolean(token || csrf);
+export const hasSession = () => Boolean(csrf);
+/** The signed-in person's e-mail, for forms that record a name (approver, cancelled by); empty for the operator token. */
+let accountEmail = "";
+export const signedInEmail = () => accountEmail;
 export function setToken(value: string) {
   token = value.trim();
-  authListeners.forEach((listener) => listener());
+  notify();
 }
+function setCsrf(value: string) {
+  csrf = value;
+  try {
+    if (value) sessionStorage.setItem(CSRF_KEY, value);
+    else sessionStorage.removeItem(CSRF_KEY);
+  } catch {
+    // Private browsing can refuse storage; the session then lasts until a reload.
+  }
+}
+
+export type Account = {
+  user: { id: string; email: string; role: string; tenant_id: string | null };
+  role: "platform_admin" | "tenant_admin" | "approver" | "viewer" | "member" | string;
+  tenant_id: string | null;
+  tenant: { id: string; name: string } | null;
+  customer_ids: string[];
+  permissions: string[];
+};
+
+export const auth = {
+  login: async (email: string, password: string) => {
+    const account = await call<Account & { csrf_token: string }>("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    token = "";
+    setCsrf(account.csrf_token);
+    tenantScoped = !!account.tenant_id;
+    accountEmail = account.user.email;
+    notify();
+    return account;
+  },
+  session: async () => {
+    const account = await call<Account>("/v1/auth/session");
+    tenantScoped = !!account.tenant_id;
+    accountEmail = account.user.email;
+    return account;
+  },
+  /** Ends the cookie session too; an operator token is simply forgotten. */
+  signOut: async () => {
+    if (csrf) await call("/v1/auth/logout", { method: "POST", body: "{}" }).catch(() => undefined);
+    token = "";
+    setCsrf("");
+    tenantScoped = false;
+    accountEmail = "";
+    notify();
+  },
+};
 export function onAuthChange(listener: () => void) {
   authListeners.add(listener);
   return () => { authListeners.delete(listener); };
@@ -456,10 +521,13 @@ async function send(path: string, init?: RequestInit): Promise<{ res: Response; 
   const res = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(csrf && !token && init?.method && init.method !== "GET" ? { "X-CSRF-Token": csrf } : {}) },
   });
-  if (res.status === 401) {
-    setToken("");
+  if (res.status === 401 && !path.startsWith("/v1/auth/login")) {
+    token = "";
+    setCsrf("");
+    notify();
     throw new AuthenticationError();
   }
   return { res, text: await res.text() };
@@ -597,7 +665,7 @@ export const api = {
     const q = new URLSearchParams(
       Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][],
     ).toString();
-    return call<AuditEntry[]>("/v1/audit" + (q ? `?${q}` : ""));
+    return call<AuditEntry[]>((tenantScoped ? "/v1/tenant/audit" : "/v1/audit") + (q ? `?${q}` : ""));
   },
   /**
    * Whether this origin exposes MCP over streamable HTTP. Only a 404 means "no route": a mounted endpoint
