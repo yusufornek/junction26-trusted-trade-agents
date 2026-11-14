@@ -302,7 +302,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return svc(request).catalog.get(id)
 
     @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
-              description="Lookup, quote and order require a customer mandate and enforce agent ownership.")
+              description="Lookup, quote and order require a customer mandate and enforce agent ownership. "
+                          "Cached replays recheck current ownership and mandate scope; refusals record CREATE_QUOTE_FAILED without repeating quote creation.")
     def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate, command_key=idempotency_key)
@@ -314,7 +315,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
     @app.post("/v1/orders", response_model=Order, summary="Accept an unexpired quote under an agent mandate",
               description="Ordering requires a mandate: unregistered agents receive 403 AGENT_NOT_REGISTERED, "
                           "with no order or reservation created. Existing idempotent orders are returned on retry. "
-                          "Registered agents are subject to policy and may require human approval.")
+                          "Registered agents are subject to policy and may require human approval. "
+                          "Refused replay checks record PLACE_ORDER_FAILED without repeating a purchase.")
     def place_order(body: OrderRequest, request: Request,
                     idempotency_key: Annotated[str, Header(min_length=1, description="Retry key: same quote and agent returns the same order.")],
                     principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
@@ -370,7 +372,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
-                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope.")
+                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope. "
+                          "Refused replay checks record APPROVE_FAILED without repeating approval.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,

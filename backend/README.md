@@ -197,6 +197,8 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   including for REST/MCP reads inside the transaction, until publication succeeds. A crash or disk error
   after commit leaves a recoverable projection: startup or the next write republishes the committed YAML.
   Such a committed change returns success and is effective immediately; the projection failure is logged.
+  Temporary-file cleanup is best-effort before and after commit: an unlink failure is logged, preserves
+  the transaction's original result/error, and cannot prevent connection or writer-lock closure.
   After publication the recovery row is removed and existing file-only loading remains compatible.
   Recovery paths are relative to the database directory so restored databases stay isolated.
   Committed defaults remain unchanged. With a custom database path, the runtime
@@ -892,6 +894,9 @@ customer mandates, buyer organisation/role, trusted revocation issuer and operat
 Revoked/invalid credentials are rejected again at the transport boundary. Quote/order/approval guards
 also reverify their bound buyer VC. Cancellation and rejection retain their original authorization rules;
 they do not require a still-valid purchasing VC. New keyed commands cannot register without a replay guard.
+Lookup, basket, quote, order and review command checks use their normal failure handlers on cached
+replays as well as fresh requests. Each denied attempt commits one corresponding `*_FAILED` audit
+with the caller, inputs and zero live-call counts; replay guards never repeat the business operation.
 Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
 audit. Spec 06 R-2's existing-order exception remains: removing a policy-row mandate alone does not deny

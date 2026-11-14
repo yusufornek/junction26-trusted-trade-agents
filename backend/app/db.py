@@ -164,6 +164,14 @@ class Database:
         return str(Path(path).resolve().relative_to(self.path.parent.resolve()))
 
     @staticmethod
+    def _cleanup_file(temporary):
+        """A leftover projection must not replace the transaction's outcome."""
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            logging.getLogger(__name__).exception("Temporary policy file awaits cleanup: %s", temporary)
+
+    @staticmethod
     def _prepare_file(path, content):
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
@@ -176,7 +184,7 @@ class Database:
             return temporary
         except BaseException:
             if temporary is not None:
-                temporary.unlink(missing_ok=True)
+                Database._cleanup_file(temporary)
             raise
 
     def stage_file(self, path, content):
@@ -219,7 +227,7 @@ class Database:
                 logging.getLogger(__name__).exception("Published policy recovery row awaits cleanup: %s", path)
             finally:
                 if temporary is not None:
-                    temporary.unlink(missing_ok=True)
+                    self._cleanup_file(temporary)
 
     @contextmanager
     def connect(self, write=False, *, notify=True):
@@ -239,7 +247,7 @@ class Database:
                 if write:
                     active.execute(f"ROLLBACK TO {savepoint}")
                     for _, _, temporary in staged[offset:]:
-                        temporary.unlink(missing_ok=True)
+                        self._cleanup_file(temporary)
                     del staged[offset:]
                 raise
             finally:
@@ -258,10 +266,12 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
         except BaseException:
-            if conn is not None:
-                conn.close()
-            if writer_lock is not None:
-                writer_lock.close()
+            try:
+                if conn is not None:
+                    conn.close()
+            finally:
+                if writer_lock is not None:
+                    writer_lock.close()
             raise
         committed = False
         token = self._connection.set(conn) if write else None
@@ -279,14 +289,18 @@ class Database:
             conn.rollback()
             raise
         finally:
-            if token is not None:
-                self._connection.reset(token)
-                self._staged_files.reset(file_token)
-            for _, _, temporary in staged:
-                temporary.unlink(missing_ok=True)
-            conn.close()
-            if writer_lock is not None:
-                writer_lock.close()
+            try:
+                if token is not None:
+                    self._connection.reset(token)
+                    self._staged_files.reset(file_token)
+                for _, _, temporary in staged:
+                    self._cleanup_file(temporary)
+            finally:
+                try:
+                    conn.close()
+                finally:
+                    if writer_lock is not None:
+                        writer_lock.close()
         if committed and write and notify and self.on_commit is not None:
             try:
                 self.on_commit()

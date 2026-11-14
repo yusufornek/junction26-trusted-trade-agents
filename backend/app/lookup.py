@@ -400,9 +400,12 @@ class Lookup:
                            agent_id, "LOOKUP_NOT_FOUND")
 
     def find_offers(self, need, actor="agent:external", *, mandate=None):
+        return self._run(need, actor, lambda counter: self._find_offers(need, actor, mandate, counter))
+
+    def _run(self, need, actor, operation):
         counter = RequestCounter()
         try:
-            return self._find_offers(need, actor, mandate, counter)
+            return operation(counter)
         except DomainError as error:
             with self.db.connect(write=True) as conn:
                 audit.append(conn, actor, "LOOKUP_FAILED", error.message,

@@ -41,14 +41,18 @@ class Baskets:
         return check_owner(result, agent_id, "BASKET_NOT_FOUND")
 
     def find_basket_offers(self, request, actor="agent:external", *, mandate=None):
+        return self._run(request, actor, lambda counter: self._find(request, actor, mandate, counter))
+
+    def _run(self, request, actor, operation):
         counter = RequestCounter()
         try:
-            return self._find(request, actor, mandate, counter)
+            return operation(counter)
         except DomainError as error:
             with self.db.connect(write=True) as conn:
                 audit.append(conn, actor, "BASKET_LOOKUP_FAILED", error.message,
                              data={"inputs": request.model_dump(mode="json"), "error": error.code,
-                                   "live_calls": counter.live().model_dump(), "decision_calls": counter.decision_calls})
+                                    "live_calls": counter.live().model_dump(), "decision_calls": counter.decision_calls,
+                                    **error.data})
             raise
 
     def _find(self, request, actor, mandate, counter):

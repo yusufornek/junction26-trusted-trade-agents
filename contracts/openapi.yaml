@@ -8641,7 +8641,8 @@ paths:
     post:
       summary: Recheck selected lines or a plan_ref live and lock fixed prices
       description: Lookup, quote and order require a customer mandate and enforce
-        agent ownership.
+        agent ownership. Cached replays recheck current ownership and mandate scope;
+        refusals record CREATE_QUOTE_FAILED without repeating quote creation.
       operationId: create_quote_v1_quotes_post
       security:
       - BearerAuth: []
@@ -8943,7 +8944,8 @@ paths:
       summary: Accept an unexpired quote under an agent mandate
       description: 'Ordering requires a mandate: unregistered agents receive 403 AGENT_NOT_REGISTERED,
         with no order or reservation created. Existing idempotent orders are returned
-        on retry. Registered agents are subject to policy and may require human approval.'
+        on retry. Registered agents are subject to policy and may require human approval.
+        Refused replay checks record PLACE_ORDER_FAILED without repeating a purchase.'
       operationId: place_order_v1_orders_post
       security:
       - BearerAuth: []
@@ -10113,7 +10115,8 @@ paths:
         revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate
         returns 403 AGENT_NOT_REGISTERED with rule hits in data; the order remains
         pending and can be rejected. Cached approval responses recheck the reviewer's
-        current organisation and customer scope.
+        current organisation and customer scope. Refused replay checks record APPROVE_FAILED
+        without repeating approval.
       operationId: approve_v1_approvals__order_id__approve_post
       security:
       - BearerAuth: []

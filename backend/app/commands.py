@@ -24,6 +24,43 @@ def json_value(value):
     return value
 
 
+def command_checks(gateway, route, arguments, principal, operation):
+    """Run boundary refusals through the same failure handler as business work.
+
+    Only checks run here: wrapping the business operation again would audit its
+    failures twice. In keyed calls the outer transaction commits the refusal
+    audit before the saved error is raised to either transport.
+    """
+    if route == "gateway.find_offers":
+        return gateway.lookup._run(arguments["need"], arguments["actor"], lambda counter: operation())
+    if route == "baskets.find_basket_offers":
+        return gateway.baskets._run(arguments["request"], arguments["actor"], lambda counter: operation())
+    if route.startswith("orders.") and route in KEYED_ROUTES:
+        name = route.split(".")[1]
+        if name == "create_quote":
+            action, actor = "CREATE_QUOTE", f"agent:{arguments['agent_id']}"
+            inputs = arguments["request"].model_dump(mode="json")
+        elif name == "place_order":
+            action, actor = "PLACE_ORDER", f"agent:{arguments['agent_id']}"
+            inputs = {key: arguments[key] for key in ("quote_id", "idempotency_key")}
+        elif name == "cancel":
+            action, actor = "CANCEL", arguments["actor"]
+            inputs = {key: arguments[key] for key in ("order_id", "reason")}
+            if arguments["stated_name"] is not None:
+                inputs["stated_name"] = arguments["stated_name"]
+        else:
+            action = name.upper()
+            actor = arguments["actor"] or f"human:{arguments['approver']}"
+            if principal and principal.kind == "buyer_user":
+                actor = f"human:buyer_approver:{principal.credential_ref}"
+            inputs = {"order_id": arguments["order_id"], "comment": arguments["comment"],
+                      "stated_name": arguments["approver"]}
+            if name == "approve" and arguments["evidence_revision"] is not None:
+                inputs["evidence_revision"] = arguments["evidence_revision"]
+        return gateway.orders._run(action, actor, inputs, lambda counter: operation())
+    return operation()
+
+
 def replay_authorization(gateway, route, conn, arguments, principal, saved):
     """Recheck authority, never transitions/expiry or the original business effect.
 
@@ -89,15 +126,12 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
                             None if arguments["operator"] else agent, "QUOTE_NOT_FOUND")
         order_id = saved["value"]["id"]
         bound = ("order", order_id) if gateway.mandates.stored(conn, "order", order_id) else ("quote", quote.id)
-        def authorize(_counter):
-            if (arguments["mandate"] is not None or gateway.mandates.stored(conn, *bound) is not None
-                    or agent in gateway.policy.get().agents):
-                gateway.mandates.authorize(conn, arguments["mandate"], agent, quote.customer_id,
-                    products=[line["product_id"] for line in saved["value"]["lines"]], bound=bound)
-            # Spec 06 R-2 explicitly permits returning an existing policy-row order
-            # after its mandate was removed. It never grants a new purchase.
-        gateway.orders._run("PLACE_ORDER", f"agent:{agent}",
-                            {"quote_id": quote.id, "idempotency_key": arguments["idempotency_key"]}, authorize)
+        if (arguments["mandate"] is not None or gateway.mandates.stored(conn, *bound) is not None
+                or agent in gateway.policy.get().agents):
+            gateway.mandates.authorize(conn, arguments["mandate"], agent, quote.customer_id,
+                products=[line["product_id"] for line in saved["value"]["lines"]], bound=bound)
+        # Spec 06 R-2 explicitly permits returning an existing policy-row order
+        # after its mandate was removed. It never grants a new purchase.
     elif route in {"orders.approve", "orders.reject", "orders.cancel"}:
         order = gateway.orders._order(conn, arguments["order_id"])
         if route == "orders.cancel":
@@ -170,35 +204,41 @@ def install(gateway, target, name, category):
         arguments = bound.arguments
         principal = PRINCIPAL.get() or arguments.get("principal")
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
-        if category != "read" and (principal is None or principal.kind == "agent"):
-            from .buyer import check_suspension
-            check_suspension(gateway.db, identity)
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         digest = fingerprint(scope, route, arguments)
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
         try:
+            def preflight():
+                if category != "read" and (principal is None or principal.kind == "agent"):
+                    from .buyer import check_suspension
+                    check_suspension(gateway.db, identity)
+                if key is not None:
+                    if not key.strip():
+                        raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
+                    if route not in KEYED_ROUTES:
+                        raise DomainError("VALIDATION_ERROR", "This read operation does not accept an idempotency key", 422)
+            command_checks(gateway, route, arguments, principal, preflight)
             if key is None:
-                gateway.limiter.consume(identity, category)
+                command_checks(gateway, route, arguments, principal, lambda: gateway.limiter.consume(identity, category))
                 return linked(operation(*args, **kwargs))
-            if not key.strip():
-                raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
-            if route not in KEYED_ROUTES:
-                raise DomainError("VALIDATION_ERROR", "This read operation does not accept an idempotency key", 422)
             # SQLite serialises command lookup, domain changes and saved results as one commit.
             error = None
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
                 try:
-                    gateway.limiter.consume(identity, "read" if previous else category)
+                    command_checks(gateway, route, arguments, principal,
+                                   lambda: gateway.limiter.consume(identity, "read" if previous else category))
                     if previous:
                         saved = json.loads(previous["result"])
-                        if not matches_command(previous, digest, name, route, arguments, saved):
-                            if previous["command"] == name and route == "autonomy.change" and "fingerprint_version" not in saved:
-                                replay_authorization(gateway, route, conn, arguments, principal, saved)
-                            raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
-                        replay_authorization(gateway, route, conn, arguments, principal, saved)
+                        def check_replay():
+                            if not matches_command(previous, digest, name, route, arguments, saved):
+                                if previous["command"] == name and route == "autonomy.change" and "fingerprint_version" not in saved:
+                                    replay_authorization(gateway, route, conn, arguments, principal, saved)
+                                raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
+                            replay_authorization(gateway, route, conn, arguments, principal, saved)
+                        command_checks(gateway, route, arguments, principal, check_replay)
                         if name == "place_order":
                             # Preserve buyer mandate revalidation and the historical replay audit.
                             return linked(operation(*args, **kwargs))

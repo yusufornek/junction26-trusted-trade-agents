@@ -178,6 +178,69 @@ def test_review_policy_file_waits_for_outer_commit(gateway, monkeypatch, section
     assert staged or failure == "audit"
 
 
+@pytest.mark.parametrize("phase", ["publication", "connection"])
+def test_review_policy_cleanup_cannot_fail_committed_write(gateway, monkeypatch, phase, caplog):
+    import fcntl
+    from pathlib import Path
+    from app import db as db_module
+
+    body = gateway.policy._editable(gateway.policy.get())
+    body["approval"]["max_auto_total_eur"] = 17
+    original_connect = sqlite3.connect
+    connections = []
+
+    class TrackedConnection(sqlite3.Connection):
+        pass
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs, factory=TrackedConnection)
+        connections.append(conn)
+        return conn
+
+    original_unlink = Path.unlink
+    failures = []
+
+    def unlink(path, *args, **kwargs):
+        if path.name.startswith(".policy-"):
+            failures.append(path)
+            raise PermissionError("Policy directory denies cleanup")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    if phase == "publication":
+        def replace(*args):
+            raise PermissionError("Policy directory denies publication")
+        monkeypatch.setattr(db_module.os, "replace", replace)
+    else:
+        # Leave the staged file for connection cleanup, as deferred recovery does.
+        monkeypatch.setattr(gateway.db, "_publish_files", lambda *args: None)
+
+    error, result = None, None
+    try:
+        result = gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"), command_key="cleanup-review")
+    except PermissionError as caught:
+        error = caught  # Retain the traceback, so GC cannot accidentally release resources.
+    assert failures
+    assert error is None, f"Cleanup changed the committed response: {error}"
+    assert result.approval.max_auto_total_eur == 17
+    for conn in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
+    with gateway.db.path.with_suffix(".db.writer.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    assert gateway.db._connection.get() is None and gateway.db._staged_files.get() is None
+    assert "cleanup" in caplog.text.lower()
+    monkeypatch.undo()
+    assert gateway.policy.get().approval.max_auto_total_eur == 17
+    assert [event.action for event in gateway.audit()] == ["POLICY_UPDATED"]
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM commands WHERE key='cleanup-review'").fetchone()[0] == 1
+    assert gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"),
+                                 command_key="cleanup-review").approval.max_auto_total_eur == 17
+
+
 def test_review_policy_projection_recovers_after_commit(gateway, monkeypatch, tmp_path):
     from app import db as db_module
     from app.db import Database
