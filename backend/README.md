@@ -536,8 +536,8 @@ canonical JSON payload (`app.signing.quote_payload`) contains:
 The canonical payload preserves spec 10 (and the GTIN addition in spec 13). New
 quotes add protected JWS header members `quote_version: 2` and `quote_integrity`:
 the latter is SHA-256 hex of the RFC 8785 canonical immutable resource, excluding
-only signature, status and live_calls, with all numbers normalized to decimal
-strings. This also authenticates owner, need binding, warnings, fit, tax prices
+signature, status, live_calls, expiration_reason and the derived navigation lists inside links,
+with all numbers normalized to decimal strings. Original link identifiers remain authenticated. This also authenticates owner, need binding, warnings, fit, tax prices
 and export evidence without expanding the detached promise payload. A standard
 JWS verifier can reconstruct the specified payload independently; the supplied
 verifier also checks the protected evidence digest.
@@ -819,13 +819,22 @@ MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same command and payload. Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
 audit. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
-domain events commit atomically. Refusals do not cache a successful command result.
+domain events commit atomically. A committed `EVIDENCE_CHANGED` refusal is saved and replayed too;
+after reviewing the refreshed evidence, approve with a new key. Policy file rollback remains active
+through the outer command commit. Policy digests preserve omission versus explicit clearing of sections
+and `shortlist.live_max`; historical unversioned digests remain readable. Cached quote replays revalidate
+the bound mandate and current customer scope. Legacy placement records without a command row use read
+cost and acquire a saved result on their first command-boundary replay. Conflicts on existing keys also
+spend read tokens. Spec 25's `PENDING_EXECUTION` exception still resumes ambiguous supplier execution.
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
 effective constraints, mandate reference, SHA-256 of canonical effective policy, and environment
 (`live` or the isolated `sandbox` workspace). `links` connect request, quote, order, receipt, event, audit
 checkpoint and trace identifiers; task references remain null until task transports are installed.
-Order detail exposes all event IDs, audit checkpoints and trace IDs. Trace links are stored locally;
+Order detail exposes all event IDs, audit checkpoints and trace IDs. Authorized quote and lookup reads
+add `quote_ids`, `order_ids`, `event_ids`, `audit_checkpoints` and `trace_ids` to `links`, including for
+historical rows; these derived navigation fields are excluded from signed quote evidence. Approval
+refreshes context from the policy snapshot and effective constraints used for that decision. Trace links are stored locally;
 when an OpenTelemetry span exists its trace ID is used. Span export is provided by spec 27.
 
 `X-Correlation-Id` is accepted/generated and returned on success and failure. MCP accepts the HTTP
@@ -833,7 +842,8 @@ header or `_meta.correlation_id` (`correlationId` also accepted). Audit data, ev
 payloads retain it. Events have schema version 1 and per-aggregate revisions, including quote
 acceptance. `events.audit_id` links the audit hash chain. `outbox` has one durable row per registered
 consumer. Register `gateway.outbox.register("webhooks", handler)` (or `"a2a-push"`, `"activity"`);
-registration without a handler reserves the durable consumer name. `replay=True` backfills existing
+registration without a handler reserves the durable consumer name. Dispatch selects only consumers
+with an attached handler before applying the batch limit, so offline consumers cannot starve others. `replay=True` backfills existing
 events. Post-commit dispatch never runs callbacks inside the procurement transaction. Failures remain
 pending with exponential retry intervals, and `dispatch()` can be called by a worker independently
 of new traffic. Callbacks must deduplicate by event ID: delivery is at least once. Named registrations
@@ -845,7 +855,10 @@ Recovery version 1 adds `retryable`, `next_action`, `retry_after_seconds`, `corr
 `violations` (field, problem, valid_values). Resource references are omitted unless read access has
 been verified; current errors conservatively omit them. Authentication errors disclose no resource
 details. MCP domain failures return `isError: true` with the same structured payload; malformed
-protocol use remains a protocol error. The explicit inventory is `app/recovery.py`.
+protocol use remains a protocol error. The explicit inventory is `app/recovery.py`. Lookup timeouts and
+supplier HTTP 502/503 failures propagate the retry contract; other failed supplier responses retain
+spec 01's warning-based degradation. Cached availability ages are recomputed after missing-product
+fetches so cut-offs use the time when the combined result is returned.
 
 | next_action | Client transition |
 |---|---|
@@ -861,7 +874,7 @@ protocol use remains a protocol error. The explicit inventory is `app/recovery.p
 Confirmed orders return `next_action: null`; rejected, expired and cancelled orders return `STOP`.
 `clients/python/reference_buyer.py` is the deterministic
 MCP recovery loop reused by the later connect kit: inject `call_tool`, then call
-`await ReferenceBuyer(call_tool).purchase(need_json)`. Lost responses retry the unchanged command/key;
+`await ReferenceBuyer(call_tool).purchase(need_json)`. Lost responses (including MCP SDK request-timeout and connection-closed errors) retry the unchanged command/key;
 expiry, throttles and approval waiting are driven by `next_action`, never prose or domain codes.
 
 Policy `rate_limits` has `lookup`, `mutation`, `read`, each with `capacity` and `refill_per_minute`.
@@ -871,7 +884,9 @@ returns `429 RATE_LIMITED`, `Retry-After`, and retry guidance before Decisions o
 Throttles are audited and counted in `/v1/stats.throttles`. Supplier admission is globally bounded
 within the process: 8 active calls, 16 waiting, a 5-second queue wait; overflow/timeouts yield retryable
 `503 UPSTREAM_BUSY`. Unknown credentials have a separate source-address bucket before credential
-resolution (60 attempts, 60/minute; successful authentication refunds its attempt). Limits are
+resolution (60 attempts, 60/minute). A digest-membership gate lets recognized credentials bypass that
+unknown-credential bucket while their principal buckets still apply. An approval inbox request costs one
+read token, regardless of its pending-order count; standalone quote reads still cost a read token. Limits are
 **in-process, single instance**; SQLite commands/events remain shared across processes.
 
 Valio outbound requests share a process-wide one-token bucket refilling at 5/s, with a rolling-window

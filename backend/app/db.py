@@ -87,6 +87,7 @@ class Database:
     def __init__(self, path: Path):
         self.on_commit = None
         self._connection = ContextVar("sqlite_connection", default=None)
+        self._rollback = ContextVar("sqlite_rollback_callbacks", default=None)
         self.audit_verify_lock = threading.Lock()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +127,13 @@ class Database:
                 conn.execute("INSERT INTO mandate_revocations SELECT '',issuer,mandate_id,at FROM legacy_mandate_revocations")
                 conn.execute("DROP TABLE legacy_mandate_revocations")
 
+    def on_rollback(self, callback):
+        """Compensate external state while the owning writer lock is still held."""
+        callbacks = self._rollback.get()
+        if callbacks is None:
+            raise RuntimeError("Rollback compensation requires a write transaction")
+        callbacks.append(callback)
+
     @contextmanager
     def connect(self, write=False, *, notify=True):
         active = self._connection.get()
@@ -136,11 +144,18 @@ class Database:
             savepoint = "nested_" + uuid4().hex
             if write:
                 active.execute(f"SAVEPOINT {savepoint}")
+            callbacks = self._rollback.get()
+            checkpoint = len(callbacks) if callbacks is not None else 0
             try:
                 yield active
             except BaseException:
                 if write:
-                    active.execute(f"ROLLBACK TO {savepoint}")
+                    try:
+                        for callback in reversed(callbacks[checkpoint:]):
+                            callback()
+                    finally:
+                        del callbacks[checkpoint:]
+                        active.execute(f"ROLLBACK TO {savepoint}")
                 raise
             finally:
                 if write:
@@ -151,6 +166,8 @@ class Database:
         conn.execute("PRAGMA foreign_keys=ON")
         committed = False
         token = self._connection.set(conn) if write else None
+        callbacks = []
+        rollback_token = self._rollback.set(callbacks) if write else None
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
@@ -158,10 +175,15 @@ class Database:
             conn.commit()
             committed = True
         except BaseException:
-            conn.rollback()
+            try:
+                for callback in reversed(callbacks):
+                    callback()
+            finally:
+                conn.rollback()
             raise
         finally:
             if token is not None:
+                self._rollback.reset(rollback_token)
                 self._connection.reset(token)
             conn.close()
         if committed and write and notify and self.on_commit is not None:

@@ -384,8 +384,12 @@ class Lookup:
             row = conn.execute("SELECT data FROM lookups WHERE id=?", (lookup_id,)).fetchone()
         if not row:
             raise DomainError("LOOKUP_NOT_FOUND", "Lookup was not found", 404)
-        return check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
-                           agent_id, "LOOKUP_NOT_FOUND")
+        result = check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
+                             agent_id, "LOOKUP_NOT_FOUND")
+        from .foundation import forward_links
+        with self.db.connect() as conn:
+            result.links.update(forward_links(conn, request_id=lookup_id, agent_id=agent_id))
+        return result
 
     def find_offers(self, need, actor="agent:external", *, mandate=None):
         counter = RequestCounter()
@@ -447,7 +451,9 @@ class Lookup:
             try:
                 target.update(adapter.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError as error:
-                if error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED", "SUPPLIER_UNAVAILABLE"}:
+                if (error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED", "SUPPLIER_UNAVAILABLE"}
+                        or error.code == "VALIO_UNAVAILABLE" and (
+                            error.data.get("timeout") or error.data.get("upstream_status") in {502, 503})):
                     raise
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
         if candidates and (not fits or any(p.id not in fits for p in candidates)):

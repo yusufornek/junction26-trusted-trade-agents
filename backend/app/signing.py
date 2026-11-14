@@ -47,7 +47,12 @@ def quote_integrity(quote):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return decimal_string(value)
         return value
-    return immutable({k: v for k, v in q.items() if k not in {"signature", "status", "live_calls", "expiration_reason"}})
+    evidence = {k: v for k, v in q.items() if k not in {"signature", "status", "live_calls", "expiration_reason"}}
+    if "links" in evidence:
+        # Original link identifiers stay signed; read-time forward navigation is mutable.
+        evidence["links"] = {k: v for k, v in evidence["links"].items()
+                             if k not in {"quote_ids", "order_ids", "event_ids", "audit_checkpoints", "trace_ids"}}
+    return immutable(evidence)
 
 
 def verify_quote(quote, jwks):

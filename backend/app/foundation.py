@@ -24,13 +24,40 @@ def trace_id():
     return format(context.trace_id, "032x") if context.is_valid else TRACE.get() or uuid4().hex
 
 
-def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio"):
+def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio", snapshot=None):
     from .runtime import ENVIRONMENT
-    document = policy._editable(policy.get())
+    document = policy._editable(snapshot if snapshot is not None else policy.get())
     return {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
             "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": ENVIRONMENT.get()}
+
+
+def forward_links(conn, *, request_id=None, quote_id=None, agent_id=None):
+    """Derive mutable navigation from existing rows, including pre-foundation records."""
+    if quote_id:
+        quote_ids = [quote_id]
+    else:
+        quote_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM quotes WHERE json_extract(data,'$.need_ref')=? "
+            "AND (? IS NULL OR json_extract(data,'$.agent_id')=?)", (request_id, agent_id, agent_id))]
+    order_ids = []
+    for reference in quote_ids:
+        order_ids.extend(r[0] for r in conn.execute(
+            "SELECT id FROM orders WHERE quote_id=? AND (? IS NULL OR json_extract(data,'$.agent_id')=?)",
+            (reference, agent_id, agent_id)))
+    if not order_ids and (quote_id or not quote_ids):
+        return {}  # Preserve the original resource until forward navigation exists.
+    event_ids, checkpoints, traces = [], [], []
+    aggregates = ([request_id] if request_id else []) + quote_ids + order_ids
+    for reference in aggregates:
+        for row in conn.execute("SELECT id,audit_id,json_extract(payload,'$.links.trace_id') FROM events WHERE aggregate_id=? ORDER BY aggregate_revision", (reference,)):
+            event_ids.append(row[0])
+            checkpoints.append(row[1])
+            if row[2] and row[2] not in traces:
+                traces.append(row[2])
+    return {"quote_ids": quote_ids, "order_ids": order_ids, "event_ids": event_ids,
+            "audit_checkpoints": checkpoints, "trace_ids": traces}
 
 
 EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "QUOTE_ACCEPTED": "quote.accepted",
@@ -136,10 +163,14 @@ class Outbox:
         if not self.lock.acquire(blocking=False):
             return
         try:
+            consumers = tuple(self.handlers)
+            if not consumers:
+                return
+            placeholders = ",".join("?" for _ in consumers)
             with self.db.connect() as conn:
                 rows = conn.execute("SELECT o.*,e.payload FROM outbox o JOIN events e ON e.id=o.event_id "
-                                    "WHERE o.status='pending' AND o.next_attempt_at<=? ORDER BY e.rowid LIMIT ?",
-                                    (utcnow().isoformat(), limit)).fetchall()
+                                    f"WHERE o.status='pending' AND o.consumer IN ({placeholders}) AND o.next_attempt_at<=? ORDER BY e.rowid LIMIT ?",
+                                    (*consumers, utcnow().isoformat(), limit)).fetchall()
             for row in rows:
                 handler = self.handlers.get(row["consumer"])
                 if handler is None:

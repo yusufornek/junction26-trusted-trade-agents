@@ -455,10 +455,27 @@ class Orders:
                 if line.availability.availability_known:
                     conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, reservation_key(order.supplier_id, line.product_id), line.units_needed))
 
+    def revalidate_quote_replay(self, quote_id, agent_id, *, operator=False, mandate=None):
+        def validate(counter):
+            with self.db.connect() as conn:
+                quote = check_owner(self._quote(conn, quote_id), None if operator else agent_id, "QUOTE_NOT_FOUND")
+                _, _, used = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
+                    products=[line.product_id for line in quote.lines], bound=("quote", quote_id),
+                    supplier_id=quote.supplier_id)
+                if used is not None:
+                    self.mandates.used(conn, used)
+        self._run("CREATE_QUOTE", f"agent:{agent_id}", {"quote_id": quote_id}, validate)
+
     def get_quote(self, quote_id, agent_id=None):
+        return self._get_quote(quote_id, agent_id)
+
+    def _get_quote(self, quote_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
-            return check_owner(self._quote(conn, quote_id), agent_id, "QUOTE_NOT_FOUND")
+            quote = check_owner(self._quote(conn, quote_id), agent_id, "QUOTE_NOT_FOUND")
+            from .foundation import forward_links
+            quote.links.update(forward_links(conn, quote_id=quote.id, agent_id=agent_id))
+            return quote
 
     def get_order(self, order_id, agent_id=None):
         self.expire()
@@ -550,6 +567,7 @@ class Orders:
             quote = self._quote(conn, order.quote_id)
             if approve:
                 policy, record = self.policy.get(), None
+                policy_snapshot = policy
                 if self.mandates.stored(conn, "order", order_id) is not None:
                     policy, record, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
                         products=[o.product_id for o in order.lines], bound=("order", order_id), supplier_id=order.supplier_id)
@@ -578,6 +596,14 @@ class Orders:
                 if order.expires_at <= audit.utcnow():
                     raise DomainError("EXPIRED_ORDER", "The approval window expired during stock verification")
                 order.policy = evaluation
+                if quote.need_ref:
+                    _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need, policy=policy)
+                else:
+                    legacy_need = NeedSpec.model_construct(customer_id=quote.customer_id, deliver_by=quote.deliver_by,
+                        supplier_id=order.supplier_id, intent="Legacy quote", quantity=Quantity(value=1, unit="SALES_UNIT"))
+                    _, effective = self.policy.effective_need(legacy_need, policy=policy)
+                order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective,
+                    order.mandate, supplier_id=order.supplier_id, snapshot=policy_snapshot)
                 order.warnings = quote.warnings
                 changes = evidence_changes(previous, order)
                 if changes:

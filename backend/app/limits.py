@@ -58,7 +58,7 @@ class Limiter:
 
 
 class SourceLimiter:
-    """Bound unknown-credential attempts before hashing/comparing credentials."""
+    """Bound unknown-credential attempts before full principal/policy resolution."""
     def __init__(self, capacity=60, refill_per_minute=60, clock=None, max_sources=4096):
         from collections import OrderedDict
         self.capacity, self.rate = capacity, refill_per_minute / 60

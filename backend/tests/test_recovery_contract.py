@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app import audit
@@ -26,17 +27,30 @@ def expire_quote(gateway, quote):
 
 
 def test_ac_1_all_domain_codes_have_explicit_mapping():
-    codes = set()
+    codes = {"UNKNOWN_CODE", "VALIDATION_ERROR"}
+    dynamic_sources = {("auth.py", "check_owner", "code"),
+                       ("recovery.py", "validation_problem", "code"),
+                       ("a2a.py", "invoke", "code")}
+    observed = set()
     for file in (Path(__file__).parents[1] / "app").glob("*.py"):
         tree = ast.parse(file.read_text())
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "DomainError":
                 code = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg == "code"), None)
                 if isinstance(code, ast.Constant):
                     codes.add(code.value)
                 else:
-                    # Dynamic calls may only delegate an existing error/ownership code.
-                    assert isinstance(code, (ast.Name, ast.Attribute))
+                    owner = parents.get(node)
+                    while owner is not None and not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        owner = parents.get(owner)
+                    source = (file.name, owner.name if owner else None, ast.unparse(code))
+                    assert source in dynamic_sources, source
+                    observed.add(source)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "check_owner":
+                assert len(node.args) >= 3 and isinstance(node.args[2], ast.Constant)
+                codes.add(node.args[2].value)
+    assert observed == dynamic_sources
     assert codes <= RECOVERY.keys(), codes - RECOVERY.keys()
     assert set(RECOVERY.values()) <= {(False, action) for action in ("FIX_REQUEST", "STOP", "CONTACT_ADMIN", "REFRESH_QUOTE", "REVIEW_UPDATED_EVIDENCE", "LOOKUP_REQUIRED")} | {(True, "RETRY_SAME_COMMAND")}
 
@@ -58,12 +72,15 @@ def test_ac_2_expired_quote_problem_matches_mcp(gateway, need, upstream):
         assert result.structured_content[field] == data[field]
 
 
-def test_ac_3_timeout_is_retryable_with_interval(gateway, need, upstream, respx_mock):
+@pytest.mark.parametrize("endpoint", ["quote", "price", "availability"])
+def test_ac_3_timeout_is_retryable_with_interval(gateway, need, upstream, respx_mock, endpoint):
     quote = make_quote(gateway, need)
-    respx_mock.post("https://valio.test/api/price").mock(side_effect=httpx.ReadTimeout("private upstream detail"))
+    gateway.valio.cache.clear()
+    respx_mock.post("https://valio.test/api/" + ("price" if endpoint == "quote" else endpoint)).mock(side_effect=httpx.ReadTimeout("private upstream detail"))
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
         from conftest import quote_request
-        response = client.post("/v1/quotes", json=quote_request(need, need_ref=quote.need_ref).model_dump(mode="json"))
+        response = (client.post("/v1/quotes", json=quote_request(need, need_ref=quote.need_ref).model_dump(mode="json"))
+                    if endpoint == "quote" else client.post("/v1/offers", json=need.model_dump(mode="json")))
     assert response.status_code == 502
     data = response.json()
     assert data["retryable"] and data["next_action"] == "RETRY_SAME_COMMAND"
@@ -129,7 +146,21 @@ def test_ac_7_reference_client_recovers_using_actions_only(gateway, need, upstre
         result = await server.call_tool(name, arguments)
         if name == "place_order" and not result.is_error and not state["lost"]:
             state["lost"] = True
-            raise TimeoutError("committed but response lost")
+            # Real SDK read timeout on an in-memory connection after the purchase committed.
+            import anyio
+            from mcp import ClientSession
+            incoming_send, incoming = anyio.create_memory_object_stream(10)
+            outgoing, outgoing_receive = anyio.create_memory_object_stream(10)
+            from mcp.shared.exceptions import MCPError
+            timeout = None
+            async with incoming_send, incoming, outgoing, outgoing_receive:
+                async with ClientSession(incoming, outgoing, read_timeout_seconds=0.01) as session:
+                    try:
+                        await session.call_tool("place_order", arguments)
+                    except MCPError as error:
+                        timeout = error
+            assert timeout is not None
+            raise timeout
         return result
     async def sleep(seconds):
         waits.append(seconds)

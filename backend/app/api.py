@@ -291,7 +291,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
         return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate)
 
-    @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
+    @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref",
+             description="Authorized stored lookup with forward links to related quotes, orders, events, audit checkpoints and traces, including historical records.")
     def get_lookup(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).lookup.get(lookup_id, principal.owner)
 
@@ -326,7 +327,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate, command_key=idempotency_key)
 
-    @app.get("/v1/quotes/{id}", response_model=Quote)
+    @app.get("/v1/quotes/{id}", response_model=Quote,
+             description="Authorized quote evidence with derived forward navigation in links (quote_ids, order_ids, event_ids, audit_checkpoints, trace_ids). These mutable lists are excluded from signed evidence; original link identifiers stay authenticated.")
     def get_quote(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_quote(id, principal.owner)
 
@@ -373,7 +375,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
         service = svc(request)
         from .autonomy import buyer_scope
-        return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)
+        return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id)) for o in service.orders.list_orders(True)
                 if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order,

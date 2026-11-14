@@ -13,6 +13,9 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
+from mcp.shared.exceptions import MCPError
+from mcp_types import CONNECTION_CLOSED, REQUEST_TIMEOUT
+
 
 class RecoveryRequired(Exception):
     def __init__(self, payload):
@@ -32,6 +35,10 @@ class ReferenceBuyer:
             try:
                 response = await self.call_tool(command, arguments)
                 payload = response.structured_content
+            except MCPError as error:
+                if error.code not in {REQUEST_TIMEOUT, CONNECTION_CLOSED}:
+                    raise
+                payload = {"next_action": "RETRY_SAME_COMMAND", "retry_after_seconds": 1}
             except (TimeoutError, ConnectionError):
                 # A lost response is ambiguous, so retry the exact same command/key.
                 payload = {"next_action": "RETRY_SAME_COMMAND", "retry_after_seconds": 1}

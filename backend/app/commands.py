@@ -50,7 +50,12 @@ def install(gateway, target, name, category):
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         payload = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
                    if k not in {"agent_id", "actor", "operator", "mandate", "principal", "idempotency_key"}})}
-        digest = sha256(canonical_json(payload)).hexdigest()
+        legacy_digest = sha256(canonical_json(payload)).hexdigest()
+        if target is gateway.policy and name == "update" and not arguments.get("reset"):
+            policy = arguments["request"].policy
+            payload["policy_presence"] = {"sections": sorted(policy.model_fields_set),
+                                          "shortlist": sorted(policy.shortlist.model_fields_set)}
+        digest = "v2:" + sha256(canonical_json(payload)).hexdigest()
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
         try:
@@ -63,26 +68,47 @@ def install(gateway, target, name, category):
             error = None
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
-                if previous:
-                    if previous["digest"] != digest:
-                        raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
+                legacy = None
+                if not previous and name == "place_order":
+                    storage_key = sha256((identity + "\x00" + key).encode()).hexdigest()
+                    legacy = conn.execute("SELECT data FROM orders WHERE idempotency_key=? OR "
+                        "(idempotency_key=? AND json_extract(data,'$.agent_id')=?)",
+                        (storage_key, key, identity)).fetchone()
                 try:
-                    gateway.limiter.consume(identity, "read" if previous else category)
+                    gateway.limiter.consume(identity, "read" if previous or legacy else category)
+                    if previous and previous["digest"] not in {digest, legacy_digest}:
+                        raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
                     if previous:
-                        if name == "place_order":
-                            # Preserve buyer mandate revalidation and the historical replay audit.
-                            return linked(operation(*args, **kwargs))
-                        from . import models
                         saved = json.loads(previous["result"])
-                        model = getattr(models, saved["model"]) if saved["model"] else None
-                        return model.model_validate(saved["value"]) if model else saved["value"]
-                    result = linked(operation(*args, **kwargs))
+                        if saved.get("error"):
+                            refusal = saved["error"]
+                            # Only committed evidence-change refusals are saved as command results.
+                            error = DomainError("EVIDENCE_CHANGED", refusal["message"], refusal["status"], refusal["data"])
+                        else:
+                            from . import models
+                            model = getattr(models, saved["model"]) if saved["model"] else None
+                            result = model.model_validate(saved["value"]) if model else saved["value"]
+                            if name == "place_order":
+                                current = linked(operation(*args, **kwargs))
+                                # Spec 25 AC-4 explicitly resumes an ambiguous supplier execution.
+                                if result.status == "PENDING_EXECUTION":
+                                    result = current
+                            elif name == "create_quote":
+                                gateway.orders.revalidate_quote_replay(result.id, identity,
+                                    operator=arguments.get("operator", False), mandate=arguments.get("mandate"))
+                    else:
+                        result = linked(operation(*args, **kwargs))
                 except DomainError as caught:
                     error = caught
+                    if not previous and caught.code == "EVIDENCE_CHANGED":
+                        conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
+                            (scope, key, name, digest, json.dumps({"error": {"message": caught.message,
+                             "status": caught.status, "data": caught.data}})))
                 else:
-                    conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
-                                 (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
-                                                                     "value": json_value(result)})))
+                    if not previous:
+                        conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
+                                     (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
+                                                                         "value": json_value(result)})))
             if error:
                 raise error
             return result

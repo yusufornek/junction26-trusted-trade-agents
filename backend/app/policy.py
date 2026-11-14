@@ -111,6 +111,14 @@ class Policy:
     def _update(self, request, *, reset=False, actor=None, audit_action="POLICY_UPDATED", audit_data=None):
         # Shared SQLite writer lock serializes policy updates across REST/MCP processes.
         replaced, previous = False, None
+        def restore():
+            nonlocal replaced
+            if replaced:
+                if previous is None:
+                    self.runtime_path.unlink(missing_ok=True)
+                else:
+                    self._replace(previous)
+                replaced = False
         try:
             with self.db.connect(write=True) as conn:
                 if callable(request):
@@ -140,13 +148,9 @@ class Policy:
                                    "reset": reset, "stated_name": request.updated_by, **(audit_data or {})})
                 self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
                 replaced = True
+                self.db.on_rollback(restore)
         except BaseException:
-            # Restore the file if the audit transaction cannot commit.
-            if replaced:
-                if previous is None:
-                    self.runtime_path.unlink(missing_ok=True)
-                else:
-                    self._replace(previous)
+            restore()
             raise
         return self.get()
 

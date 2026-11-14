@@ -284,3 +284,26 @@ def test_ac_7_recorded_demo_464306_1010_eur_confirms(gateway, need, respx_mock):
     result = replay_recorded_demo(gateway, need, respx_mock)
     assert (result.offers[0].product_id, result.offers[0].purchase_total) == ("464306", 1010)
     assert gateway.orders.list_orders()[0].status == "CONFIRMED"
+
+
+def test_review_mixed_cached_live_cutoff_age(gateway, need, upstream, monkeypatch, respx_mock):
+    start = audit.utcnow()
+    clock = [start]
+    monkeypatch.setattr(valio, 'time', SimpleNamespace(monotonic=lambda: clock[0].timestamp()))
+    upstream.cutoff = start + timedelta(seconds=10)
+    def response(request):
+        body = upstream.availability_response(request).json()
+        body['timeNow'] = clock[0].isoformat()
+        return httpx.Response(200, json=body)
+    respx_mock.post('https://valio.test/api/availability').mock(side_effect=response)
+    first = gateway.valio.fetch('availability', '1', need.deliver_by, ['1'], RequestCounter())['1']
+    clock[0] += timedelta(seconds=5)
+    def delayed(request):
+        clock[0] += timedelta(seconds=10)
+        return response(request)
+    respx_mock.post('https://valio.test/api/availability').mock(side_effect=delayed)
+    mixed = gateway.valio.fetch('availability', '1', need.deliver_by, ['1', '4'], RequestCounter())
+    assert mixed['1']['_fetched_at'] == first['_fetched_at']
+    assert mixed['1']['_cache_age'] == 15
+    availability, warnings = availability_for(mixed['1'], need.deliver_by, 1)
+    assert 'CUTOFF_PASSED' in {w.code for w in warnings}

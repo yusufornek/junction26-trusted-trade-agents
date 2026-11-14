@@ -6049,6 +6049,8 @@ paths:
   /v1/lookups/{lookup_id}:
     get:
       summary: Retrieve stored alternatives behind a quote's need_ref
+      description: Authorized stored lookup with forward links to related quotes,
+        orders, events, audit checkpoints and traces, including historical records.
       operationId: get_lookup_v1_lookups__lookup_id__get
       security:
       - BearerAuth: []
@@ -7625,6 +7627,9 @@ paths:
   /v1/quotes/{id}:
     get:
       summary: Get Quote
+      description: Authorized quote evidence with derived forward navigation in links
+        (quote_ids, order_ids, event_ids, audit_checkpoints, trace_ids). These mutable
+        lists are excluded from signed evidence; original link identifiers stay authenticated.
       operationId: get_quote_v1_quotes__id__get
       security:
       - BearerAuth: []
