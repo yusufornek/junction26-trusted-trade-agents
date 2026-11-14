@@ -17,6 +17,17 @@ top entry; the numbered sections below hold the details.
   approve/reject sends only the first request (`frontend/src/pages/Approvals.tsx`), so approvals never finish. Handle
   `CONFIRMATION_INVALID` and `EVIDENCE_CHANGED`. This blocks the brief's third core requirement in the demo.
 
+- **Push 4 (15.11, ~00:15) — agent surface (spec 60) + recurring pause.**
+  - MCP now exposes 79 tools across buyer/tenant/operator with annotations (read-only, destructive) and output schemas,
+    readable resources (`luotsi://orders/{id}`, `luotsi://approvals/pending`, `luotsi://inbox`, …) with subscriptions,
+    six prompts, and human questions inside the agent (elicitation) with the `input_required` fallback.
+  - Signed agent cards and MCP server card; every tool result names the issuer; authenticated discovery is private.
+  - One-click client setup: `GET /v1/connect/clients/{client}` (claude-desktop, claude-code, chatgpt, cursor, vscode,
+    generic) returns ready configuration for the live URL — the Connect page can show it per client.
+  - Connection health: `GET` health per connection (last used, calls by tool, errors, scope) and
+    `POST /v1/connections/{id}/test` — worth a "Test connection" button and a small health panel.
+  - Plain-language requests: A2A text or MCP `interpret_request` → structured draft the agent confirms.
+  - Recurring orders: `POST /v1/recurring-orders/{id}/pause` and `/resume` now exist (section 11 correction resolved).
 - **Push 3 (14.11, ~22:30) — brief scenarios (spec 46) + fixes.**
   - Basket lines accept `on_hand {value, unit}`; responses show needed / on hand / to buy per line.
   - Near `deliver_by`: lines carry `arrives_in_time` and, when late, `cannot_source_in_time` with in-time alternatives.
