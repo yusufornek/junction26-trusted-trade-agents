@@ -10,7 +10,8 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect, named_case_sizes
+from .catalog import (allergen_evidence, constraint_failures, number, suspect_content, case_suspect,
+                      named_case_sizes, name_sales_sizes, name_measures)
 from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
@@ -105,6 +106,8 @@ def reconcile_size(product, price, requested_unit):
     ratio = None
     if not price.get("error") and price.get("comparisonUnit") == requested_unit and net and net > 0 and comparison and comparison > 0:
         ratio = float(pack_quantity(Decimal(str(net)) / Decimal(str(comparison))))
+        if ratio <= 0:
+            ratio = None
     if product.sales_unit == requested_unit == "KG":
         # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
         # ("ca 2,4 kg") describes the item, not the sales unit.
@@ -125,26 +128,25 @@ def reconcile_size(product, price, requested_unit):
     if not sales_suspect and sales_content and sales_content > 0:
         exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
     if multiplier is not None and multiplier > 0:
+        named = name_sales_sizes(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier)
         if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
-        # Compute the name source too, even when structured catalog content exists.
-        # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
-        # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
-        # multiplier does not already carry it ("5 x Milk 1 L" with multiplier 5 stays 5 x 1 L).
-        pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
-        factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
-        for name in (product.name_en, product.name_fi):
-            for match in re.finditer(pattern, name, re.IGNORECASE):
-                count = int(match[1]) if match[1] else 1
-                value, unit = Decimal(match[2].replace(",", ".")), match[3].lower()
-                if unit in factors and value > 0:
-                    exact["name_parse"] = float(pack_quantity(value, factor=factors[unit],
-                        multiplier=count if multiplier == 1 and count > 0 else multiplier))
-                    break
-            if "name_parse" in exact:
-                break
-        if multiplier == 1 and named_cases:
-            exact["name_parse"] = named_cases[0]
+        if product.base_unit == requested_unit:
+            # Here the multiplier is already a measure, not a count of packages.
+            exact.setdefault("catalog", float(pack_quantity(multiplier)))
+        if "catalog" not in exact and sales_content and sales_content > 0 and not suspect_content(
+                sales_content / multiplier, [], requested_unit) and (not named or any(
+                max(sales_content / size, size / sales_content) < 10 for size in named)):
+            # Retain plausible but contradictory CASE evidence for explicit review.
+            # Grossly suspect data still falls back as required by spec 15 R-8.
+            exact["catalog"] = float(pack_quantity(sales_content, whole_case=True))
+        # Use the same nested-count/net-weight parsing as catalog CASE validation.
+        if named:
+            exact["name_parse"] = next((size for size in named if exact.get("catalog", 0) > 0 and
+                abs(size / exact["catalog"] - 1) <= .03), named[0])
+
+    # A nonpositive size, including one rounded to zero, is never evidence or a divisor.
+    exact = {source: size for source, size in exact.items() if size > 0}
 
     def packaging_warnings(size):
         if named_cases and not any(abs(size / named - 1) <= .03 or
@@ -157,7 +159,23 @@ def reconcile_size(product, price, requested_unit):
     if exact:
         if ratio is None:
             source = next(iter(exact))
-            return exact[source], source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(exact[source])]
+            # Independent explicit counts can contradict the sales multiplier. A
+            # lone "1 x" is an inner package description when the multiplier > 1.
+            count_evidence = named_cases if named_cases and not all(
+                counts == [1] for name in names for _, counts in name_measures(name, requested_unit)
+                if counts) else []
+            candidates = count_evidence or named if multiplier is not None and multiplier > 0 else named_cases
+            size = exact[source]
+            if candidates and not any(abs(size / candidate - 1) <= .03 or isclose(
+                    abs(size / candidate - 1), .03, rel_tol=1e-12) for candidate in candidates):
+                values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
+                conservative = min(size, *candidates)
+                mismatch = Warning(code="SIZE_MISMATCH", text=(
+                    f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; name_case={candidates} {requested_unit}; "
+                    f"used={conservative:g} {requested_unit} for conservative display only; approval required."))
+                display_source = next((key for key, value in exact.items() if value == conservative), "name_parse")
+                return conservative, display_source, False, [warning("SIZE_UNCONFIRMED"), mismatch]
+            return size, source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(size)]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
         for source, size in exact.items():
             difference = abs(ratio / size - 1)

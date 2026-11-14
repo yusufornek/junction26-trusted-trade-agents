@@ -171,7 +171,7 @@ class OfferCard(Model):
     name: str
     sales_unit: str
     allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
-    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.")
+    size_per_sales_unit: float | None = Field(default=None, description="Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")

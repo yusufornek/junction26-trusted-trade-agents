@@ -243,54 +243,47 @@ def actual_product_rows():
 
 @pytest.fixture(scope="session")
 def real_case_name_products(actual_product_rows):
-    """Independent name oracle; include every named multipack, including count-only goods."""
+    """Independent oracle for every CASE product, including nested and net/drained names."""
     from decimal import Decimal
+    from math import prod
     from app.catalog import extract
-    size_pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|g|l|dl|cl|ml)\b"
-    prefix_pattern = r"^\s*(\d+)\s*[x×]"
-    direct_pattern = r"(?<![\d.,])(\d+)\s*[x×]\s*" + size_pattern
-    pieces_pattern = r"(?<![\d.,])(\d+)\s*(?:pcs|kpl)\b"
+    # Read the net measure before a shared-unit drained weight. Counts are collected
+    # independently from the text before each measure, not from production parsing.
+    measure = (r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)"
+               r"(?:\s*/\s*\d+(?:[.,]\d+)?(?=\s*(?:kg|g)\b))?\s*(kg|g|l|dl|cl|ml)\b")
     factors = {"kg": ("KG", "1"), "g": ("KG", ".001"), "l": ("L", "1"),
                "dl": ("L", ".1"), "cl": ("L", ".01"), "ml": ("L", ".001")}
     result = []
     for row in actual_product_rows:
         if row.get("deleted") or row.get("salesUnit") not in {"KI", "CASE"}:
             continue
-        names = [n["value"] for n in (row.get("synkkaData") or {}).get("names", [])]
-        if not any(re.search(prefix_pattern, n, re.I) or re.search(direct_pattern, n, re.I)
-                   or re.search(pieces_pattern, n, re.I) for n in names):
-            continue
-        expected = {"L": set(), "KG": set()}
-        for name in names:
-            prefix = re.search(prefix_pattern, name, re.I)
-            pieces = re.search(pieces_pattern, name, re.I)
-            direct = {m.start(2): m[1] for m in re.finditer(direct_pattern, name, re.I)}
-            for match in re.finditer(size_pattern, name, re.I):
-                count = direct.get(match.start()) or (prefix[1] if prefix else None) or next(iter(direct.values()), None)
-                if count is None and pieces:
-                    # "200g/4pcs" weighs the whole bag; it is not four 200g bags.
-                    if pieces.start() > 0 and name[pieces.start() - 1] == "/":
-                        count = next((u["sizeInBaseUnits"] for u in row.get("units", [])
-                                      if u["unitId"] == row["salesUnit"]), 1)
-                    else:
-                        count = pieces[1]
-                if count is None:
-                    continue
-                unit, factor = factors[match[2].lower()]
-                expected[unit].add(Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor))
-        # A count-only translation may omit the package weight supplied in another language.
+        names = [n["value"] for n in (row.get("synkkaData") or {}).get("names", [])
+                 if n.get("language") in {"en", "fi"}]
         multiplier = next((u["sizeInBaseUnits"] for u in row.get("units", [])
                            if u["unitId"] == row["salesUnit"]), 1)
-        for unit in expected:
-            if not expected[unit]:
-                for name in names:
-                    for match in re.finditer(size_pattern, name, re.I):
-                        dimension, factor = factors[match[2].lower()]
-                        if dimension == unit:
-                            expected[unit].add(Decimal(str(multiplier)) *
-                                Decimal(match[1].replace(",", ".")) * Decimal(factor))
+        expected = {"L": set(), "KG": set()}
+        for name in names:
+            leading = re.match(r"\s*((?:\d+\s*[x×]\s*)+)", name, re.I)
+            leading_counts = list(map(int, re.findall(r"\d+", leading[1]))) if leading else []
+            matches = list(re.finditer(measure, name, re.I))
+            direct_counts = []
+            for match in matches:
+                before = name[:match.start()]
+                direct = re.search(r"((?:\d+\s*[x×]\s*)+)$", before, re.I)
+                direct_counts.append(list(map(int, re.findall(r"\d+", direct[1]))) if direct else [])
+            pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+            for match, direct in zip(matches, direct_counts):
+                counts = direct or leading_counts or next((c for c in direct_counts if c), [])
+                if direct and leading and leading.end() < match.start():
+                    counts = leading_counts + direct
+                unit, factor = factors[match[2].lower()]
+                count = prod(counts) if counts else int(pieces[1]) if pieces else (
+                    1 if row.get("baseUnit") == unit else multiplier)
+                value = Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor)
+                if value > 0:
+                    expected[unit].add(value.quantize(Decimal("0.000001")))
         result.append((extract(row, {}, {}), expected))
-    assert any(p.id == "477242" for p, _ in result)
+    assert {"460913", "477461", "462402", "462050", "477242"} <= {p.id for p, _ in result}
     return result
 
 

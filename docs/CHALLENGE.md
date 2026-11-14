@@ -185,4 +185,9 @@ How the gateway follows them: spec 39.
 - Shop features close to ours: order templates ("Lisää tilauspohjalle"), "colleagues often buy these",
   "also bought", product comparison, availability notifications, substitute suggestions. Ordering is add to cart
   with no approval step.
+- Case products match the gateway's pack counts: Saarioinen meat balls 5 kg/case (56.00 €/ltk, 11.20 €/kg) and
+  4.5 kg/case (59.69 €/ltk, 13.26 €/kg), sold per whole case ("1 ltk = 1 ltk").
+- Delivery date is chosen per cart in a calendar (today, selected day, days with a confirmed order, days with an
+  open cart); products show their earliest delivery ("Toimitettavissa 18.11."). No order cut-off time is shown on
+  product pages or in the calendar; the cut-off lives in the availability data (`closingTime`).
 

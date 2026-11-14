@@ -12,8 +12,8 @@ def pack_quantity(size, *, multiplier=1, factor=1, whole_case=False, requested=N
 
     Catalog CASE volume/netWeight already includes the sales-unit multiplier:
     whole_case=True applies only the unit conversion. BASE_UNIT_OR_EACH and
-    name sizes need the multiplier once (a name's explicit count replaces it
-    only when the catalog multiplier is one). Never multiply an existing CASE.
+    name sizes need the multiplier once. Callers preserve nested inner counts
+    while consuming the outer sales multiplier once. Never multiply an existing CASE.
     All inputs use Decimal(str(value)); sizes are quantized before division.
     Explicit quote sales quantities pass through offer_for unchanged.
     """

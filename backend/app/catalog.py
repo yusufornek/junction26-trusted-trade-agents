@@ -37,11 +37,59 @@ def csv_values(path, column):
         return {str(row["productId"]): number(row.get(column)) for row in reader}
 
 
-def name_sizes(name, unit):
-    pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+def name_measures(name, unit):
+    """Positive net measures and their package counts, from outermost to innermost.
+
+    A shared-unit net/drained expression (460/230g) describes one 460g package.
+    Keep separated counts too: "8 x Brand 4x70g" and "4x6xBrand 0.33 l".
+    "200g/4pcs" describes portions of an already weighed package.
+    """
+    pattern = (r"(?:(?<![\d.,])|(?<=[a-z]\.)(?=\d+\s*[x×]))"
+               r"((?:\d+\s*[x×]\s*)*)(-?\d+(?:[.,]\d+)?)"
+               r"(?:\s*/\s*\d+(?:[.,]\d+)?(?=\s*(?:kg|g)\b))?\s*(kg|dl|cl|ml|l|g)\b")
     factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
-    return [float(pack_quantity(match[2].replace(",", "."), factor=factors[match[3].lower()]))
-            for match in re.finditer(pattern, name, re.IGNORECASE) if match[3].lower() in factors]
+    matches = list(re.finditer(pattern, name, re.I))
+    prefix = re.match(r"\s*((?:\d+\s*[x×]\s*)+)", name, re.I)
+    leading = [int(n) for n in re.findall(r"\d+", prefix[1])] if prefix else []
+    pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+    direct = [[int(n) for n in re.findall(r"\d+", match[1])] for match in matches]
+    result = []
+    for match, counts in zip(matches, direct):
+        if match[3].lower() not in factors:
+            continue
+        value = float(pack_quantity(match[2].replace(",", "."), factor=factors[match[3].lower()]))
+        if value <= 0:
+            continue
+        if counts and prefix and match.start() >= prefix.end():
+            counts = leading + counts
+        counts = counts or leading or next((c for c in direct if c), []) or ([int(pieces[1])] if pieces else [])
+        if any(count <= 0 for count in counts):
+            continue
+        result.append((value, counts))
+    return result
+
+
+def name_sizes(name, unit):
+    return [value for value, _ in name_measures(name, unit)]
+
+
+def name_sales_sizes(names, unit, multiplier):
+    """Apply the sales multiplier once, preserving counts within each base package."""
+    result, counted = [], []
+    for name in names:
+        for value, counts in name_measures(name, unit):
+            if multiplier == 1:
+                count = math.prod(counts)
+            elif len(counts) > 1 and math.prod(counts) != multiplier:
+                count = multiplier * math.prod(counts[1:])
+            else:
+                count = multiplier
+            size = float(pack_quantity(value, multiplier=count))
+            if size > 0:
+                result.append(size)
+                if counts:
+                    counted.append(size)
+    return counted if multiplier == 1 and counted else result
 
 
 def suspect_content(value, names, unit):
@@ -55,26 +103,9 @@ def suspect_content(value, names, unit):
 
 
 def named_case_sizes(names, unit):
-    """Independent whole-case evidence from explicit counts, never a bare inner size.
-
-    A leading count may precede the brand (24x Brooklyn ... 0.33 L). A count
-    immediately before a measure takes precedence. A /4pcs suffix describes
-    the contents of an already weighed package, rather than four such packages.
-    """
-    pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
-    factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
-    result = []
-    for name in names:
-        prefix = re.match(r"\s*(\d+)\s*[x×]", name, re.I)
-        pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
-        pack = next((m for m in re.finditer(pattern, name, re.I) if m[1]), None)
-        for match in re.finditer(pattern, name, re.I):
-            count = (match[1] or (prefix[1] if prefix else None) or
-                     (pack[1] if pack else None) or (pieces[1] if pieces else None))
-            if count and match[3].lower() in factors and int(count) > 0:
-                result.append(float(pack_quantity(match[2].replace(",", "."),
-                    multiplier=int(count), factor=factors[match[3].lower()])))
-    return result
+    """Independent whole-case evidence: retain every explicit nested count."""
+    return [size for name in names for value, counts in name_measures(name, unit) if counts
+            if (size := float(pack_quantity(value, multiplier=math.prod(counts)))) > 0]
 
 
 def case_suspect(value, multiplier, names, unit, base_unit=None, base_content=None):
@@ -93,7 +124,7 @@ def case_suspect(value, multiplier, names, unit, base_unit=None, base_content=No
             inner.append(base_content)
         # Spec 05 R-8: a known multiplier already carries the package count.
         # Even a "1 x" name cannot turn one bottle into a multi-bottle CASE.
-        expected = ([] if multiplier and multiplier > 1 else named_case_sizes(names, unit))
+        expected = name_sales_sizes(names, unit, multiplier or 1)
         if not expected:
             expected = [float(pack_quantity(size, multiplier=multiplier or 1)) for size in inner]
     return bool(expected and not any(size > 0 and (abs(value / size - 1) <= .03 or

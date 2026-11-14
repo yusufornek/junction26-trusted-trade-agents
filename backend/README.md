@@ -286,7 +286,10 @@ Old stored lookups without preferences/plans remain readable, including through 
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
   CASE sales content needs no additional base-unit multiplier. It must agree within 3% with whole-case
   name evidence (including leading counts such as `24x Brooklyn ... 0.33 L`), or inner content times the
-  sales-unit multiplier. An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
+  sales-unit multiplier. Nested counts (`8 x Brand 4x70g`, `4x6x ... 0.33 L`) retain the inner counts
+  while consuming the outer sales multiplier once. Shared-unit net/drained names (`460/230g`) use
+  the net weight, 460g. Nonpositive measures, including measures rounded to zero, supply no evidence.
+  An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
   measures case weight rather than counting packages, preserving valid whole-case weights.
   Legacy CASE suspicion flags are recalculated from retained content and names without a database rewrite.
   Catalog sizes >100 L, >100 kg, <1 g per base unit or
@@ -297,6 +300,9 @@ Old stored lookups without preferences/plans remain readable, including through 
   Suspect CASE content falls back to valid BASE content, the name or ratio, then `SIZE_UNKNOWN`. A disagreement
   with the price ratio uses the ratio and emits `SIZE_MISMATCH` naming the values; a conversion inconsistent
   with explicit name counts also carries `SIZE_MISMATCH`, even without a ratio. Both require approval by default.
+  Without a live ratio, plausible but contradictory catalog/name content is not confirmed: `SIZE_MISMATCH`
+  names both figures and the plan displays the larger units-needed estimate (the smaller content).
+  This estimate is for review only and always requires approval; explicit quote quantities stay unchanged.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
   count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.

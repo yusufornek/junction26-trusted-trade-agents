@@ -5386,9 +5386,12 @@ components:
           - type: number
           - type: 'null'
           title: Size Per Sales Unit
-          description: Quantity unit per sales unit, quantized to six decimal places
-            before pack arithmetic; CASE content already includes its multiplier.
-            Null when conversion is unknown.
+          description: Positive quantity unit per sales unit, quantized to six decimal
+            places before pack arithmetic; CASE content already includes its multiplier.
+            Nested name counts retain inner packages; net/drained names use net weight.
+            With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH
+            reports both sizes and this is the smaller content for a conservative
+            display estimate requiring approval. Null when conversion is unknown.
         size_unit:
           type: string
           enum:
