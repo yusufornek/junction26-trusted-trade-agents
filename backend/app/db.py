@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS supplier_products (
  supplier_id TEXT NOT NULL, supplier_sku TEXT NOT NULL, data TEXT NOT NULL,
  PRIMARY KEY(supplier_id,supplier_sku)
 );
+CREATE TABLE IF NOT EXISTS supplier_execution_outbox (
+ order_id TEXT PRIMARY KEY REFERENCES orders(id), payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending'
+);
 CREATE TABLE IF NOT EXISTS workspace (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS agent_autonomy (
@@ -143,7 +146,7 @@ class Database:
                                "size_suspect": "INTEGER", "volume_suspect": "INTEGER", "weight_suspect": "INTEGER",
                                "sales_volume_l": "REAL", "gtin": "TEXT", "unit_gtins": "TEXT",
                                "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT",
-                               "density_kg_per_l": "REAL"}.items():
+                               "density_kg_per_l": "REAL", "minimum_order_quantity": "REAL NOT NULL DEFAULT 1"}.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")
             from .audit import migrate

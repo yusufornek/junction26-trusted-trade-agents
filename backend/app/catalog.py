@@ -233,11 +233,12 @@ def name_size_evidence(names, unit, multiplier=1):
                     total.update(size=total["measure"], stated_size=total["measure"])
                     portion.update(size=total["measure"], check_only=True)
         result.extend(records)
-        # Conflicting explicit counts stay separate candidates. Missing comparison
-        # prices cannot make the catalog multiplier proof of one interpretation.
+        # A known multiplier supplies the pack count (R-8). Retain stated_size
+        # on the record for diagnostics, never as a competing exact size.
         result.extend({**r, "size": r["stated_size"]} for r in records
                       if r["stated_size"] and not r["check_only"]
-                      and not sizes_agree(r["size"], r["stated_size"]))
+                      and not sizes_agree(r["size"], r["stated_size"])
+                      and not (multiplier and multiplier > 1 and r["count"]))
     return result
 
 

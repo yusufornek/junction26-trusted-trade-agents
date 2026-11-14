@@ -183,3 +183,50 @@ def test_versioned_scenarios_exercise_real_rules(sandbox_gateway, scenario):
             quote = service.orders.create_quote(quote_request(lookup.need, qty=10, need_ref=lookup.lookup_id))
         with pytest.raises(DomainError, match="EXPIRED_QUOTE"):
             service.orders.place_order(quote.id, "fixture-expiry")
+
+
+@pytest.mark.parametrize("approval", [False, True])
+def test_review_nordfood_simulated_execution_can_confirm(sandbox_gateway, approval):
+    service = sandbox_gateway
+    policy = service.policy.get().model_dump(mode="json")
+    policy["agents"]["external"]["autonomy"] = "approval_required" if approval else "autonomous_within_limits"
+    service.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
+    need = sandbox_need(service, 10).model_copy(update={"supplier_id": "nordfood"})
+    lookup = service.find_offers(need)
+    with service.activate():
+        quote = service.orders.create_quote(quote_request(need, qty=2, need_ref=lookup.lookup_id))
+    order = service.orders.place_order(quote.id, "sandbox-nf")
+    if approval:
+        order = service.orders.approve(order.id, "Human")
+    assert order.status == "CONFIRMED" and order.commitment == "gateway-simulated"
+    assert order.execution.mode == "simulated"
+
+
+def test_review_mcp_catalog_has_sandbox_metadata(sandbox_gateway):
+    import asyncio
+    from app.mcp_server import create_server
+    result = asyncio.run(create_server(sandbox_gateway, "external").call_tool("search_products", {"query": "milk"}))
+    assert not result.is_error and result.meta["environment"] == "sandbox"
+
+
+def test_review_sandbox_policy_event_environment(sandbox_gateway):
+    with TestClient(create_app(sandbox_gateway), headers=ADMIN_HEADERS) as client:
+        policy = sandbox_gateway.policy.get().model_dump(mode="json")
+        result = client.put("/v1/policy", json={"policy": policy, "updated_by": "Human"})
+        assert result.status_code == 200
+    with sandbox_gateway.db.connect() as conn:
+        events = conn.execute("SELECT environment FROM events WHERE type='policy.updated'").fetchall()
+    assert events and all(r[0] == "sandbox" for r in events)
+
+
+def test_review_sandbox_procurement_environment(sandbox_gateway):
+    service = sandbox_gateway
+    quote, order = purchase(service, units=2)
+    lookup = service.lookup.get(quote.need_ref)
+    for resource in (lookup, quote, order, service.orders.get_order(order.id)):
+        assert resource.context["environment"] == resource.environment == "sandbox"
+    from app.auth import Principal
+    from app.evidence import build_bundle
+    assert build_bundle(service, order.id, Principal("external", customer_ids=("1",)))[0]["environment"] == "sandbox"
+    with service.db.connect() as conn:
+        assert all(r[0] == "sandbox" for r in conn.execute("SELECT environment FROM events"))

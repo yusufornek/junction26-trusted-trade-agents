@@ -493,3 +493,72 @@ def test_ac_8_throttle_returns_shared_recovery_and_task_status(gateway, need, up
             failed = await http.post("/a2a", json={"jsonrpc": "2.0", "id": 5, "method": "GetTask", "params": {"id": failure["data"]["task_id"]}})
             assert failed.json()["result"]["status"]["state"] == "TASK_STATE_FAILED"
     asyncio.run(run())
+
+
+def test_review_selection_refreshes_context_and_task_links(gateway, need, upstream):
+    async def run():
+        async with sdk(gateway) as (client, http, _):
+            task = await lookup(client, need)
+            request = artifact_data(task, "offers")
+            assert request["links"]["task_id"] == task.id
+            policy = gateway.policy.get().model_dump(mode="json")
+            policy["approval"]["max_auto_total_eur"] += 1
+            gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Operator"))
+            task = (await client.send_message(command("select_plan", "review-selection", task, plan_index=0))).task
+            quote = artifact_data(task, "quote")
+            assert quote["context"] == metadata(task)["context"]
+            assert quote["links"]["task_id"] == task.id
+            assert gateway.lookup.get(request["lookup_id"]).links["task_id"] == task.id
+            assert gateway.orders.get_quote(quote["id"]).links["task_id"] == task.id
+    asyncio.run(run())
+
+
+def test_review_source_exhaustion_keeps_known_a2a_caller(gateway):
+    from app.limits import SourceLimiter
+    gateway.source_limiter = SourceLimiter(capacity=1, refill_per_minute=.001)
+    async def run():
+        async with sdk(gateway) as (_, http, _):
+            for _ in range(3):
+                await http.post("/a2a", headers={"Authorization": "Bearer wrong"}, json={"jsonrpc": "2.0", "id": 1, "method": "ListTasks", "params": {}})
+            response = await http.post("/a2a", json={"jsonrpc": "2.0", "id": 2, "method": "ListTasks", "params": {}})
+            assert "result" in response.json(), response.text
+    asyncio.run(run())
+
+
+def test_review_a2a_replay_throttle_keeps_audit(gateway, need, upstream):
+    from test_rate_limits import set_limits
+    set_limits(gateway, "read", capacity=1, refill=.001)
+    async def run():
+        async with sdk(gateway) as (client, _, _):
+            request = command("lookup", "review-replay-throttle", need=need.model_dump(mode="json"))
+            await client.send_message(request)
+            await client.send_message(request)
+            with pytest.raises(InvalidParamsError) as refused:
+                await client.send_message(request)
+            assert refused.value.data["code"] == "RATE_LIMITED"
+    asyncio.run(run())
+    assert any(e.action == "RATE_LIMITED" for e in gateway.audit())
+
+
+def test_review_pending_supplier_execution_stays_recoverable(gateway, need, upstream):
+    from test_supplier_adapters import ASGIBridge
+    from suppliers.nordfood import create_app as supplier_app
+    app = supplier_app()
+    bridge = ASGIBridge(app)
+    adapter = gateway.suppliers.get("nordfood")
+    adapter.client.close()
+    adapter.client = httpx.Client(transport=bridge)
+    small = need.model_copy(update={"supplier_id": "nordfood", "quantity": need.quantity.model_copy(update={"value": 2, "unit": "SALES_UNIT"})})
+    async def run():
+        async with sdk(gateway) as (client, _, _):
+            task = await lookup(client, small)
+            task = (await client.send_message(command("select_plan", "nf-select", task, plan_index=0))).task
+            request = command("place_order", "nf-place", task)
+            bridge.lose_ack = True
+            task = (await client.send_message(request)).task
+            assert task.status.state == t.TaskState.TASK_STATE_WORKING
+            assert metadata(task)["retry_message_id"] == "nf-place"
+            task = (await client.send_message(request)).task
+            assert task.status.state == t.TaskState.TASK_STATE_COMPLETED
+            assert len(app.state.orders) == 1
+    asyncio.run(run())

@@ -22199,6 +22199,12 @@ components:
         sales_unit:
           type: string
           title: Sales Unit
+        minimum_order_quantity:
+          type: number
+          minimum: 1.0
+          title: Minimum Order Quantity
+          description: Minimum sales quantity, independent of allowed_lot_size.
+          default: 1
         allowed_lot_size:
           type: number
           minimum: 1.0
@@ -22614,6 +22620,12 @@ components:
           - type: 'null'
           title: Poll After Seconds
           readOnly: true
+        retry_after_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Retry After Seconds
+          readOnly: true
       additionalProperties: false
       type: object
       required:
@@ -22632,6 +22644,7 @@ components:
       - next_action
       - approval_reason
       - poll_after_seconds
+      - retry_after_seconds
       title: Order
     OrderRequest:
       properties:
@@ -23019,6 +23032,12 @@ components:
         base_unit:
           type: string
           title: Base Unit
+        minimum_order_quantity:
+          type: number
+          minimum: 1.0
+          title: Minimum Order Quantity
+          description: Minimum sales quantity, independent of the order multiple.
+          default: 1
         allowed_lot_size:
           type: number
           title: Allowed Lot Size

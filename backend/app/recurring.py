@@ -266,6 +266,9 @@ class Recurring:
             self.g.mandates.bind(conn, "recurring", row["id"], token)
             self.authority(conn, row)
             self.save(conn, row)
+            audit.append(conn, f"{principal.kind}:{principal.id}", "RECURRING_CREATED",
+                         "Created an approved recurring purchase template.", data={"id": row["id"],
+                         "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
     def workflow_authority(self, principal, customer, mandate=None):
@@ -310,6 +313,8 @@ class Recurring:
             self.g.mandates.bind(conn, "recurring", row["id"], mandate)
             self.authority(conn, row)
             self.save(conn, row)
+            audit.append(conn, f"agent:{agent}", "RECURRING_CREATED", "Created a recurring purchase template from a suggestion.",
+                         data={"id": row["id"], "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
     def pause(self, id, principal, mandate=None):
@@ -355,6 +360,10 @@ class Recurring:
             raise DomainError("INVALID_OCCURRENCE", "Occurrence needs a timezone", 422)
         local = when.astimezone(ZoneInfo(initial["cadence"]["timezone"]))
         key = f"{id}:{local.date().isoformat()}"
+        # Admission precedes the writer transaction so a throttle audit cannot roll back.
+        with self.g.db.connect() as conn:
+            existing = conn.execute("SELECT 1 FROM recurring_runs WHERE occurrence_key=?", (key,)).fetchone()
+        self.g.limiter.consume(initial["agent_id"], "read" if existing else "mutation")
         # One transaction includes the command, fresh lookup, quote, comparison and order.
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)

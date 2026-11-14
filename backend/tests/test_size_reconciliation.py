@@ -154,10 +154,12 @@ def test_review_legacy_size_evidence_keeps_signed_shape(gateway, need, upstream)
     data = quote.model_dump(mode="json")
     for line in data["lines"]:
         line.pop("name_size_candidates", None)
+        line.pop("minimum_order_quantity", None)
     data["signature"] = gateway.signing.sign_quote(data)
     legacy_lookup = lookup.model_dump(mode="json")
     for offer in legacy_lookup["offers"]:
         offer.pop("name_size_candidates", None)
+        offer.pop("minimum_order_quantity", None)
     with gateway.db.connect(write=True) as conn:
         conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
         conn.execute("UPDATE lookups SET data=? WHERE id=?", (json.dumps(legacy_lookup), lookup.lookup_id))
@@ -169,6 +171,7 @@ def test_review_legacy_size_evidence_keeps_signed_shape(gateway, need, upstream)
     historical = order.model_dump(mode="json")
     for line in historical["lines"]:
         line.pop("name_size_candidates", None)
+        line.pop("minimum_order_quantity", None)
     with gateway.db.connect(write=True) as conn:
         conn.execute("UPDATE orders SET data=? WHERE id=?", (json.dumps(historical), order.id))
     assert all("name_size_candidates" not in line for line in
@@ -385,12 +388,15 @@ def kg_price(ratio):
 
 
 @pytest.mark.parametrize("price,confirmed", [({}, False), (kg_price(1.0), True)])
-def test_size_ac9_kg_sold_is_one_kg_per_unit(gateway, price, confirmed):
+def test_size_ac9_kg_sold_is_one_kg_per_unit(gateway, need, price, confirmed):
     from app.lookup import reconcile_size
     product = gateway.catalog.get("7").model_copy(update={
         "name_en": "Liver pate appr 2,4 kg", "name_fi": "Maksapasteija n 2,4 kg", "base_net_weight_kg": 2.4})
     assert product.sales_unit == "KG"
     assert reconcile_size(product, price, "KG") == (1.0, "base_unit", confirmed, [])
+    from app.lookup import offer_for
+    request = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10, "unit": "KG"})})
+    assert offer_for(product, request, price, {}).units_needed == 10
 
 
 def test_size_ac10_pack_count_in_name(gateway):
@@ -520,3 +526,37 @@ def test_review_portion_chain_preserves_total_with_multiplier():
 def test_review_dimensions_are_not_pack_counts():
     from app.catalog import name_sales_sizes
     assert name_sales_sizes(["Tray 136x218*155*60mm 1200ml"], "L", 1) == [1.2]
+
+
+@pytest.mark.parametrize("ratio", [.97, 1.03])
+def test_review_kg_inclusive_boundary(gateway, ratio):
+    from app.lookup import reconcile_size
+    assert reconcile_size(gateway.catalog.get("7"), kg_price(ratio), "KG")[2] is True
+
+
+def test_review_name_count_cannot_override_known_multiplier(gateway, need, upstream):
+    product_size(gateway, name="Milk 5 x carton 1 L", multiplier=10)
+    upstream.price = 5 * 2.6
+    result = gateway.find_offers(need)
+    offer = next(o for o in result.offers if o.product_id == "1")
+    assert (offer.size_per_sales_unit, offer.size_source, offer.size_confirmed_by_price) == (5, "price_ratio", False)
+    assert "SIZE_MISMATCH" in {w.code for w in offer.warnings}
+    quote = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=result.lookup_id))
+    assert gateway.orders.place_order(quote.id, "conflicting-count").status == "PENDING_APPROVAL"
+
+
+def test_size_ac8_recorded_milk_lookup_all_three_pack_counts(gateway, need, respx_mock):
+    from conftest import replay_recorded_demo
+    result = replay_recorded_demo(gateway, need, respx_mock)
+    offers = {o.product_id: o for o in result.offers}
+    for pid, size, units in [("469330", 5, 200), ("463038", 20, 50), ("464768", 12, 84)]:
+        assert (offers[pid].size_per_sales_unit, offers[pid].units_needed) == (size, units)
+
+
+def test_review_known_count_without_ratio_keeps_conflict_visible(gateway):
+    from app.lookup import reconcile_size
+    product = gateway.catalog.get("1").model_copy(update={"name_en": "Yoghurt 4x125g", "name_fi": "Yoghurt 4x125g",
+        "units": {"KI": 6}, "base_volume_l": None, "base_net_weight_kg": None})
+    size, source, confirmed, warnings = reconcile_size(product, {}, "KG")
+    assert (size, source, confirmed) == (.75, "name_parse", False)
+    assert {"SIZE_UNCONFIRMED", "SIZE_MISMATCH"} <= {w.code for w in warnings}

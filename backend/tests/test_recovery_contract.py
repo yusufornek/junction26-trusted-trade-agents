@@ -16,6 +16,7 @@ from app.mcp_server import create_server
 from app.recovery import RECOVERY
 from conftest import OPERATOR_HEADERS, agent_headers
 from test_shared_foundation import make_quote
+from test_connect_kit import sandbox
 
 
 def expire_quote(gateway, quote):
@@ -27,9 +28,8 @@ def expire_quote(gateway, quote):
 
 
 def test_ac_1_all_domain_codes_have_explicit_mapping():
-    codes = {"UNKNOWN_CODE", "VALIDATION_ERROR"}
+    codes = set()
     dynamic_sources = {("auth.py", "check_owner", "code"),
-                       ("recovery.py", "validation_problem", "code"),
                        ("a2a.py", "invoke", "code")}
     observed = set()
     for file in (Path(__file__).parents[1] / "app").glob("*.py"):
@@ -40,6 +40,18 @@ def test_ac_1_all_domain_codes_have_explicit_mapping():
                 code = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg == "code"), None)
                 if isinstance(code, ast.Constant):
                     codes.add(code.value)
+                elif isinstance(code, ast.Name) and file.name == "recovery.py":
+                    # Enumerate assignments feeding validation_problem, including both conditional branches.
+                    assignments = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                                   and any(isinstance(target, ast.Name) and target.id == code.id for target in n.targets)]
+                    assert assignments
+                    def literals(value):
+                        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                            return {value.value}
+                        assert isinstance(value, ast.IfExp), ast.dump(value)
+                        return literals(value.body) | literals(value.orelse)
+                    for assignment in assignments:
+                        codes.update(literals(assignment))
                 else:
                     owner = parents.get(node)
                     while owner is not None and not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -169,3 +181,46 @@ def test_ac_7_reference_client_recovers_using_actions_only(gateway, need, upstre
     assert waits == [3, 1]
     with gateway.db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_review_reference_buyer_recovers_supplier_timeout(sandbox, need, upstream, monkeypatch):
+    gateway = sandbox
+    dispatch = gateway.orders.dispatch_pending
+    # Exercise the buyer's retry deterministically; worker recovery has its own regression.
+    monkeypatch.setattr(gateway.orders, "dispatch_pending", lambda order_id=None: dispatch(order_id) if order_id else None)
+    from test_supplier_adapters import ASGIBridge
+    from test_connect_kit import reference
+    from test_mcp_server_card import connected
+    from suppliers.nordfood import create_app as supplier_app
+    app = supplier_app()
+    adapter = gateway.suppliers.get("nordfood")
+    bridge = ASGIBridge(app)
+    bridge.lose_ack = True
+    adapter.client.close()
+    adapter.client = httpx.Client(transport=bridge)
+    request = need.model_copy(update={"supplier_id": "nordfood", "quantity": need.quantity.model_copy(update={"value": 2, "unit": "SALES_UNIT"})})
+    waits = []
+    async def run():
+        async with connected(gateway) as (session, http, _):
+            async def sleep(seconds):
+                assert seconds > 0
+                waits.append(seconds)
+            async def jwks():
+                return (await http.get("/.well-known/jwks.json")).json()
+            result = await reference.run_session(session, "full_stock", jwks, need=request.model_dump(mode="json"), sleep=sleep)
+            assert result["status"] == "CONFIRMED"
+            assert waits and len(app.state.orders) == 1
+    asyncio.run(run())
+
+
+def test_review_pending_interval_survives_stored_loading(gateway, need, upstream):
+    from app.models import Order
+    order = gateway.orders.place_order(make_quote(gateway, need).id, "pending-interval")
+    value = order.model_dump(mode="json")
+    value["status"] = "PENDING_EXECUTION"
+    # Old rows lack guidance; new rows include the computed property.
+    for include in [False, True]:
+        if include:
+            value["retry_after_seconds"] = 1
+        loaded = Order.model_validate(value)
+        assert loaded.model_dump(mode="json")["retry_after_seconds"] > 0

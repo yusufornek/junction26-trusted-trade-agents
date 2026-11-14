@@ -123,6 +123,8 @@ class Anchoring:
                 if checkpoint is not None and not checkpoint["valid"]:
                     raise AnchorError("Audit chain is invalid")
                 with httpx.Client(timeout=10, trust_env=False) as client:
+                    if getattr(self, "telemetry", None):
+                        self.telemetry.instrument_client(client)
                     chain_id = int(self.config.chain_id)
                     with self.db.connect() as conn:
                         # Prefer an already submitted CLI target so repeated calls
@@ -202,6 +204,8 @@ class Anchoring:
                     return result
                 selector = row[0]
             with httpx.Client(timeout=10, trust_env=False) as client:
+                if getattr(self, "telemetry", None):
+                    self.telemetry.instrument_client(client)
                 if int(self._rpc(client, "eth_chainId", []), 16) != int(self.config.chain_id):
                     return result
                 tx = self._rpc(client, "eth_getTransactionByHash", [selector])

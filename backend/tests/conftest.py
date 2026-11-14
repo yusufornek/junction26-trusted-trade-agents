@@ -307,6 +307,11 @@ def real_case_name_products(actual_product_rows):
                 value = Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor)
                 if value > 0:
                     expected[unit].add(value.quantize(Decimal("0.000001")))
+                    if len(counts) == 1 and multiplier > 1 and row.get("baseUnit") != unit:
+                        # Spec 05 R-8: the known sales multiplier carries a standalone count.
+                        # Keep the raw name bound too; reconciliation must expose the conflict.
+                        known = Decimal(str(multiplier)) * Decimal(match[1].replace(",", ".")) * Decimal(factor)
+                        expected[unit].add(known.quantize(Decimal("0.000001")))
         result.append((extract(row, {}, {}), expected))
     assert {"460913", "477461", "462402", "462050", "477242"} <= {p.id for p, _ in result}
     return result

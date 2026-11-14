@@ -334,3 +334,46 @@ def test_review_proposal_quote_rechecks_revoked_buyer_consent(gateway, need, ups
         placed = gateway.orders.place_order(q["id"], "revoked-proposal", "external")
         assert placed.status == "REJECTED"
         assert any("consent" in h.detail for h in placed.policy.hits)
+
+
+def test_review_proposal_writes_payload_bound_keys(gateway, proposal_setup):
+    with TestClient(create_app(gateway)) as client:
+        prefs = {"categories": ["10400"]}
+        headers = {**agent_headers("hotel-agent"), "Idempotency-Key": "preferences"}
+        first = client.put("/v1/buyer/proposal-preferences", json=prefs, headers=headers)
+        assert first.status_code == 200
+        assert client.put("/v1/buyer/proposal-preferences", json=prefs, headers=headers).json() == first.json()
+        assert client.put("/v1/buyer/proposal-preferences", json={"categories": []}, headers=headers).status_code == 409
+        body = campaign()
+        headers = {**agent_headers("other"), "Idempotency-Key": "campaign"}
+        first = client.post("/v1/proposals", json=body, headers=headers)
+        assert first.status_code == 200
+        assert client.post("/v1/proposals", json=body, headers=headers).json() == first.json()
+        assert client.post("/v1/proposals", json={**body, "rationale": "changed"}, headers=headers).status_code == 409
+        row = inbox(client)[0]
+        for action in ["decline", "mute"]:
+            headers = {**agent_headers("external"), "Idempotency-Key": action}
+            url = f"/v1/proposals/{row['id']}/{action}"
+            first = client.post(url, headers=headers)
+            assert first.status_code == 200
+            assert client.post(url, headers=headers).json() == first.json()
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+def test_review_proposal_preferences_charge_once_per_command(gateway, proposal_setup, monkeypatch, keyed):
+    from unittest.mock import Mock
+
+    consume = Mock(wraps=gateway.limiter.consume)
+    monkeypatch.setattr(gateway.limiter, "consume", consume)
+    headers = agent_headers("hotel-agent")
+    if keyed:
+        headers["Idempotency-Key"] = "single-preference-charge"
+    with TestClient(create_app(gateway)) as client:
+        response = client.put("/v1/buyer/proposal-preferences", json={"categories": ["10400"]}, headers=headers)
+        assert response.status_code == 200, response.text
+        assert [call.args for call in consume.call_args_list] == [("hotel-agent", "mutation")]
+        if keyed:
+            consume.reset_mock()
+            replay = client.put("/v1/buyer/proposal-preferences", json={"categories": ["10400"]}, headers=headers)
+            assert replay.json() == response.json()
+            assert [call.args for call in consume.call_args_list] == [("hotel-agent", "read")]

@@ -61,8 +61,12 @@ def test_ac_1_purchase_trace_has_required_spans_and_parent_order(gateway, need, 
             assert ancestor(s, "command.find_offers") and ancestor(s, "purchase")
         if s.name == "policy.evaluate":
             assert ancestor(s, "plan.build") or ancestor(s, "order.place") or ancestor(s, "approval.review")
-        if s.name == "supplier.price":
-            assert ancestor(s, "command.find_offers") or ancestor(s, "quote.create")
+        if s.name in {"supplier.price", "supplier.availability"}:
+            assert ancestor(s, "purchase")
+            assert any(ancestor(s, operation) for operation in ("command.find_offers", "quote.create", "order.place", "approval.review"))
+        if s.name in required - {"webhook.deliver", "audit.anchor"}:
+            assert s.context.trace_id == next(p for p in spans if p.name == "purchase").context.trace_id
+    assert any(s.name == "audit.anchor" and ancestor(s, "purchase") for s in spans)
     assert any(s.name == "POST" for s in spans)  # httpx auto-instrumentation, not a synthetic stand-in.
     placement = next(s for s in spans if s.name == "order.place")
     deliveries = [s for s in spans if s.name == "webhook.deliver" and s.links]
@@ -143,3 +147,34 @@ def test_ac_6_no_otel_variables_no_providers_or_exporter_threads(monkeypatch):
         telemetry.metric("upstream.calls")
     telemetry.close()
     assert set(threading.enumerate()) == before
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_review_cached_review_records_one_wait(gateway, need, upstream, observed, decision):
+    _, _, reader = observed
+    lookup = gateway.find_offers(need)
+    quote = gateway.orders.create_quote(quote_request(need, qty=200, need_ref=lookup.lookup_id))
+    order = gateway.orders.place_order(quote.id, "wait-placement")
+    operation = getattr(gateway.orders, decision)
+    first = operation(order.id, "Human", command_key="one-review")
+    count = lambda: sum(p.count for p in metrics(reader)["approval.wait"].data.data_points)
+    assert count() == 1
+    assert operation(order.id, "Human", command_key="one-review").status == first.status
+    assert count() == 1
+
+
+@pytest.mark.parametrize("operation", ["anchor", "verify"])
+def test_review_anchor_rpc_client_spans(gateway, need, upstream, observed, respx_mock, operation):
+    telemetry, exporter, _ = observed
+    gateway.find_offers(need)
+    gateway.anchoring.config = AnchorConfig(RPC_URL, "80002", TEST_KEY, "https://amoy.polygonscan.com/tx/")
+    rpc = RPC(gateway, gateway.anchoring)
+    respx_mock.post(RPC_URL).mock(side_effect=rpc.respond)
+    rpc.mined = True
+    exporter.clear()
+    with gateway.activate():
+        gateway.anchoring.anchor_once(current_head=True)
+        if operation == "verify":
+            exporter.clear()
+            assert gateway.anchoring.verify("latest")["anchor_match"]
+    assert any(s.kind.name == "CLIENT" for s in exporter.get_finished_spans())

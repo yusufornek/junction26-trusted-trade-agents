@@ -15,7 +15,7 @@ from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Orde
 from .valio import RequestCounter
 from .quantities import sales_step
 from .signing import receipt_payload, signature_digest, verify_quote
-from .foundation import CORRELATION, procurement_context, trace_id
+from .foundation import CORRELATION, TASK, procurement_context, trace_id
 from .runtime import ENVIRONMENT
 from .suppliers import reservation_key
 from .telemetry import placement_context, metric
@@ -66,7 +66,7 @@ class Orders:
         order.receipt = self.signing.sign(receipt_payload(order))
         order.links.update(receipt_id=order.id, quote_id=quote.id, request_id=quote.need_ref,
                            order_id=order.id, trace_id=trace_id(),
-                           audit_checkpoint=f"/v1/orders/{order.id}/timeline", task_id=None)
+                           audit_checkpoint=f"/v1/orders/{order.id}/timeline", task_id=TASK.get() or order.links.get("task_id"))
 
     def _verified_quote(self, conn, quote_id, agent_id):
         row = conn.execute("SELECT data FROM quotes WHERE id=?", (quote_id,)).fetchone()
@@ -270,8 +270,8 @@ class Orders:
         for line in requested_lines:
             p = products[line.product_id]
             step = sales_step(p)
-            if Decimal(str(line.quantity_sales_units)) % step:
-                raise DomainError("INVALID_LOT_SIZE", f"{p.id}: sales quantity must be a multiple of {step}", 422)
+            if line.quantity_sales_units < p.minimum_order_quantity or Decimal(str(line.quantity_sales_units)) % step:
+                raise DomainError("INVALID_LOT_SIZE", f"{p.id}: sales quantity must be at least {p.minimum_order_quantity:g} and a multiple of {step}", 422)
         ids = list(products)
         if lookup.need.substitute_for and lookup.need.substitute_for.product_id not in ids:
             ids.append(lookup.need.substitute_for.product_id)
@@ -338,7 +338,7 @@ class Orders:
                 quote.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
-                           "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
+                           "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": TASK.get()}
             quote.signature = self.signing.sign_quote(quote)
             self.mandates.bind(conn, "quote", quote.id, mandate)
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
@@ -451,7 +451,8 @@ class Orders:
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
             from .models import Execution
-            order.execution = (self.suppliers.get(order.supplier_id).execution.submit(order) if order.supplier_id == "valio"
+            executor = self.suppliers.get(order.supplier_id).execution
+            order.execution = (executor.submit(order) if executor.mode == "simulated"
                                else Execution(mode="supplier_backed", status="not_submitted"))
             self._sign_receipt(order, quote, "operator" if operator else "agent")
             self.mandates.bind(conn, "order", order.id, mandate)
@@ -459,7 +460,7 @@ class Orders:
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
             self._reserve(conn, order)
-            if order.status == "CONFIRMED" and order.supplier_id != "valio":
+            if order.status == "CONFIRMED" and executor.mode == "supplier_backed":
                 self._execute(conn, order, quote)
             audit.append(conn, f"agent:{agent_id}", "PLACE_ORDER", f"Order {order.status} at the locked total of {order.total:.2f} EUR.",
                          order_id=order.id, quote_id=quote.id, data={"inputs": {"idempotency_key": key},
@@ -483,29 +484,123 @@ class Orders:
                                 Deviations.model_validate(context["deviations"]))}
 
     def _execute(self, conn, order, quote):
-        """Stable order UUID is the supplier idempotency key, including crash-before-commit retries."""
+        """Commit an immutable purchase intent before any outbound side effect."""
         from .models import Execution
-        retrying = order.status == "PENDING_EXECUTION"
-        try:
-            result = self.suppliers.get(order.supplier_id).execution.submit(order)
-        except DomainError as error:
-            if error.code != "SUPPLIER_UNAVAILABLE":
-                raise
-            order.execution = Execution(mode="supplier_backed", status="unknown")
-            order.status = "PENDING_EXECUTION"
-        else:
-            order.execution = result
-            order.status = "CONFIRMED" if result.status == "accepted" else "REJECTED"
-            if result.status == "accepted":
-                order.commitment = "supplier-acknowledged"
+        from .foundation import PRINCIPAL
+        principal = PRINCIPAL.get()
+        credential = principal.public() if principal and principal.id == order.agent_id else None
+        if credential and self.gateway.settings.keys:
+            credential["fingerprint"] = self.gateway.settings.keys.fingerprint(principal)
+        payload = {"order": order.model_dump(mode="json"), "credential": credential}
+        conn.execute("INSERT OR IGNORE INTO supplier_execution_outbox(order_id,payload) VALUES(?,?)",
+                     (order.id, json.dumps(payload)))
+        conn.execute("UPDATE supplier_execution_outbox SET status='pending' WHERE order_id=? AND status='blocked'", (order.id,))
+        order.status = "PENDING_EXECUTION"
+        order.execution = Execution(mode="supplier_backed", status="unknown")
         self._sign_receipt(order, quote, order.decided_by_kind or "agent")
         self._save_order(conn, order)
         self._reserve(conn, order)
-        if retrying and order.status != "PENDING_EXECUTION":
-            audit.append(conn, "supplier:" + order.supplier_id,
-                         "SUPPLIER_ACKNOWLEDGED" if order.status == "CONFIRMED" else "SUPPLIER_REJECTED",
-                         "Reconciled the supplier's acknowledgement.", order_id=order.id, quote_id=quote.id,
-                         data={"execution": order.execution.model_dump(mode="json"), "outcome": order.status})
+
+    def _dispatch_authority(self, conn, order, quote, credential):
+        from .buyer import check_suspension
+        check_suspension(self.db, order.agent_id)
+        if credential and credential.get("credential_ref"):
+            ref = credential["credential_ref"]
+            if ref.startswith("agent:") or ref.startswith("stdio:"):
+                from .auth import Principal
+                current = self.gateway.settings.keys.fingerprint(Principal(order.agent_id))
+                if current is None or credential.get("fingerprint") not in {None, current}:
+                    raise DomainError("UNAUTHENTICATED", "Purchasing credential was removed or rotated", 401)
+            elif ref.startswith("operator:"):
+                from .auth import Principal
+                keys = self.gateway.settings.keys
+                current = keys.fingerprint(Principal(order.agent_id, operator=True))
+                if current is None or keys.operator_agent_id != order.agent_id or credential.get("fingerprint") not in {None, current}:
+                    raise DomainError("UNAUTHENTICATED", "Purchasing credential was removed or rotated", 401)
+            elif ref not in {"internal", "operator"}:
+                row = conn.execute("SELECT revoked_at FROM connections WHERE connection_id=? AND agent_id=?", (ref.removeprefix("connection:"), order.agent_id)).fetchone()
+                if not row or row[0]:
+                    raise DomainError("UNAUTHENTICATED", "Purchasing credential was revoked", 401)
+        if credential is None:
+            keys = self.gateway.settings.keys
+            if not (keys and keys.has_agent(order.agent_id)) and not conn.execute(
+                    "SELECT 1 FROM connections WHERE agent_id=? AND revoked_at IS NULL", (order.agent_id,)).fetchone():
+                raise DomainError("UNAUTHENTICATED", "A current purchasing credential is required for supplier dispatch", 401)
+        policy, record, _ = self.mandates.authorize(conn, None, order.agent_id, order.customer_id,
+            products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
+        evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
+            agent_id=order.agent_id, customer_id=order.customer_id, warnings=order.warnings, policy=policy)
+        reviewed = {(hit.rule, hit.detail) for hit in order.policy.hits}
+        new_hits = {(hit.rule, hit.detail) for hit in evaluation.hits} - reviewed
+        if evaluation.outcome == "REJECTED" or (not order.approver and evaluation.outcome != "CONFIRMED") or new_hits:
+            raise DomainError("INVALID_TRANSITION", "Current purchasing policy requires a new human review before supplier dispatch", 409,
+                              {"rule_hits": [hit.model_dump() for hit in evaluation.hits]})
+
+    def dispatch_pending(self, order_id=None):
+        """Recover committed intents, including accepted purchases with lost local acknowledgements.
+
+        A read-only supplier reconciliation never creates a purchase. Only a currently
+        authorised intent can POST, always using its immutable UUID and payload.
+        """
+        if self.db._connection.get() is not None:
+            return  # The outer command/task transaction has not committed its intent yet.
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT order_id FROM supplier_execution_outbox WHERE status='pending'" +
+                (" AND order_id=?" if order_id else ""), (order_id,) if order_id else ()).fetchall()
+        for row in rows:
+            error = None
+            with self.db.connect(write=True) as conn:
+                intent = conn.execute("SELECT * FROM supplier_execution_outbox WHERE order_id=? AND status='pending'", (row[0],)).fetchone()
+                if intent is None:
+                    continue
+                payload = json.loads(intent["payload"])
+                order = self._order(conn, row[0])
+                if order.status != "PENDING_EXECUTION":
+                    continue
+                immutable = Order.model_validate(payload["order"])
+                quote = self._quote(conn, order.quote_id)
+                execution = self.suppliers.get(order.supplier_id).execution
+                try:
+                    result = execution.reconcile(immutable)
+                    reconciled = result is not None
+                    if result is None:
+                        self._dispatch_authority(conn, immutable, quote, payload.get("credential"))
+                        result = execution.submit(immutable)
+                except DomainError as caught:
+                    if caught.code == "SUPPLIER_UNAVAILABLE":
+                        continue  # The durable intent remains retryable, with no fresh stock evaluation.
+                    audit.append(conn, "agent:" + order.agent_id, "SUPPLIER_DISPATCH_FAILED", caught.message,
+                        order_id=order.id, quote_id=order.quote_id, data={"error": caught.code, **caught.data})
+                    if caught.code != "UPSTREAM_BUSY":
+                        conn.execute("UPDATE supplier_execution_outbox SET status='blocked' WHERE order_id=?", (order.id,))
+                    caught.audited = True
+                    error = caught
+                else:
+                    order.execution = result
+                    order.status = "CONFIRMED" if result.status == "accepted" else "REJECTED"
+                    if result.status == "accepted":
+                        order.commitment = "supplier-acknowledged"
+                    order.order_revision += 1
+                    self._sign_receipt(order, quote, order.decided_by_kind or "agent")
+                    self._save_order(conn, order)
+                    self._reserve(conn, order)
+                    conn.execute("UPDATE supplier_execution_outbox SET status='done' WHERE order_id=?", (order.id,))
+                    audit.append(conn, "supplier:" + order.supplier_id,
+                        "SUPPLIER_ACKNOWLEDGED" if order.status == "CONFIRMED" else "SUPPLIER_REJECTED",
+                        "Reconciled the supplier acknowledgement.", order_id=order.id, quote_id=order.quote_id,
+                        data={"execution": result.model_dump(mode="json"), "outcome": order.status})
+                    if reconciled:
+                        # Recovery supersedes an obsolete placement response, even when
+                        # approval began execution or a background worker found the ack.
+                        current = self._order(conn, order.id).model_dump(mode="json")
+                        for command in conn.execute("SELECT principal,key,result FROM commands WHERE command='place_order' AND json_extract(result,'$.value.id')=?", (order.id,)).fetchall():
+                            saved = json.loads(command["result"])
+                            if saved.get("value", {}).get("status") in {"PENDING_EXECUTION", "PENDING_APPROVAL"}:
+                                saved["value"] = current
+                                conn.execute("UPDATE commands SET result=? WHERE principal=? AND key=?",
+                                             (json.dumps(saved), command["principal"], command["key"]))
+            if error and order_id:
+                raise error
 
     def _violations(self, conn, quote):
         violations = [] if quote.need_ref else list(quote.hard_constraint_violations)
@@ -723,7 +818,7 @@ class Orders:
                 # (per-order and daily limits); only REJECTED blocks an approval.
                 if order.mandate is not None:
                     policy, order.mandate, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
-                        products=[o.product_id for o in order.lines], bound=("order", order_id))
+                        products=[o.product_id for o in order.lines], bound=("order", order_id), supplier_id=order.supplier_id)
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, customer_id=quote.customer_id,
                                                         warnings=quote.warnings, policy=policy)
@@ -772,7 +867,7 @@ class Orders:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
                 order.approval_side = "buyer" if principal and principal.kind == "buyer_user" else "valio_operator"
-                if approve and order.supplier_id != "valio":
+                if approve and self.suppliers.get(order.supplier_id).execution.mode == "supplier_backed":
                     self._execute(conn, order, quote)
                 self._sign_receipt(order, quote, "operator")
             self._save_order(conn, order)

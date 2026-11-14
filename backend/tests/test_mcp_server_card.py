@@ -107,7 +107,15 @@ def test_ac_4_all_catalog_links_resolve(gateway):
         assert response.headers["content-type"] == "application/ai-catalog+json"
         catalog = response.json()
         assert catalog["specVersion"] == "1.0"
+        expected = {"application/mcp-server-card+json": "/mcp/server-card", "application/a2a+json": "/.well-known/agent-card.json",
+                    "application/vnd.oai.openapi+json": "/openapi.json", "text/plain": "/llms.txt", "application/jwk-set+json": "/.well-known/jwks.json"}
+        from urllib.parse import urlsplit
+        assert {e["type"]: urlsplit(e["url"]).path for e in catalog["entries"]} == expected
         assert len(catalog["entries"]) == 5
+        assert client.get(expected["application/vnd.oai.openapi+json"]).json()["openapi"] == "3.1.0"
+        assert client.get(expected["application/a2a+json"]).json()["supportedInterfaces"][0]["protocolBinding"] == "JSONRPC"
+        assert "keys" in client.get(expected["application/jwk-set+json"]).json()
+        assert "Developer" in client.get(expected["text/plain"]).text
         for entry in catalog["entries"]:
             assert entry["identifier"].startswith("urn:air:") and "data" not in entry
             assert client.get(entry["url"]).status_code == 200
@@ -134,3 +142,18 @@ def test_ac_5_public_metadata_has_no_customer_authority(gateway):
         assert client.get("/v1/me").status_code == 401
         headers = {"Accept": "application/json, text/event-stream"}
         assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers).status_code == 401
+
+
+@pytest.mark.parametrize("drift", ["transport", "endpoint"])
+def test_review_startup_validates_constructed_transport(gateway, monkeypatch, drift):
+    if drift == "transport":
+        monkeypatch.setattr("app.discovery.TRANSPORT", "sse")
+    else:
+        from app.mcp_server import GatewayMCPServer
+        original = GatewayMCPServer.streamable_http_app
+        def different(self, **kwargs):
+            return original(self, streamable_http_path="/different-mcp", **kwargs)
+        monkeypatch.setattr(GatewayMCPServer, "streamable_http_app", different)
+    with pytest.raises(RuntimeError, match="runtime transport"):
+        with TestClient(create_app(gateway)):
+            pass

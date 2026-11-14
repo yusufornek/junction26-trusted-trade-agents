@@ -316,6 +316,24 @@ def test_review_recurring_create_retry_uses_shared_command(gateway, recurring_se
     assert len(gateway.orders.list_orders()) == 2
 
 
+@pytest.mark.parametrize("keyed", [False, True])
+def test_review_recurring_creation_charges_one_mutation(gateway, recurring_setup, monkeypatch, keyed):
+    from unittest.mock import Mock
+
+    consume = Mock(wraps=gateway.limiter.consume)
+    monkeypatch.setattr(gateway.limiter, "consume", consume)
+    body = {"approved_order_id": recurring_setup.id,
+            "cadence": {"start_at": (audit.utcnow() + timedelta(hours=1)).isoformat()}}
+    headers = agent_headers("external")
+    if keyed:
+        headers["Idempotency-Key"] = "single-recurring-charge"
+    with TestClient(create_app(gateway)) as client:
+        response = client.post("/v1/recurring-orders", json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        mutations = [call.args for call in consume.call_args_list if call.args[1] == "mutation"]
+        assert mutations == [("external", "mutation")]
+
+
 def test_review_recurring_rest_mcp_replay_rechecks_permission(gateway, recurring_setup):
     import asyncio
     from app.mcp_server import create_server
@@ -424,3 +442,35 @@ def test_r_3_each_comparison_dimension_fails_closed(gateway, recurring_setup, fi
     assert diffs
     if value is None:
         assert any("comparison evidence missing" in d for d in diffs)
+
+
+def test_review_recurring_creation_idempotency_and_event(gateway, upstream, recurring_setup):
+    body = {"approved_order_id": recurring_setup.id, "cadence": {"rrule": "FREQ=DAILY", "start_at": (audit.utcnow() + timedelta(days=10)).isoformat()}}
+    gateway.outbox.register("review-recurring")
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        first = client.post("/v1/recurring-orders", json=body, headers={"Idempotency-Key": "create-once"})
+        assert first.status_code == 200, first.text
+        replay = client.post("/v1/recurring-orders", json=body, headers={"Idempotency-Key": "create-once"})
+        assert replay.json() == first.json()
+        import asyncio
+        from app.mcp_server import create_server
+        mcp = asyncio.run(create_server(gateway, "external").call_tool("create_recurring_order", {
+            "request": body, "idempotency_key": "create-once"}))
+        assert not mcp.is_error and mcp.structured_content == first.json()
+        body["cadence"]["rrule"] = "FREQ=WEEKLY"
+        conflict = client.post("/v1/recurring-orders", json=body, headers={"Idempotency-Key": "create-once"})
+        assert conflict.status_code == 409 and conflict.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    with gateway.db.connect() as conn:
+        events = conn.execute("SELECT id,audit_id FROM events WHERE type='recurring.created' AND aggregate_id=?", (first.json()["id"],)).fetchall()
+        assert len(events) == 1
+        assert conn.execute("SELECT 1 FROM audit WHERE id=?", (events[0][1],)).fetchone()
+        assert conn.execute("SELECT 1 FROM outbox WHERE event_id=?", (events[0][0],)).fetchone()
+
+
+def test_review_recurring_creation_audit_failure_is_atomic(gateway, upstream, recurring_setup):
+    import sqlite3
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("CREATE TRIGGER fail_recurring BEFORE INSERT ON audit WHEN NEW.action='RECURRING_CREATED' BEGIN SELECT RAISE(ABORT,'creation audit'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="creation audit"):
+        create(gateway, recurring_setup)
+    assert gateway.recurring.rows() == []

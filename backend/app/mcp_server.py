@@ -36,7 +36,7 @@ MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate pl
 
 WARNINGS = (
     "NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. "
-    "Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. "
+    "minimum_order_quantity is a lower bound; allowed_lot_size is the independent order multiple. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND and positive retry_after_seconds means repeat place_order with exactly the same idempotency key. Durable dispatch intents commit before supplier contact; recovery first reconciles the supplier key and rechecks current authority before any new submit. "
     "Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. "
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
     "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; "
@@ -72,6 +72,7 @@ class GatewayMCPServer(MCPServer):
         if self.agent_id is not None and not self.keys.has_agent(self.agent_id):
             raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
         app = super().streamable_http_app(**kwargs)
+        check_server(self, http_app=app)
         app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway)
         return app
 
@@ -113,7 +114,9 @@ class GatewayMCPServer(MCPServer):
             organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
             credential_ref="stdio:" + active_agent))
         try:
-            return await super().call_tool(name, arguments, context)
+            result = await super().call_tool(name, arguments, context)
+            result.meta = {**(result.meta or {}), "environment": self.gateway.settings.environment}
+            return result
         except (ToolError, DomainError, ValidationError) as error:
             # SDK argument validation happens before the function and otherwise adds prose around errors.
             cause = error
@@ -194,7 +197,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         gateway.limiter.consume(current_agent(), "read")
         return gateway.recurring.list_for_agent(PRINCIPAL.get(), PRESENTED_MANDATE.get())
 
-    @server.tool(description="Create a recurring workflow from your confirmed approved_order_id, cadence RRULE/timezone/start_at and permitted_deviations. Requires explicit recurring permission. Optional idempotency_key shares REST Idempotency-Key replay and current-authority checks. No purchase at creation; future runs revalidate authority, stock, prices, policy and drift against the approved baseline." + MANDATE_HELP)
+    @server.tool(description="Create a recurring workflow from your confirmed approved_order_id, cadence RRULE/timezone/start_at and permitted_deviations. Requires explicit recurring permission. Optional idempotency_key shares REST Idempotency-Key replay and current-authority checks, and conflicts on changed payload. No purchase at creation; future runs revalidate authority, stock, prices, policy and drift against the approved baseline." + MANDATE_HELP)
     def create_recurring_order(request: RecurringRequest, idempotency_key: str | None = None) -> dict[str, Any]:
         principal = PRINCIPAL.get()
         order, quote, _, _ = gateway.recurring.approved(request.approved_order_id)

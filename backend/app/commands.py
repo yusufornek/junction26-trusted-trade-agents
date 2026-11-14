@@ -2,6 +2,7 @@
 import inspect
 import json
 import time
+from datetime import date, datetime
 from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
@@ -46,7 +47,6 @@ def failure_audit(gateway, route, arguments, identity, error):
 
 
 def json_value(value):
-    from datetime import date, datetime
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if is_dataclass(value):
@@ -122,6 +122,10 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         who = principal or arguments["principal"]
         recurring_id = saved["value"]["id"] if route == "recurring.create" else arguments["id"]
         row = gateway.recurring.get(recurring_id, who)
+        if route == "recurring.baseline":
+            from .recurring import reviewer
+            if not reviewer(who, row["customer_id"]):
+                raise DomainError("BUYER_APPROVER_REQUIRED", "Only a buyer reviewer may change the baseline", 403)
         if who.kind == "buyer_user":
             from .recurring import reviewer
             if not reviewer(who, row["customer_id"]):
@@ -150,8 +154,10 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             if agent != proposal.get("accepted_by", agent):
                 raise DomainError("BUYER_AGENT_REQUIRED", "Replay requires the original purchasing agent", 403)
             bound = ("order", proposal["order_id"]) if proposal.get("order_id") else ("quote", saved["value"]["quote"]["id"])
-            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, proposal["customer_id"],
-                                       products=proposal["products"], bound=bound)
+            commitment = (gateway.orders._order(conn, bound[1]) if bound[0] == "order"
+                          else gateway.orders._quote(conn, bound[1]))
+            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, commitment.customer_id,
+                products=[line.product_id for line in commitment.lines], bound=bound, supplier_id=commitment.supplier_id)
     elif route == "memory.act":
         who = principal or arguments["principal"]
         # Hidden state and a newer purchase are command effects, not loss of
@@ -397,10 +403,24 @@ def install(gateway, target, name, category):
                     prepared_token = gateway.webhooks.prepare(route, arguments, principal)
                     prepared_credit = ADMISSION.set({"identity": identity, "category": category, "used": False})
             if key is None:
-                command_checks(gateway, route, arguments, principal, lambda: charge(gateway, identity, category))
-                return linked(operation(*args, **kwargs))
+                if route != "recurring.run":
+                    command_checks(gateway, route, arguments, principal, lambda: charge(gateway, identity, category))
+                result = linked(operation(*args, **kwargs))
+                from .models import Order
+                if isinstance(result, Order) and result.status == "PENDING_EXECUTION":
+                    gateway.orders.dispatch_pending(result.id)
+                    with gateway.db.connect() as conn:
+                        result = gateway.orders._order(conn, result.id)
+                if route in {"orders.approve", "orders.reject"} and result.status != "PENDING_APPROVAL":
+                    from .telemetry import metric
+                    with gateway.db.connect() as conn:
+                        reviewed_at = conn.execute("SELECT ts FROM audit WHERE order_id=? AND action IN ('APPROVE','REJECT') ORDER BY id DESC LIMIT 1", (result.id,)).fetchone()
+                    if reviewed_at:
+                        metric("approval.wait", max(0, (datetime.fromisoformat(reviewed_at[0]) - result.created_at).total_seconds()))
+                return result
             # SQLite serialises command lookup, domain changes and saved results as one commit.
             error = None
+            resumed_execution = False
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
                 legacy = None
@@ -411,7 +431,8 @@ def install(gateway, target, name, category):
                         (storage_key, key, identity)).fetchone()
                 try:
                     command_checks(gateway, route, arguments, principal,
-                                   lambda: charge(gateway, identity, "read" if previous or legacy else category))
+                                   lambda: charge(gateway, identity, "read" if previous or legacy else category)
+                                   if route != "recurring.run" or previous else None)
                     if previous:
                         saved = json.loads(previous["result"])
                         def check_replay():
@@ -426,10 +447,12 @@ def install(gateway, target, name, category):
                             error = DomainError("EVIDENCE_CHANGED", refusal["message"], refusal["status"], refusal["data"])
                         elif name == "place_order":
                             # Revalidate current authority and reconcile uncertain supplier execution.
+                            was_pending = gateway.orders._order(conn, saved["value"]["id"]).status == "PENDING_EXECUTION"
                             current = linked(operation(*args, **kwargs))
                             from .models import Order
                             result = Order.model_validate(saved["value"], context={"stored": True})
-                            if result.status == "PENDING_EXECUTION":
+                            if result.status == "PENDING_EXECUTION" or was_pending:
+                                resumed_execution = True
                                 result = current
                         else:
                             from . import models
@@ -455,6 +478,25 @@ def install(gateway, target, name, category):
 
             if error:
                 raise error
+            from .models import Order
+            if isinstance(result, Order) and result.status == "PENDING_EXECUTION":
+                gateway.orders.dispatch_pending(result.id)
+                with gateway.db.connect() as conn:
+                    result = gateway.orders._order(conn, result.id)
+            if route in {"orders.approve", "orders.reject"} and not previous and result.status != "PENDING_APPROVAL":
+                from .telemetry import metric
+                with gateway.db.connect() as conn:
+                    reviewed_at = conn.execute("SELECT ts FROM audit WHERE order_id=? AND action IN ('APPROVE','REJECT') ORDER BY id DESC LIMIT 1", (result.id,)).fetchone()
+                if reviewed_at:
+                    metric("approval.wait", max(0, (datetime.fromisoformat(reviewed_at[0]) - result.created_at).total_seconds()))
+            if route == "orders.place_order" and result.status != "PENDING_EXECUTION" and gateway.db._connection.get() is None:
+                with gateway.db.connect(write=True) as conn:
+                    envelope = conn.execute("SELECT result FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
+                    if envelope:
+                        saved = json.loads(envelope[0])
+                        if saved.get("value", {}).get("status") == "PENDING_EXECUTION" or resumed_execution:
+                            saved["value"] = json_value(result)
+                            conn.execute("UPDATE commands SET result=? WHERE principal=? AND key=?", (json.dumps(saved), scope, key))
             return result
         except DomainError as error:
             failure_audit(gateway, route, arguments, identity, error)
@@ -507,9 +549,6 @@ def install(gateway, target, name, category):
                     if current is not None:
                         current.set_attribute("candidates.screened", result.screened_count)
                         current.set_attribute("candidates.priced", result.priced_count)
-                if name in {"approve", "reject"}:
-                    from .audit import utcnow
-                    metric("approval.wait", max(0, (utcnow() - result.created_at).total_seconds()))
                 return result
         finally:
             with gateway.activate():

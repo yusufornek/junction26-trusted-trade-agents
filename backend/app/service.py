@@ -66,6 +66,7 @@ class Gateway:
         from .baskets import Baskets
         self.baskets = Baskets(self)
         self.lookup.suppliers = self.orders.suppliers = self.suppliers
+        self.orders.gateway = self
 
         from .autonomy import Autonomy
         self.autonomy = Autonomy(self)
@@ -83,6 +84,10 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         from .connections import Connections
         self.connections = Connections(self)
+        for name in ("create", "baseline", "pause", "run"):
+            install(self, self.recurring, name, "mutation")
+        for name in ("put_preferences", "submit", "action"):
+            install(self, self.proposals, name, "mutation")
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")
@@ -97,10 +102,6 @@ class Gateway:
         install(self, self.autonomy, "change", "mutation")
         install(self, self.buyer, "control", "mutation")
         install(self, self.buyer, "revoke", "mutation")
-        for name in ("create", "baseline", "run", "pause"):
-            install(self, self.recurring, name, "mutation")
-        for name in ("submit", "action", "put_preferences"):
-            install(self, self.proposals, name, "mutation")
         for name in ("act", "put_preferences"):
             install(self, self.memory, name, "mutation")
 
@@ -121,6 +122,13 @@ class Gateway:
                        getattr(self.suppliers.get("nordfood"), "client", None)):
             if client is not None:
                 self.telemetry.instrument_client(client)
+
+        # Upgrade uncertain execution records from pre-outbox versions without supplier I/O.
+        import json
+        with self.db.connect(write=True) as conn:
+            for row in conn.execute("SELECT id,data FROM orders WHERE status='PENDING_EXECUTION'").fetchall():
+                conn.execute("INSERT OR IGNORE INTO supplier_execution_outbox(order_id,payload) VALUES(?,?)",
+                             (row["id"], json.dumps({"order": json.loads(row["data"]), "credential": None})))
 
     @contextmanager
     def activate(self):

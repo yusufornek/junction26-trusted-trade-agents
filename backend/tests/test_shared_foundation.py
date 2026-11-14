@@ -677,7 +677,9 @@ def test_ac_6_public_pinned_compatibility_manifest(gateway):
     assert response.status_code == 200
     manifest = response.json()
     assert set(manifest["specifications"]) == {"openapi", "mcp_protocol", "mcp_server_card", "a2a", "ubl", "vc_data_model", "vc_securing_profile", "problem_details", "standard_webhooks"}
-    assert all(value for value in manifest["specifications"].values())
+    assert {key: value for key, value in manifest["specifications"].items() if isinstance(value, str)} == {
+        "openapi": "3.1.0", "mcp_protocol": "2026-07-28", "ubl": "2.1", "vc_data_model": "2.0",
+        "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037", "problem_details": "RFC 9457"}
     for value in manifest["specifications"].values():
         if isinstance(value, dict):
             assert value.get("version") or value.get("draft_commit") or value.get("commit")

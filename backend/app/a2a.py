@@ -23,7 +23,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from pydantic import ValidationError
 
 from . import audit
-from .auth import check_source
+from .auth import admit_credential
 from .canonical import canonical_json
 from .db import DomainError
 from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TASK, correlation_id
@@ -32,7 +32,7 @@ from .recovery import problem, validation_problem
 from .webhooks import EVENT_TYPES, SubscriptionCreate
 
 TERMINAL = {t.TaskState.TASK_STATE_COMPLETED, t.TaskState.TASK_STATE_REJECTED, t.TaskState.TASK_STATE_FAILED, t.TaskState.TASK_STATE_CANCELED}
-ORDER_STATES = {"PENDING_APPROVAL": t.TaskState.TASK_STATE_AUTH_REQUIRED, "CONFIRMED": t.TaskState.TASK_STATE_COMPLETED,
+ORDER_STATES = {"PENDING_EXECUTION": t.TaskState.TASK_STATE_WORKING, "PENDING_APPROVAL": t.TaskState.TASK_STATE_AUTH_REQUIRED, "CONFIRMED": t.TaskState.TASK_STATE_COMPLETED,
                 "REJECTED": t.TaskState.TASK_STATE_REJECTED, "EXPIRED": t.TaskState.TASK_STATE_FAILED, "CANCELLED": t.TaskState.TASK_STATE_CANCELED}
 
 
@@ -337,7 +337,7 @@ class ProcurementA2A:
                     "context": {"customer_id": command.get("need", {}).get("customer_id") if isinstance(command.get("need", {}), dict) else None,
                                 "supplier_id": "valio-aimo", "request_ref": None, "effective_constraints": None,
                                 "mandate_ref": None, "policy_version": sha256(canonical_json(self.gateway.policy._editable(self.gateway.policy.get()))).hexdigest(),
-                                "environment": "live"}})
+                                "environment": self.gateway.settings.environment}})
                 if command["command"] == "cancel":
                     order = self.gateway.orders.get_order(command["order_id"], principal.id)
                     task.metadata.update({"order_id": order.id, "context": order.context or {}, "purpose": "cancel"})
@@ -388,6 +388,14 @@ class ProcurementA2A:
             conn.execute("INSERT OR IGNORE INTO a2a_messages VALUES(?,?,?,?)", (scope, message.message_id, digest, task.id))
         if error:
             raise error
+        if metadata(task).get("order_id") and task.status.state == t.TaskState.TASK_STATE_WORKING:
+            self.gateway.orders.dispatch_pending(metadata(task)["order_id"])
+            with self.db.connect(write=True) as conn:
+                task = self._load(conn, task.id, principal)
+                order = self.gateway.orders._order(conn, metadata(task)["order_id"])
+                if order.status != "PENDING_EXECUTION":
+                    task.metadata.update({"retry_message_id": None})
+                self._order_result(conn, task, order)
         return task
 
     def _execute(self, conn, task, command, key, principal, mandate):
@@ -422,7 +430,7 @@ class ProcurementA2A:
             if meta.get("basket_ref"):
                 request = QuoteRequest.model_validate({"customer_id": meta["customer_id"], "deliver_by": meta["deliver_by"], "basket_ref": meta["basket_ref"]})
                 quote = self.gateway.orders.create_quote(request, principal.id, operator=principal.operator, mandate=mandate, command_key=key)
-                meta.update(quote_id=quote.id, selected_plan=meta["basket_ref"])
+                meta.update(quote_id=quote.id, context=quote.context, selected_plan=meta["basket_ref"])
                 task.metadata.update(meta)
                 artifact(task, "selected_plan", meta["basket_ref"])
                 artifact(task, "quote", quote.model_dump(mode="json"))
@@ -434,7 +442,7 @@ class ProcurementA2A:
                          "plan_ref": {"lookup_id": lookup.lookup_id, "plan_index": command.get("plan_index")}}
             request = QuoteRequest.model_validate(selection)
             quote = self.gateway.orders.create_quote(request, principal.id, operator=principal.operator, mandate=mandate, command_key=key)
-            meta.update(quote_id=quote.id, selected_plan=selection["plan_ref"])
+            meta.update(quote_id=quote.id, context=quote.context, selected_plan=selection["plan_ref"])
             task.metadata.update(meta)
             artifact(task, "selected_plan", selection["plan_ref"])
             artifact(task, "quote", quote.model_dump(mode="json"))
@@ -447,6 +455,8 @@ class ProcurementA2A:
                 self._clear_selection(task, meta)
                 raise DomainError("NEED_REF_REQUIRED", "Select a plan for the current lookup before placement", 422)
             order = self.gateway.orders.place_order(meta["quote_id"], key, principal.id, operator=principal.operator, mandate=mandate)
+            if order.status == "PENDING_EXECUTION":
+                task.metadata.update({"retry_message_id": key})
             self._order_result(conn, task, order)
         elif name == "cancel":
             order_id = meta.get("order_id") or command.get("order_id")
@@ -565,13 +575,11 @@ class Handler(RequestHandler):
     def authenticated(self, context, params=None):
         gateway = context.state["gateway"]
         headers = context.state.get("headers", {})
-        check_source(gateway, context.state.get("source", "unknown"))
         scheme, _, secret = headers.get("authorization", "").partition(" ")
         try:
             if scheme.lower() != "bearer" or not secret:
                 raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-            principal = context.state["keys"].resolve(secret, gateway.policy.get())
-            gateway.source_limiter.refund(context.state.get("source", "unknown"))
+            principal = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret)
             meta = MessageToDict(params).get("metadata", {}) if params is not None else {}
             if params is not None and isinstance(params, t.SendMessageRequest):
                 meta = {**MessageToDict(params.message).get("metadata", {}), **meta}
