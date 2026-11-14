@@ -142,11 +142,12 @@ class ProcurementA2A:
         if audit_id is None:
             audit_id = conn.execute("SELECT MAX(id) FROM audit").fetchone()[0]
         context = meta.get("context", {})
+        from .connection_notifications import lineage
         conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (event_id, 1, "task.status_updated", context.get("customer_id"), context.get("environment", "live"),
              "task", task.id, revision, f"agent:{meta['owner']}", audit.utcnow().isoformat(),
              CORRELATION.get() or meta["correlation_id"], CAUSATION.get(),
-             json.dumps({"task": MessageToDict(task), "links": {"task_id": task.id, "event_id": event_id}}), audit_id))
+              json.dumps({"task": MessageToDict(task), "links": {"task_id": task.id, "event_id": event_id}, **lineage(event_id, {})}), audit_id))
         conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
                      "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, audit.utcnow().isoformat()))
 

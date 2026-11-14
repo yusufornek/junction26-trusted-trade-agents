@@ -373,6 +373,7 @@ class AgentSurface:
         current = self.connection_principal(row)
         from .connection_contract_driving import driving
         return {"connection_id": cid, "last_used_at": last or connection.last_used_at,
+                "notifications": self.gateway.notifications.health(cid),
                 "calls_last_24h": by_tool, "error_codes": sorted(codes),
                 "connection_contract": driving(self.gateway).status(current) if current.kind == "agent" else None,
                 "scope": {"audience": current.audience, "scopes": list(current.scopes),
@@ -380,6 +381,8 @@ class AgentSurface:
 
     def changed(self, event):
         """Outbox seam for spec 61; notify only live, re-authorized subscribers."""
+        from .connection_notifications import classify
+        notification_kind = classify(event)
         uris = {"luotsi://agent/context", "luotsi://policy/effective", "luotsi://approvals/pending", "luotsi://inbox"}
         oid = event.get("aggregate_id") if event.get("aggregate_type") == "order" else event.get("payload", {}).get("order_id")
         if oid:
@@ -389,6 +392,8 @@ class AgentSurface:
             uris.add(f"luotsi://catalog/products/{product_id}")
         published = set()
         for loop, server, p, uri, session in list(self.subscribers):
+            if p.connection_id and notification_kind:
+                continue  # Consent/rate/quiet-hours-aware worker owns these updates.
             if uri not in uris or loop.is_closed():
                 continue
             key = (id(server), p.connection_id, p.kind, p.id, uri)
@@ -496,6 +501,9 @@ async def read_uri(server, uri):
         check_scope(p, "approvals", "read")
         return {"orders": json_value([o for o in gateway.orders.list_orders(agent_id=p.owner) if o.status == "PENDING_APPROVAL"])}
     if uri == "luotsi://inbox":
+        if p.connection_id:
+            from .connection_notifications_surface import inbox
+            return inbox(gateway, p, effective_mandate(server))
         check_scope(p, "proposals", "read")
         return {"proposals": gateway.proposals.inbox(p, effective_mandate(server)),
                 "stockout_alerts": gateway.stockout_watch.inbox(p), "suggestions": gateway.memory.suggestions(p)}
@@ -625,6 +633,8 @@ def register(server):
         register_interpretation(server)
 
     register_resources(server)
+    from .connection_notifications_surface import register as register_notifications
+    register_notifications(server)
     register_prompts(server)
     from .connection_contract_surface import register as register_contract
     register_contract(server)

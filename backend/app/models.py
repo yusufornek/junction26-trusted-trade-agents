@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PrivateAttr, WrapValidator, computed_field, field_validator, model_serializer, model_validator
 from pydantic_core import PydanticCustomError
+from .connection_notifications_models import NotificationConsent
 
 
 def historical_input(value, handler, info):
@@ -878,6 +879,7 @@ ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatg
 
 
 class ConnectionRequest(Model):
+    notifications: NotificationConsent = Field(default_factory=NotificationConsent, description="Human notification consent; approval and order decisions default on.")
     contract_version: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Version from /v1/connect/trading-profile acknowledged by this client.")
     agent_id: InputText = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
     client: ClientKind = "rest"

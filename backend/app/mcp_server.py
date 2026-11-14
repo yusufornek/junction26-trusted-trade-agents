@@ -107,7 +107,10 @@ class GatewayMCPServer(MCPServer):
     async def call_tool(self, name, arguments, context=None):
         from .agent_surface import call_tool
         from .connection_contract_surface import mcp_boundary
-        return await mcp_boundary(self, name, arguments, context, call_tool)
+        from .connection_notifications_surface import boundary
+        async def dispatch(server, name, arguments, context):
+            return await mcp_boundary(server, name, arguments, context, call_tool)
+        return await boundary(self, name, arguments, context, dispatch)
 
     async def _call_tool(self, name, arguments, context=None):
         from .runtime import TRANSPORT, CLOCK, ENVIRONMENT
@@ -207,7 +210,7 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer"):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=False):
     """Use the same live inventory for bound clients, shared transports and cards.
 
     Binding an identity changes authorization, never the registered capabilities.

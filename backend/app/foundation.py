@@ -164,6 +164,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         links["placement_span"] = placement
     payload = {**data, "links": links, "status": obj.get("status"), "context": context,
                "evidence_revision": obj.get("evidence_revision")}
+    from .connection_notifications import lineage
+    payload.update(lineage(event_id, data))
     values = (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
                   context.get("environment", ENVIRONMENT.get()), kind, aggregate_id, revision, actor, ts,
                   correlation, CAUSATION.get(), json.dumps(payload), audit_id)

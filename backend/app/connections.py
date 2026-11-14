@@ -149,6 +149,10 @@ class Connections:
             if not conn.execute("SELECT 1 FROM connections WHERE agent_id=? AND client=? AND connection_id<>?", (body.agent_id, body.client, connection_id)).fetchone():
                 self.gateway.governance.alert(conn, body.agent_id, "connection.new_client", {"connection_id": connection_id, "client": body.client},
                                               dedup=f"client:{body.agent_id}:{body.client}")
+            self.gateway.notifications.initialize(connection_id, body.notifications)
+            for subscription in self.gateway.webhooks.list(principal):
+                if subscription.get("connection_id") == connection_id:
+                    self.gateway.notifications.bind_subscription(subscription, human=True)
             audit.append(conn, "human:operator" if principal.user_id == "legacy-operator" else "human:" + (principal.user_id or principal.id), "CONNECTION_CREATED", "Issued an agent connection.",
                 data={"connection_id": connection_id, "agent_id": body.agent_id,
                       "client": body.client, "tenant_id": tid, "key_prefix": secret[:8]})

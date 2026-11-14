@@ -58,6 +58,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                             logger.exception("Supplier execution awaits durable retry")
                         service.outbox.dispatch()
                         service.webhooks.dispatch()
+                        service.notifications.dispatch()
                 await run_in_threadpool(deliver)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=.5)
@@ -142,6 +143,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.include_router(governance_router)
     from .connections import router as connections_router
     app.include_router(connections_router)
+    from .connection_notifications_surface import install as install_notifications
+    install_notifications(app)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)

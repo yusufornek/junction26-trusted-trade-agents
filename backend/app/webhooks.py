@@ -34,6 +34,7 @@ from .canonical import canonical_json
 from .db import DomainError
 from .models import InputTexts
 from .signing import unb64
+from .connection_notifications_models import NotificationSourceEvent
 
 EventType = Literal["stockout.predicted", "order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
@@ -46,7 +47,8 @@ EventType = Literal["stockout.predicted", "order.approval_required", "order.evid
                     "governance.change_requested", "governance.request_decided", "governance.rolled_back",
                     "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
                     "governance.tenant_resumed", "governance.agent_transferred"]
-EVENT_TYPES = set(EventType.__args__)
+EVENT_TYPES = set(EventType.__args__) | set(NotificationSourceEvent.__args__)
+EventType = EventType | NotificationSourceEvent
 
 
 def notification_headers(config):
@@ -65,6 +67,7 @@ def notification_headers(config):
 
 
 class SubscriptionCreate(BaseModel):
+    recipient: str | None = Field(default=None, min_length=1, max_length=200)
     model_config = ConfigDict(extra="forbid")
     url: str = Field(min_length=1, max_length=2048)
     customer_ids: InputTexts = Field(min_length=1)
@@ -73,6 +76,7 @@ class SubscriptionCreate(BaseModel):
 
 
 class SubscriptionPatch(BaseModel):
+    recipient: str | None = Field(default=None, min_length=1, max_length=200)
     model_config = ConfigDict(extra="forbid")
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     customer_ids: InputTexts | None = Field(default=None, min_length=1)
@@ -248,6 +252,8 @@ class Webhooks:
                "created_at": audit.utcnow().isoformat(), "task_id": task_id, "push_config": push_config}
         with self.db.connect(write=True) as conn:
             conn.execute("INSERT INTO webhook_subscriptions VALUES(?,?,?)", (sub["id"], f"{principal.kind}:{principal.id}", json.dumps(sub)))
+            if hasattr(self.gateway, "notifications"):
+                self.gateway.notifications.bind_subscription(sub, human=principal.kind != "agent")
             conn.execute("INSERT INTO event_consumers VALUES(?,1)", ("webhook:" + sub["id"],))
         return self._public(sub)
 
@@ -276,6 +282,8 @@ class Webhooks:
             self._challenge(sub["url"])
         with self.db.connect(write=True) as conn:
             conn.execute("UPDATE webhook_subscriptions SET data=? WHERE id=?", (json.dumps(sub), subscription_id))
+            if hasattr(self.gateway, "notifications"):
+                self.gateway.notifications.bind_subscription(sub)
             conn.execute("UPDATE event_consumers SET enabled=? WHERE name=?", (int(sub["enabled"]), "webhook:" + subscription_id))
             if not sub["enabled"]:
                 conn.execute("UPDATE outbox SET status='skipped' WHERE consumer=? AND status='pending'", ("webhook:" + subscription_id,))
@@ -286,7 +294,9 @@ class Webhooks:
 
     def deliveries(self, subscription_id, principal):
         with self.db.connect() as conn:
-            self._get(subscription_id, principal, conn)
+            sub = self._get(subscription_id, principal, conn)
+            if sub.get('connection_id'):
+                return self.gateway.notifications.subscription_deliveries(sub['connection_id'], subscription_id)
             return [dict(row) for row in conn.execute(
                 "SELECT d.id,d.event_id,o.status,o.attempts,o.next_attempt_at,d.last_error,d.http_status "
                 "FROM webhook_deliveries d JOIN outbox o ON o.event_id=d.event_id AND o.consumer=? "
@@ -295,6 +305,10 @@ class Webhooks:
     def redeliver(self, subscription_id, delivery_id, principal):
         with self.db.connect(write=True) as conn:
             sub = self._get(subscription_id, principal, conn)
+            if sub.get('connection_id'):
+                if not sub['enabled']:
+                    raise DomainError('INVALID_TRANSITION', 'Enable the subscription before redelivery', 409)
+                return self.gateway.notifications.redeliver(sub['connection_id'], subscription_id, delivery_id)
             row = conn.execute("SELECT * FROM webhook_deliveries WHERE id=? AND subscription_id=?", (delivery_id, subscription_id)).fetchone()
             if row is None:
                 raise DomainError("WEBHOOK_NOT_FOUND", "Delivery was not found", 404)
@@ -373,6 +387,12 @@ class Webhooks:
                     delivery = conn.execute("SELECT * FROM webhook_deliveries WHERE subscription_id=? AND event_id=?",
                                            (sub["id"], row["event_id"])).fetchone()
                 event["payload"] = json.loads(event["payload"])
+                from .connection_notifications import classify
+                if sub.get("connection_id") and classify(event):
+                    self.gateway.notifications.delegate(event, sub)
+                    continue  # The consent-bound notification worker owns this delivery.
+                if sub.get("connection_id") and not self.gateway.notifications.legacy_allowed(event, sub):
+                    continue
                 matches = (sub["audience"] == "operator" or event["customer_id"] in sub["customer_ids"]) and self.event_type(event) in sub["event_types"]
                 if event["type"] == "proposal.received":
                     prefs = self.gateway.proposals.preferences(event["customer_id"])

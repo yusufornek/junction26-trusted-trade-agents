@@ -129,11 +129,16 @@ class Gateway:
             install(self, self.webhooks, name, "mutation")
         from .a2a import ProcurementA2A
         self.a2a = ProcurementA2A(self)
+        from .connection_notifications import ConnectionNotifications
+        self.notifications = ConnectionNotifications(self)
+        from .connection_contract import manager as connection_contract
+        connection_contract(self)  # Initialize its schema before any nested command transaction.
 
         def after_commit():
             self.anchoring.trigger()
             self.outbox.dispatch()
             self.webhooks.dispatch()
+            self.notifications.dispatch()
         self.db.on_commit = after_commit
         for client in (self.valio.client, getattr(self.decisions, "client", None), self.webhooks.client,
                        getattr(self.suppliers.get("nordfood"), "client", None)):
