@@ -1,6 +1,6 @@
 import re
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from math import isclose
@@ -10,7 +10,8 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect
+from .catalog import (allergen_evidence, constraint_failures, number, suspect_content, case_suspect,
+                      named_case_sizes, name_sales_sizes, name_measures)
 from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
@@ -26,7 +27,7 @@ WARNING_TEXT = {
     "AVAILABILITY_UNCONFIRMED": "Valio does not know this product's stock; its ordering logic accepts any quantity",
     "PRICE_ERROR": "A valid net catalog price could not be obtained.",
     "SIZE_UNKNOWN": "Sales-unit content cannot be converted to the requested unit.",
-    "SIZE_MISMATCH": "Exact pack content differs from the live price ratio by more than 3%.",
+    "SIZE_MISMATCH": "Pack content evidence differs by more than 3%.",
     "NO_FIT_SCORE": "Decisions fit probability is unavailable; a human must review suitability.",
     "AVAILABILITY_ERROR": "Availability could not be verified with the upstream API.",
     "OUTSIDE_PREFERENCE": "The product is a substitute outside the buyer's soft preferences.",
@@ -105,6 +106,8 @@ def reconcile_size(product, price, requested_unit):
     ratio = None
     if not price.get("error") and price.get("comparisonUnit") == requested_unit and net and net > 0 and comparison and comparison > 0:
         ratio = float(pack_quantity(Decimal(str(net)) / Decimal(str(comparison))))
+        if ratio <= 0:
+            ratio = None
     if product.sales_unit == requested_unit == "KG":
         # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
         # ("ca 2,4 kg") describes the item, not the sales unit.
@@ -114,51 +117,77 @@ def reconcile_size(product, price, requested_unit):
     exact = {}
     content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
     sales_content = product.sales_volume_l if requested_unit == "L" else product.sales_net_weight_kg
-    suspect = product.volume_suspect if requested_unit == "L" else product.weight_suspect
     # Recheck retained evidence even when an older build stored False after checking only English.
     # Keep each dimension independent so a bad volume does not discard a valid weight (or vice versa).
     names = [product.name_en, product.name_fi]
+    named_cases = named_case_sizes(names, requested_unit) if product.sales_unit in {"KI", "CASE"} else []
     # Recompute CASE suspicion from retained evidence: old builds falsely flagged
     # whole-case names after dividing their matching CASE weight by the multiplier.
-    suspect = (case_suspect(sales_content, multiplier, names, requested_unit) if sales_content is not None
-               else bool(suspect) or suspect_content(content, names, requested_unit))
-    if not suspect and sales_content and sales_content > 0:
+    base_suspect = suspect_content(content, names, requested_unit)
+    sales_suspect = case_suspect(sales_content, multiplier, names, requested_unit, product.base_unit, content)
+    if not sales_suspect and sales_content and sales_content > 0:
         exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
     if multiplier is not None and multiplier > 0:
-        if "catalog" not in exact and not suspect and content and content > 0:
+        named = name_sales_sizes(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier)
+        if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
-        # Compute the name source too, even when structured catalog content exists.
-        # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
-        # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
-        # multiplier does not already carry it ("5 x Milk 1 L" with multiplier 5 stays 5 x 1 L).
-        pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
-        factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
-        for name in (product.name_en, product.name_fi):
-            for match in re.finditer(pattern, name, re.IGNORECASE):
-                count = int(match[1]) if match[1] else 1
-                value, unit = Decimal(match[2].replace(",", ".")), match[3].lower()
-                if unit in factors and value > 0:
-                    exact["name_parse"] = float(pack_quantity(value, factor=factors[unit],
-                        multiplier=count if multiplier == 1 and count > 0 else multiplier))
-                    break
-            if "name_parse" in exact:
-                break
+        if product.base_unit == requested_unit:
+            # Here the multiplier is already a measure, not a count of packages.
+            exact.setdefault("catalog", float(pack_quantity(multiplier)))
+        if "catalog" not in exact and sales_content and sales_content > 0 and not suspect_content(
+                sales_content / multiplier, [], requested_unit) and (not named or any(
+                max(sales_content / size, size / sales_content) < 10 for size in named)):
+            # Retain plausible but contradictory CASE evidence for explicit review.
+            # Grossly suspect data still falls back as required by spec 15 R-8.
+            exact["catalog"] = float(pack_quantity(sales_content, whole_case=True))
+        # Use the same nested-count/net-weight parsing as catalog CASE validation.
+        if named:
+            exact["name_parse"] = next((size for size in named if exact.get("catalog", 0) > 0 and
+                abs(size / exact["catalog"] - 1) <= .03), named[0])
+
+    # A nonpositive size, including one rounded to zero, is never evidence or a divisor.
+    exact = {source: size for source, size in exact.items() if size > 0}
+
+    def packaging_warnings(size):
+        if named_cases and not any(abs(size / named - 1) <= .03 or
+                isclose(abs(size / named - 1), .03, rel_tol=1e-12) for named in named_cases if named > 0):
+            return [Warning(code="SIZE_MISMATCH", text=(
+                f"{WARNING_TEXT['SIZE_MISMATCH']} used={size:g} {requested_unit}; "
+                f"name_case={named_cases} {requested_unit} per sales unit."))]
+        return []
+
     if exact:
         if ratio is None:
             source = next(iter(exact))
-            return exact[source], source, False, [warning("SIZE_UNCONFIRMED")]
+            # Independent explicit counts can contradict the sales multiplier. A
+            # lone "1 x" is an inner package description when the multiplier > 1.
+            count_evidence = named_cases if named_cases and not all(
+                counts == [1] for name in names for _, counts in name_measures(name, requested_unit)
+                if counts) else []
+            candidates = count_evidence or named if multiplier is not None and multiplier > 0 else named_cases
+            size = exact[source]
+            if candidates and not any(abs(size / candidate - 1) <= .03 or isclose(
+                    abs(size / candidate - 1), .03, rel_tol=1e-12) for candidate in candidates):
+                values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
+                conservative = min(size, *candidates)
+                mismatch = Warning(code="SIZE_MISMATCH", text=(
+                    f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; name_case={candidates} {requested_unit}; "
+                    f"used={conservative:g} {requested_unit} for conservative display only; approval required."))
+                display_source = next((key for key, value in exact.items() if value == conservative), "name_parse")
+                return conservative, display_source, False, [warning("SIZE_UNCONFIRMED"), mismatch]
+            return size, source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(size)]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
         for source, size in exact.items():
             difference = abs(ratio / size - 1)
             if difference < 0.03 or isclose(difference, 0.03, rel_tol=1e-12):
-                return size, source, True, []
+                return size, source, True, packaging_warnings(size)
         values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
         mismatch = Warning(code="SIZE_MISMATCH", text=(
             f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; price_ratio={ratio:g} {requested_unit} per sales unit."
         ))
         return ratio, "price_ratio", False, [mismatch]
     if ratio is not None:
-        return ratio, "price_ratio", False, []
+        return ratio, "price_ratio", False, packaging_warnings(ratio)
     return None, None, False, []
 
 
@@ -170,7 +199,9 @@ def reserved(conn, product_id, exclude_order=None):
 
 def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=None):
     codes = []
-    now = timestamp(raw.get("_fetched_at")) or audit.utcnow()
+    # Advance the supplier clock on cache hits without changing signed provenance.
+    fetched = timestamp(raw.get("_fetched_at"))
+    now = fetched + timedelta(seconds=raw.get("_cache_age", 0)) if fetched else audit.utcnow()
     cutoff = timestamp(raw.get("closingTime"), ZoneInfo("Europe/Helsinki"))
     if cutoff is None:
         codes.append("CUTOFF_UNKNOWN")
@@ -217,7 +248,7 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
         delivery = ", ".join(sorted({d.isoformat() for d in dates})) or "unknown date"
         warnings = [Warning(code=w.code, text=f"Order cut-off for delivery on {delivery} passed at {cutoff.isoformat()}")
                     if w.code == "CUTOFF_PASSED" else w for w in warnings]
-    return Availability(available_amount=None if unknown else amount, availability_known=not unknown,
+    return Availability(available_amount=None if unknown_on_time else amount, availability_known=not unknown_on_time,
                         logistic_model=raw.get("logisticModel"),
                         closing_time=cutoff, available_date=min(dates) if dates else None,
                         enough=quantity is not None and amount >= quantity, coverage=coverage), warnings

@@ -1,5 +1,6 @@
 import gzip
 import json
+import re
 import sys
 import threading
 from datetime import timedelta
@@ -113,6 +114,7 @@ def gateway(tmp_path, registered_agents, product_rows):
         defaults = Policy._load(policy_path).model_dump(mode="json", include=set(PolicyDocument.model_fields))
         for agent_id in registered_agents:
             defaults["agents"][agent_id] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 5000,
+                                            "autonomy": "autonomous_within_limits",
                                             "note": "Explicit fixture mandate for existing lifecycle tests."}
         policy_path = tmp_path / "defaults.yaml"
         policy_path.write_text(yaml.safe_dump(defaults))
@@ -237,6 +239,52 @@ def actual_product_rows():
     from app.config import ROOT
     with gzip.open(ROOT / "data/product_data.json.gz", "rt") as file:
         return json.load(file)
+
+
+@pytest.fixture(scope="session")
+def real_case_name_products(actual_product_rows):
+    """Independent oracle for every CASE product, including nested and net/drained names."""
+    from decimal import Decimal
+    from math import prod
+    from app.catalog import extract
+    # Read the net measure before a shared-unit drained weight. Counts are collected
+    # independently from the text before each measure, not from production parsing.
+    measure = (r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)"
+               r"(?:\s*/\s*\d+(?:[.,]\d+)?(?=\s*(?:kg|g)\b))?\s*(kg|g|l|dl|cl|ml)\b")
+    factors = {"kg": ("KG", "1"), "g": ("KG", ".001"), "l": ("L", "1"),
+               "dl": ("L", ".1"), "cl": ("L", ".01"), "ml": ("L", ".001")}
+    result = []
+    for row in actual_product_rows:
+        if row.get("deleted") or row.get("salesUnit") not in {"KI", "CASE"}:
+            continue
+        names = [n["value"] for n in (row.get("synkkaData") or {}).get("names", [])
+                 if n.get("language") in {"en", "fi"}]
+        multiplier = next((u["sizeInBaseUnits"] for u in row.get("units", [])
+                           if u["unitId"] == row["salesUnit"]), 1)
+        expected = {"L": set(), "KG": set()}
+        for name in names:
+            leading = re.match(r"\s*((?:\d+\s*[x×]\s*)+)", name, re.I)
+            leading_counts = list(map(int, re.findall(r"\d+", leading[1]))) if leading else []
+            matches = list(re.finditer(measure, name, re.I))
+            direct_counts = []
+            for match in matches:
+                before = name[:match.start()]
+                direct = re.search(r"((?:\d+\s*[x×]\s*)+)$", before, re.I)
+                direct_counts.append(list(map(int, re.findall(r"\d+", direct[1]))) if direct else [])
+            pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+            for match, direct in zip(matches, direct_counts):
+                counts = direct or leading_counts or next((c for c in direct_counts if c), [])
+                if direct and leading and leading.end() < match.start():
+                    counts = leading_counts + direct
+                unit, factor = factors[match[2].lower()]
+                count = prod(counts) if counts else int(pieces[1]) if pieces else (
+                    1 if row.get("baseUnit") == unit else multiplier)
+                value = Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor)
+                if value > 0:
+                    expected[unit].add(value.quantize(Decimal("0.000001")))
+        result.append((extract(row, {}, {}), expected))
+    assert {"460913", "477461", "462402", "462050", "477242"} <= {p.id for p, _ in result}
+    return result
 
 
 @pytest.fixture(scope="session")

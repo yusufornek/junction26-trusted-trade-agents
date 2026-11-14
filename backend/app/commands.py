@@ -1,6 +1,7 @@
 """Shared command boundary used by current and future transports."""
 import inspect
 import json
+from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
 
@@ -12,6 +13,8 @@ from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TRACE, correlation_id
 
 
 def json_value(value):
+    if is_dataclass(value):
+        return json_value(asdict(value))
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, dict):
@@ -65,6 +68,11 @@ def install(gateway, target, name, category):
                 try:
                     gateway.limiter.consume(identity, "read" if previous else category)
                     if previous:
+                        if target is gateway.orders and name in {"approve", "reject"}:
+                            # Replay returns the original result, but never the original authority.
+                            from .autonomy import authorize_review
+                            authorize_review(gateway.policy.get(), principal,
+                                             gateway.orders._order(conn, arguments["order_id"]))
                         if name == "place_order":
                             # Preserve buyer mandate revalidation and the historical replay audit.
                             return linked(operation(*args, **kwargs))

@@ -100,8 +100,15 @@ class Mandates:
         order_limit = min(subject["max_auto_total_eur"], policy.approval.max_auto_total_eur,
                           row.max_auto_total_eur if row and row.max_auto_total_eur is not None else float("inf"))
         daily_limit = min(subject["max_auto_daily_total_eur"], row.max_auto_daily_total_eur if row else float("inf"))
+        buyer_level = subject.get("autonomy", policy.autonomy.default)
+        operator_level = (row.autonomy or policy.autonomy.default) if row else buyer_level
+        grant = conn.execute("SELECT level FROM agent_autonomy WHERE agent_id=?", (agent_id,)).fetchone()
+        if row is None and grant:
+            operator_level = grant[0]
+        level = "approval_required" if "approval_required" in (buyer_level, operator_level) else "autonomous_within_limits"
         effective.agents[agent_id] = AgentMandate(customer_ids=[customer_id], max_auto_total_eur=order_limit,
-                                                 max_auto_daily_total_eur=daily_limit)
+                                                 max_auto_daily_total_eur=daily_limit, autonomy=level)
+        record.autonomy = level
         record.limits = {"max_auto_total_eur": order_limit, "max_auto_daily_total_eur": daily_limit}
         return effective, record, token
 
@@ -119,6 +126,8 @@ class Mandates:
                     not all(number(subject.get(k)) and subject[k] >= 0
                             for k in ("max_auto_total_eur", "max_auto_daily_total_eur"))):
                 invalid("format")
+            if "autonomy" in subject and subject["autonomy"] not in ("approval_required", "autonomous_within_limits"):
+                invalid("autonomy")
         except (KeyError, TypeError):
             invalid("format")
         customer = (policy or self.policy.get()).customers.get(subject["customer_id"])

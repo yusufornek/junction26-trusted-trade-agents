@@ -160,7 +160,11 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
 
 `policy.yaml` registers `hotel-chain-agent` and `web-console` for customer `"1"`, each with a
 5,000 EUR rolling 24-hour autonomous limit. `agents` maps each identity to `customer_ids`, optional
-`max_auto_total_eur`, required `max_auto_daily_total_eur`, and a free-text `note` recording its grant.
+`max_auto_total_eur`, required `max_auto_daily_total_eur`, optional `autonomy`, and a free-text `note` recording its grant.
+Omitted autonomy uses `policy.autonomy.default: approval_required`: otherwise acceptable orders start
+`PENDING_APPROVAL` with rule hit `autonomy_level`. The two demo mandates explicitly have
+`autonomous_within_limits`, granted after the pilot's approved orders (demo setting), preserving the
+1,010 EUR demo confirmation. Other policy limits and hard constraints still apply.
 REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. MCP fixes
 identity using `--agent-id` at launch; tools cannot change it per call. The console uses the operator token
 and its buyer actions run as `OPERATOR_AGENT_ID` (default `web-console`).
@@ -280,15 +284,25 @@ Old stored lookups without preferences/plans remain readable, including through 
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
-  CASE sales content needs no base-unit multiplier; CASE and name evidence are compared at matching
-  packaging levels. Legacy CASE suspicion flags are recalculated from retained content and names.
+  CASE sales content needs no additional base-unit multiplier. It must agree within 3% with whole-case
+  name evidence (including leading counts such as `24x Brooklyn ... 0.33 L`), or inner content times the
+  sales-unit multiplier. Nested counts (`8 x Brand 4x70g`, `4x6x ... 0.33 L`) retain the inner counts
+  while consuming the outer sales multiplier once. Shared-unit net/drained names (`460/230g`) use
+  the net weight, 460g. Nonpositive measures, including measures rounded to zero, supply no evidence.
+  An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
+  measures case weight rather than counting packages, preserving valid whole-case weights.
+  Legacy CASE suspicion flags are recalculated from retained content and names without a database rewrite.
   Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
   `size_suspect` remains their aggregate. Both English and Finnish names supply size evidence at build.
   Reconciliation rechecks both names even for legacy records with missing or incorrectly false dimension flags.
-  Suspect content falls back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
-  uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
+  Suspect CASE content falls back to valid BASE content, the name or ratio, then `SIZE_UNKNOWN`. A disagreement
+  with the price ratio uses the ratio and emits `SIZE_MISMATCH` naming the values; a conversion inconsistent
+  with explicit name counts also carries `SIZE_MISMATCH`, even without a ratio. Both require approval by default.
+  Without a live ratio, plausible but contradictory catalog/name content is not confirmed: `SIZE_MISMATCH`
+  names both figures and the plan displays the larger units-needed estimate (the smaller content).
+  This estimate is for review only and always requires approval; explicit quote quantities stay unchanged.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
   count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.
@@ -301,12 +315,15 @@ Old stored lookups without preferences/plans remain readable, including through 
 - Availability sums unblocked lines arriving on/before `deliver_by`. Future lines are flagged
   `DATE_SHIFT`, never counted as on-time coverage. `closingTime` is the order cut-off for the accompanying
   `availableDate`; a past cut-off gives `CUTOFF_PASSED`, naming the delivery date and cut-off timestamp,
-  and still requires approval. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
+  and still requires approval. On cache hits, cut-offs use the fetched supplier time advanced by the
+  cache age (measured with a monotonic clock), falling back to local receipt time without a supplier clock;
+  the original fetched-at provenance is preserved. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
   are interpreted in Europe/Helsinki. Missing/different schedule `salesUnit` gives `UNIT_MISMATCH` and
-  that line contributes zero stock. An individual usable schedule amount >=999999 means stock is unknown
-  but any quantity may be ordered, independently of `logisticModel`: `available_amount: null`,
-  `availability_known: false`, informational `AVAILABILITY_UNCONFIRMED`, full coverage when on time,
-  and no local reservation. Finite amounts subtract reservations even for Terminal products.
+  that line contributes zero stock. An individual usable schedule amount >=999999 gives informational
+  `AVAILABILITY_UNCONFIRMED`, independently of `logisticModel`. When that line arrives on/before the deadline,
+  any quantity may be ordered: `available_amount: null`, `availability_known: false`, full coverage,
+  and no local reservation. Later unknown stock does not change finite on-time amounts or reservations.
+  Finite amounts subtract reservations even for Terminal products.
   Missing/unknown logistic models still give `STOCK_MODEL_UNKNOWN`. Stock-model zero stock without a date gives rejecting `NO_STOCK`.
   Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
@@ -420,8 +437,11 @@ response.raise_for_status()
 (`403 AGENT_NOT_REGISTERED` / `CUSTOMER_NOT_IN_MANDATE`). Lookups and quotes store `agent_id`; agents
 can only access their own lookups, quotes, orders, cancellations and timelines. Other agents' objects
 return 404, and `GET /v1/orders` returns only the caller's orders. Legacy records without ownership
-are operator-only. Operators can see all objects. Approvals/rejections, the approval inbox, policy
-read/write/reset, audit and stats require the operator credential (`403 OPERATOR_REQUIRED` for agents).
+are operator-only. Operators can see all objects. The approval inbox and approve/reject routes also
+accept the organisation's `buyer_approver` or `buyer_admin` (policy identities and organisations from spec 22).
+Other organisations' decisions return 404. Human decisions show `approval_side: buyer | valio_operator`
+and the authenticated actor in audit. Policy read/write/reset, audit and stats require the operator
+credential (`403 OPERATOR_REQUIRED` for agents).
 Credential and operator checks precede validation errors on every protected route, including malformed JSON.
 Operator changes use audit actor `human:operator`; typed names remain on the order/policy and in
 `data.stated_name`. The console buyer identity remains subject to its mandate and budgets.
@@ -541,6 +561,10 @@ Both earlier unversioned formats (the specified payload and the short-lived
 expanded payload with an integrity member) remain readable, verifiable offline
 and usable for placement until expiry, subject to current authority and policy.
 Their original signatures are preserved; they are never silently re-signed.
+Historical evidence omits `allowed_lot_size` and `availability_known` when those fields were absent
+from the signed record, including REST/MCP responses and accepted/expired status saves. Their runtime
+defaults still load as one whole sales unit and known availability; newly issued evidence includes both fields
+under the existing version-2 protected integrity digest.
 Unsigned legacy quotes remain readable and require re-quoting for a new order.
 Existing orders replay after ownership/identity checks
 without requiring a historical quote key to remain published. Their stored buyer
@@ -611,9 +635,10 @@ The buyer signs an Ed25519 W3C VC 2.0 JWT (`typ: vc+jwt`); the authenticated
 agent presents it with its existing Bearer credential. `sub` and
 `vc.credentialSubject.agent_id` must equal that credential's agent ID.
 The issuer grants customer scope, per-order and rolling 24-hour EUR limits,
-with optional catalog category codes. An agent needs no policy agent row when
+with optional catalog category codes and `autonomy: approval_required | autonomous_within_limits`.
+Omitting autonomy uses the approval-first policy default. An agent needs no policy agent row when
 it presents a valid buyer mandate. Existing policy rows can only tighten its
-customer scope and limits; the global per-order ceiling still applies.
+customer scope, limits and autonomy; the stricter autonomy level wins and the global per-order ceiling still applies.
 Calls without a buyer VC retain the existing policy-row behavior.
 
 From `backend/`, issue a mandate (first use generates the private issuer key
@@ -795,11 +820,12 @@ credential, or structured 422 after authentication.
 
 REST and MCP use `app.commands` for principal-scoped idempotency and token costs. Order placement
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
-(optional for compatibility). Policy update/reset and signed mandate revocation accept it too.
+(optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same command and payload. Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
-audit. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
+audit. Approval/rejection replays recheck the reviewer's current organisation and customer scope
+before returning the saved order. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
 domain events commit atomically. Refusals do not cache a successful command result.
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
@@ -879,3 +905,50 @@ Public `GET /v1/meta` separates specification versions from installed packages a
 scope. A2A, Standard Webhooks and the MCP server card are explicitly planned, not implemented.
 The server-card draft is pinned to vendored commit `526201bbc80231daa40ffcdecfc9da4e54e5dc93`;
 Standard Webhooks is pinned to vendored commit `36afae792227eae8a182a7a1a5711dbdc08a4334`.
+
+## Graduated autonomy (spec 40)
+
+`GET /v1/agents/{id}/track-record?window_days=30` is available to the operator, the agent itself,
+and buyer users in its organisation. Explicit organisation IDs must match; for older agent mandates
+without one, all mandated customer IDs must belong to the caller's organisation. Unknown or
+out-of-scope agents return 404. The window accepts 1–3650 days and performs no supplier calls.
+
+The record uses orders **placed within** the inclusive UTC window, preserving historical human
+approvals even if later cancelled. It counts distinct orders placed, approved unchanged, rejected,
+expired, evidence-changed and cancelled. Approved unchanged means a human approval at evidence
+revision 1 with no `EVIDENCE_CHANGED` audit entry; re-approved revised evidence does not qualify.
+Average approval time (seconds) covers every human-approved order in the cohort, from placement
+until approval. Shares divide by orders placed (zero for an empty cohort); unavailable averages are null.
+Hard-constraint refusals count distinct orders (or attempts with no order) refused in the time window,
+including failed approval refreshes. A placement counts only when its outcome is `REJECTED`;
+an exception routed to and accepted by a human does not start a refusal cooldown.
+Indexed order, quote and actor ownership queries restrict audit processing to the target agent.
+Last rejection/refusal dates are SQL aggregates over that agent's lifetime history so an older
+failure still enforces its cooldown without loading historical JSON into Python. Replays do not add observations.
+
+`autonomy_recommendation {eligible, reasons[]}` checks `autonomy.promotion`:
+`min_approved_unchanged` (5), `max_rejection_share` (0.1), and
+`days_since_last_rejection_or_refusal` (7). Every unmet threshold is explained. With no historical
+failure its cooldown passes; meeting a threshold exactly passes. Readiness never changes authority.
+
+An operator or the agent's `buyer_admin` calls
+`POST /v1/agents/{id}/autonomy` with `{level, reason}` (nonblank reason required).
+An optional `Idempotency-Key` returns the original result on retry without changing authority again,
+even after a later demotion; changing the payload under the same key returns `409 IDEMPOTENCY_CONFLICT`.
+The level persists in the runtime policy using its existing atomic replacement and writer lock.
+For a VC-only agent it persists in SQLite without creating a policy mandate, so subsequent purchases
+still require a valid, unrevoked VC with its expiry and limits enforced;
+`AUTONOMY_CHANGED` records the previous/new levels, reason and 30-day track-record snapshot.
+The human can grant autonomy even when readiness is not eligible. A stricter buyer VC cannot be
+loosened by this endpoint: the buyer must issue a new credential. `scripts/issue_mandate.py`
+accepts `--autonomy` and defaults to `approval_required`.
+
+A human rejection or hard-constraint refusal while autonomous appends an audited
+`autonomy.review_suggested` domain event, delivered through the existing durable event/outbox
+mechanism. This suggests review; demotion is the same endpoint with `level: approval_required`.
+For a VC-bound order, this decision uses the original signed claim and current policy/grant,
+not its placement-time effective autonomy snapshot. A restrictive buyer claim still wins;
+expired or revoked authority does not prevent human rejection and does not suggest an autonomy review.
+Spec 28's buyer view and spec 33's signed webhook delivery are not installed here. This implementation
+uses the existing spec 19/22 principals, organisation scopes, audit chain and event/outbox; it does
+not claim outbound webhook delivery. The approval endpoints expose buyer/operator signing now.

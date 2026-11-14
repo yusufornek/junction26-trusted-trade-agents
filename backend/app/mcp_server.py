@@ -21,14 +21,20 @@ PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
-                "policy only tightens its per-order and daily limits. Quote/order bind and expose mandate metadata; "
+                "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
+                "(default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. "
+                "approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. "
+                "GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may "
+                "POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key prevents repeated changes). Quote/order bind and expose mandate metadata; "
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
-    "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; SALES_BLOCK means not for sale; "
-    "NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a schedule amount >=999999: stock unknown, any quantity orderable, available_amount=null, availability_known=false, no local reservation, ignored by default. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
-    "SIZE_MISMATCH means exact pack content differs from the live price ratio by more than 3% and requires review; "
+    "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; "
+    "NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
+    "SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; "
+    "without it, contradictory sizes are shown together and the larger units-needed estimate is for display and human review only. "
+    "Nested name counts retain inner packages while consuming the outer multiplier once; shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; "
     "OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. "
     "NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. "
     "Hard constraints and sale blocks cannot be overridden by fit scores."
@@ -117,8 +123,9 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         "Unknown claim/allergen/label codes return UNKNOWN_CODE with valid values. "
         "Quotes have Ed25519 detached JWS signatures: download public /.well-known/jwks.json, save the quote, "
         "then run scripts/verify_quote.py quote.json --jwks jwks.json --customer ID offline. "
+        "Historical signed records retain the original presence or absence of allowed_lot_size and availability_known through retrieval and status saves. "
         "RFC 8785 quote_payload preserves the spec 10/13 promise with decimal-string money/quantities, provenance and price_commitment=gateway-locked. The protected quote_version=2 header adds quote_integrity, a SHA-256 digest of canonical immutable fields (excluding signature/status/live_calls, numbers as decimal strings). Both earlier unversioned formats remain verifiable until expiry. "
-        "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS))
+        "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS + MANDATE_HELP))
     server.keys = gateway.settings.keys or Credentials()
     server.gateway = gateway
     server.agent_id = agent_id

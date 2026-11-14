@@ -5,6 +5,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_autonomy (
+ agent_id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK(level IN ('approval_required','autonomous_within_limits'))
+);
 CREATE TABLE IF NOT EXISTS commands (
  principal TEXT NOT NULL, key TEXT NOT NULL, command TEXT NOT NULL, digest TEXT NOT NULL,
  result TEXT NOT NULL, PRIMARY KEY(principal,key)
@@ -58,6 +61,9 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 CREATE INDEX IF NOT EXISTS audit_order ON audit(order_id);
 CREATE INDEX IF NOT EXISTS audit_quote ON audit(quote_id);
+CREATE INDEX IF NOT EXISTS audit_actor_ts ON audit(actor,ts);
+CREATE INDEX IF NOT EXISTS orders_agent_created ON orders(json_extract(data,'$.agent_id'),json_extract(data,'$.created_at'));
+CREATE INDEX IF NOT EXISTS quotes_agent ON quotes(json_extract(data,'$.agent_id'));
 CREATE TABLE IF NOT EXISTS mandate_credentials (digest TEXT PRIMARY KEY, jwt TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS object_mandates (
     kind TEXT NOT NULL, object_id TEXT NOT NULL, digest TEXT NOT NULL REFERENCES mandate_credentials(digest),

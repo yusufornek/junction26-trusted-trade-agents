@@ -271,6 +271,316 @@ paths:
               description: Seconds before retrying the same command, when retryable.
       security:
       - BearerAuth: []
+  /v1/agents/{agent_id}/track-record:
+    get:
+      summary: Track Record
+      description: Audit-derived record for orders placed in window_days (default
+        30). Operator, the agent and its buyer organisation may read it. Readiness
+        is advisory; no automatic promotion.
+      operationId: track_record_v1_agents__agent_id__track_record_get
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: window_days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 3650
+          minimum: 1
+          default: 30
+          title: Window Days
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTrackRecord'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+  /v1/agents/{agent_id}/autonomy:
+    post:
+      summary: Change Autonomy
+      description: Operator or this agent's buyer_admin grants or removes autonomy.
+        Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional
+        Idempotency-Key replays the first result without changing authority again;
+        changed payload returns 409 IDEMPOTENCY_CONFLICT. Readiness never grants authority
+        automatically. A stricter signed buyer mandate still wins.
+      operationId: change_autonomy_v1_agents__agent_id__autonomy_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Idempotency-Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutonomyChange'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutonomyChangeResult'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
   /health:
     get:
       summary: Health
@@ -3014,7 +3324,8 @@ paths:
         the refreshed order before approving again. Unchanged evidence confirms. A
         revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate
         returns 403 AGENT_NOT_REGISTERED with rule hits in data; the order remains
-        pending and can be rejected.
+        pending and can be rejected. Cached approval responses recheck the reviewer's
+        current organisation and customer scope.
       operationId: approve_v1_approvals__order_id__approve_post
       security:
       - BearerAuth: []
@@ -3169,6 +3480,9 @@ paths:
   /v1/approvals/{order_id}/reject:
     post:
       summary: Reject
+      description: Reject a pending order. Optional Idempotency-Key replays the first
+        result; cached responses recheck the reviewer's current organisation and customer
+        scope.
       operationId: reject_v1_approvals__order_id__reject_post
       security:
       - BearerAuth: []
@@ -3905,6 +4219,16 @@ components:
   schemas:
     AgentMandate:
       properties:
+        autonomy:
+          anyOf:
+          - type: string
+            enum:
+            - approval_required
+            - autonomous_within_limits
+          - type: 'null'
+          title: Autonomy
+          description: Omission uses policy.autonomy.default; new agents require sign-off
+            by default.
         rate_limits:
           anyOf:
           - $ref: '#/components/schemas/RateLimits'
@@ -3971,6 +4295,89 @@ components:
       - order_count
       - registered
       title: AgentStats
+    AgentTrackRecord:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+        window_days:
+          type: integer
+          title: Window Days
+        window_start:
+          type: string
+          format: date-time
+          title: Window Start
+        window_end:
+          type: string
+          format: date-time
+          title: Window End
+        orders_placed:
+          type: integer
+          title: Orders Placed
+        approved_unchanged:
+          type: integer
+          title: Approved Unchanged
+        rejected:
+          type: integer
+          title: Rejected
+        expired:
+          type: integer
+          title: Expired
+        evidence_changes:
+          type: integer
+          title: Evidence Changes
+        cancellations:
+          type: integer
+          title: Cancellations
+        hard_constraint_refusals:
+          type: integer
+          title: Hard Constraint Refusals
+        average_approval_time_seconds:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Average Approval Time Seconds
+        approved_unchanged_share:
+          type: number
+          title: Approved Unchanged Share
+        rejection_share:
+          type: number
+          title: Rejection Share
+        last_rejection_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Rejection At
+        last_hard_constraint_refusal_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Hard Constraint Refusal At
+        autonomy_recommendation:
+          $ref: '#/components/schemas/AutonomyRecommendation'
+      additionalProperties: false
+      type: object
+      required:
+      - agent_id
+      - window_days
+      - window_start
+      - window_end
+      - orders_placed
+      - approved_unchanged
+      - rejected
+      - expired
+      - evidence_changes
+      - cancellations
+      - hard_constraint_refusals
+      - average_approval_time_seconds
+      - approved_unchanged_share
+      - rejection_share
+      - last_rejection_at
+      - last_hard_constraint_refusal_at
+      - autonomy_recommendation
+      title: AgentTrackRecord
     ApprovalItem:
       properties:
         order:
@@ -4203,6 +4610,99 @@ components:
       - entries
       - head_hash
       title: AuditVerification
+    AutonomyChange:
+      properties:
+        level:
+          type: string
+          enum:
+          - approval_required
+          - autonomous_within_limits
+          title: Level
+        reason:
+          type: string
+          minLength: 1
+          title: Reason
+      additionalProperties: false
+      type: object
+      required:
+      - level
+      - reason
+      title: AutonomyChange
+    AutonomyChangeResult:
+      properties:
+        agent_id:
+          type: string
+          title: Agent Id
+        level:
+          type: string
+          enum:
+          - approval_required
+          - autonomous_within_limits
+          title: Level
+        reason:
+          type: string
+          title: Reason
+        track_record:
+          $ref: '#/components/schemas/AgentTrackRecord'
+      additionalProperties: false
+      type: object
+      required:
+      - agent_id
+      - level
+      - reason
+      - track_record
+      title: AutonomyChangeResult
+    AutonomyPolicy:
+      properties:
+        default:
+          type: string
+          enum:
+          - approval_required
+          - autonomous_within_limits
+          title: Default
+          default: approval_required
+        promotion:
+          $ref: '#/components/schemas/AutonomyPromotion'
+      additionalProperties: false
+      type: object
+      title: AutonomyPolicy
+    AutonomyPromotion:
+      properties:
+        min_approved_unchanged:
+          type: integer
+          minimum: 0.0
+          title: Min Approved Unchanged
+          default: 5
+        max_rejection_share:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Max Rejection Share
+          default: 0.1
+        days_since_last_rejection_or_refusal:
+          type: integer
+          minimum: 0.0
+          title: Days Since Last Rejection Or Refusal
+          default: 7
+      additionalProperties: false
+      type: object
+      title: AutonomyPromotion
+    AutonomyRecommendation:
+      properties:
+        eligible:
+          type: boolean
+          title: Eligible
+        reasons:
+          items:
+            type: string
+          type: array
+          title: Reasons
+      additionalProperties: false
+      type: object
+      required:
+      - eligible
+      - reasons
+      title: AutonomyRecommendation
     Availability:
       properties:
         available_amount:
@@ -4210,13 +4710,14 @@ components:
           - type: number
           - type: 'null'
           title: Available Amount
-          description: On-time sales units after local reservations; null when an
-            upstream amount >= 999999 means unknown but orderable.
+          description: On-time sales units after local reservations; null when a usable
+            on-time upstream amount >= 999999 means unknown but orderable.
         availability_known:
           type: boolean
           title: Availability Known
-          description: False for upstream amounts >= 999999, independently of logistic
-            model; no local reservation is counted.
+          description: False for usable on-time upstream amounts >= 999999, independently
+            of logistic model; no local reservation is counted. Later unknown stock
+            does not exempt finite on-time stock from reservations.
           default: true
         logistic_model:
           anyOf:
@@ -4780,6 +5281,14 @@ components:
           type: string
           format: date-time
           title: Valid Until
+        autonomy:
+          anyOf:
+          - type: string
+            enum:
+            - approval_required
+            - autonomous_within_limits
+          - type: 'null'
+          title: Autonomy
       additionalProperties: false
       type: object
       required:
@@ -4877,9 +5386,12 @@ components:
           - type: number
           - type: 'null'
           title: Size Per Sales Unit
-          description: Quantity unit per sales unit, quantized to six decimal places
-            before pack arithmetic; CASE content already includes its multiplier.
-            Null when conversion is unknown.
+          description: Positive quantity unit per sales unit, quantized to six decimal
+            places before pack arithmetic; CASE content already includes its multiplier.
+            Nested name counts retain inner packages; net/drained names use net weight.
+            With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH
+            reports both sizes and this is the smaller content for a conservative
+            display estimate requiring approval. Null when conversion is unknown.
         size_unit:
           type: string
           enum:
@@ -5161,6 +5673,16 @@ components:
           - type: string
           - type: 'null'
           title: Approver
+        approval_side:
+          anyOf:
+          - type: string
+            enum:
+            - buyer
+            - valio_operator
+          - type: 'null'
+          title: Approval Side
+          description: Organisation side that signed the human decision; null before
+            review or on legacy orders.
         comment:
           anyOf:
           - type: string
@@ -5377,6 +5899,8 @@ components:
       title: PolicyResetRequest
     PolicyResource:
       properties:
+        autonomy:
+          $ref: '#/components/schemas/AutonomyPolicy'
         organisations:
           additionalProperties:
             $ref: '#/components/schemas/Organisation'

@@ -12,13 +12,14 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
 from . import audit as audit_log
-from .auth import Credentials, Principal, bearer, require_operator, resolve_principal
+from .auth import Credentials, Principal, bearer, require_operator, require_reviewer, resolve_principal
 from .config import Settings
 from .db import DomainError
 from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, ErrorResponse, Health,
                      LookupResult, NeedSpec, Order, OrderRequest, OrderTimeline, Product, Quote, QuoteRequest)
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
+from .models import AgentTrackRecord, AutonomyChange, AutonomyChangeResult
 from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
@@ -97,7 +98,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
         while dependencies:
             dependency = dependencies.pop()
             if dependency is not None:
-                if dependency.call in (resolve_principal, require_operator):
+                if dependency.call in (resolve_principal, require_operator, require_reviewer):
                     guards.add(dependency.call)
                 dependencies.extend(dependency.dependencies)
         if guards:
@@ -107,6 +108,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     principal = await resolve_principal(request, await bearer(request))
                 if require_operator in guards:
                     require_operator(principal)
+                if require_reviewer in guards:
+                    require_reviewer(principal)
             except DomainError as auth_error:
                 return await domain_error(request, auth_error)
         return None
@@ -140,6 +143,19 @@ def create_app(gateway=None, *, settings=None, keys=None):
         service.limiter.consume(principal.id, "read")
         return {"principal": principal.public(), "customer_ids": principal.customer_ids, "environment": "live",
                 "rate_limits": service.limiter.snapshot(principal.id)}
+
+    @app.get("/v1/agents/{agent_id}/track-record", response_model=AgentTrackRecord,
+             description="Audit-derived record for orders placed in window_days (default 30). Operator, the agent and its buyer organisation may read it. Readiness is advisory; no automatic promotion.")
+    def track_record(agent_id: str, request: Request, window_days: int = Query(default=30, ge=1, le=3650),
+                     principal: Principal = Depends(resolve_principal)):
+        return svc(request).autonomy.track_record(agent_id, principal, window_days)
+
+    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult,
+              description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key replays the first result without changing authority again; changed payload returns 409 IDEMPOTENCY_CONFLICT. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
+    def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
+                        principal: Principal = Depends(resolve_principal),
+                        idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).autonomy.change(agent_id, body, principal, command_key=idempotency_key)
 
     def audit_cancel_validation(request, raw_body, message):
         """Audit a cancel request refused by validation, with a normalised actor (never raw input)."""
@@ -266,9 +282,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
             stated_name=body.cancelled_by if principal.operator else None, command_key=idempotency_key)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
-    def approvals(request: Request, principal: Principal = Depends(require_operator)):
+    def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
         service = svc(request)
-        return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)]
+        from .autonomy import buyer_scope
+        return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)
+                if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order,
               description="Approve only the reviewed evidence. Optionally send evidence_revision; a stale revision "
@@ -276,15 +294,18 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
-                          "with rule hits in data; the order remains pending and can be rejected.")
-    def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator),
+                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope.")
+    def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision, actor="human:operator", command_key=idempotency_key)
+        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
+            actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
-    @app.post("/v1/approvals/{order_id}/reject", response_model=Order)
-    def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator),
+    @app.post("/v1/approvals/{order_id}/reject", response_model=Order,
+              description="Reject a pending order. Optional Idempotency-Key replays the first result; cached responses recheck the reviewer's current organisation and customer scope.")
+    def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).orders.reject(order_id, body.approver, body.comment, actor="human:operator", command_key=idempotency_key)
+        return svc(request).orders.reject(order_id, body.approver, body.comment,
+            actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
     @app.get("/v1/audit", response_model=list[AuditEntry])
     def audit(request: Request, order_id: str | None = None, quote_id: str | None = None, principal: Principal = Depends(require_operator)):

@@ -136,13 +136,56 @@ def test_size_ac4_mismatch_visible_and_requires_approval(gateway, need, upstream
     assert {h.rule for h in order.policy.hits} == {"SIZE_MISMATCH"}
 
 
-def test_size_ac5_ratio_only_unchanged(gateway, need, upstream):
-    product_size(gateway, name="Milk unknown size", multiplier=5)
+@pytest.mark.parametrize("name,multiplier,ratio", [("Milk unknown size", 5, 5),
+    ("12x Milk 1 000 ml", 1, 12), ("12x Milk 0 ml", 1, 12), ("Milk 0 kg", 1, 12)])
+def test_size_ac5_ratio_only_unchanged(gateway, need, upstream, name, multiplier, ratio):
+    product_size(gateway, name=name, multiplier=multiplier)
+    upstream.price = ratio * 2.6
     offer = first_offer(gateway, need)
-    assert offer.size_per_sales_unit == 5.0
+    assert offer.size_per_sales_unit == ratio
     assert offer.size_source == "price_ratio"
     assert offer.size_confirmed_by_price is False
     assert {w.code for w in offer.warnings} == {"AVAILABILITY_UNCONFIRMED"}
+
+
+def test_review_zero_name_size_preserves_ratio(gateway, need, upstream):
+    from app.catalog import named_case_sizes
+    from app.lookup import reconcile_size
+    product_size(gateway, name="12x Milk 1 000 ml", multiplier=1)
+    product = gateway.catalog.get("1")
+    price = {"catalogPrice": {"value": 24}, "comparisonPrice": {"value": 2}, "comparisonUnit": "L"}
+    assert reconcile_size(product, price, "L") == (12, "price_ratio", False, [])
+    assert named_case_sizes([product.name_en, "Milk 0 L", "12 x 0.00000001 ml"], "L") == []
+    upstream.price = 12 * 2.6
+    offer = first_offer(gateway, need)
+    assert (offer.size_per_sales_unit, offer.units_needed) == (12, 84)
+
+
+def test_review_all_catalog_sizes_do_not_crash(actual_product_rows, need, record_testsuite_property):
+    from app.catalog import extract
+    from app.lookup import offer_for
+    from app.models import Quantity
+    failures, checked = [], 0
+    for row in actual_product_rows:
+        product = extract(row, {}, {})
+        for unit in ("L", "KG", "SALES_UNIT"):
+            for value in (1, 7.5, 1000):
+                request = need.model_copy(update={"quantity": Quantity(value=value, unit=unit)})
+                for with_ratio in (False, True):
+                    price = {"catalogPrice": {"value": 24, "currency": "EUR",
+                                             "validTo": "9999-12-31T00:00:00Z"}}
+                    if with_ratio:
+                        price.update(comparisonPrice={"value": 2}, comparisonUnit=unit)
+                    try:
+                        offer = offer_for(product, request, price, {})
+                        assert offer.size_per_sales_unit is None or offer.size_per_sales_unit > 0
+                        assert offer.units_needed is None or offer.units_needed > 0
+                    except Exception as error:
+                        failures.append((product.id, unit, value, with_ratio, repr(error)))
+                    checked += 1
+    record_testsuite_property("reconciliations_checked", checked)
+    assert checked == len(actual_product_rows) * 18
+    assert not failures, f"{len(failures)} failures: {failures[:12]}"
 
 
 def test_size_ac6_price_error_keeps_unconfirmed_name(gateway, need, upstream):
@@ -199,3 +242,14 @@ def test_size_ac10_pack_count_in_name(gateway):
     portion = base.model_copy(update={"name_en": "Portion milk 100x2 cl", "name_fi": "Annosmaito 100x2 cl",
                                       "units": {"KI": 1}, "base_volume_l": None, "base_net_weight_kg": None})
     assert round(reconcile_size(portion, {}, "L")[0], 6) == 2.0
+    for name, multiplier, unit, expected in [
+        ("8 x Pastry 4x70g", 8, "KG", 2.24),
+        ("4x6x Water 0,33 l", 4, "L", 7.92),
+        ("Pastry 10x9x50g", 10, "KG", 4.5),
+        ("4 x 6 x 0.33 L", 24, "L", 7.92),
+        ("4 x 6 x 0.33 L", 1, "L", 7.92),
+        ("12 x Pickles 460/230g", 12, "KG", 5.52),
+    ]:
+        product = base.model_copy(update={"name_en": name, "name_fi": name,
+            "units": {"KI": multiplier}, "base_volume_l": None, "base_net_weight_kg": None})
+        assert reconcile_size(product, {}, unit)[:2] == (expected, "name_parse")

@@ -41,6 +41,7 @@ def buyer(gateway):
 def issue(key, *, daily=5000, order=1500, categories=None, **updates):
     now = int(audit.utcnow().timestamp())
     subject = {"agent_id": AGENT, "customer_id": "1", "max_auto_total_eur": order,
+               "autonomy": "autonomous_within_limits",
                "max_auto_daily_total_eur": daily}
     if categories is not None:
         subject["categories"] = categories
@@ -205,7 +206,7 @@ def test_ac_3_customer_binding(gateway, need, upstream, buyer):
 @pytest.mark.parametrize("policy_daily,expected,confirmed", [(2000, 2000, 1), (10000, 5000, 3)])
 def test_ac_4_effective_limits_only_tighten(gateway, need, upstream, buyer, policy_daily, expected, confirmed):
     body = gateway.policy.get().model_dump(mode="json")
-    body["agents"][AGENT] = {"customer_ids": ["1"], "max_auto_total_eur": 3000, "max_auto_daily_total_eur": policy_daily}
+    body["agents"][AGENT] = {"customer_ids": ["1"], "autonomy": "autonomous_within_limits", "max_auto_total_eur": 3000, "max_auto_daily_total_eur": policy_daily}
     gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
     token = issue(buyer)
     for i in range(confirmed + 1):
@@ -426,7 +427,7 @@ def test_review_stats_registration_uses_current_authority(gateway, need, upstrea
     q = quote(gateway, need, token, qty=1)
     if policy_row:
         body = gateway.policy.get().model_dump(mode="json")
-        body["agents"][AGENT] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 5000}
+        body["agents"][AGENT] = {"customer_ids": ["1"], "autonomy": "autonomous_within_limits", "max_auto_daily_total_eur": 5000}
         gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
     if withdrawal == "revoked":
         revoke = sign_jwt(buyer, {"iss": ISSUER, "jti_revoked": [decode(token)[1]["jti"]], "iat": int(audit.utcnow().timestamp())}, kid="buyer-1", typ="JWT")

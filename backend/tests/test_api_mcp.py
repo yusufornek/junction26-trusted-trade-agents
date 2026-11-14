@@ -148,7 +148,8 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",
                                     "/v1/orders/{order_id}/timeline", "/.well-known/jwks.json", "/v1/audit/head",
-                                    "/v1/audit/verify", "/v1/orders/{id}/ubl", "/v1/audit/anchors", "/v1/mandates/revocations", "/v1/meta", "/v1/me"}
+                                    "/v1/audit/verify", "/v1/orders/{id}/ubl", "/v1/audit/anchors", "/v1/mandates/revocations", "/v1/meta", "/v1/me",
+                                    "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy"}
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"]["200"]["content"]

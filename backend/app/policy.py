@@ -34,6 +34,7 @@ class Policy:
             data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
             data.setdefault("agents", {key: value.model_dump() for key, value in defaults.agents.items()})
             data.setdefault("customers", {})
+            data.setdefault("autonomy", defaults.autonomy.model_dump())
             # ignored_warnings was introduced with the evidence defaults. Its absence identifies
             # a legacy document; explicitly saved current policies must keep their operator choices.
             if "ignored_warnings" not in data["approval"]:
@@ -92,16 +93,38 @@ class Policy:
                 temporary.unlink(missing_ok=True)
 
     def update(self, request, *, reset=False, actor=None):
+        return self._update(request, reset=reset, actor=actor)
+
+    def change_autonomy(self, prepare, principal):
+        result = []
+
+        def request_factory():
+            request, data, response = prepare()
+            result.append(response)
+            return request, data
+
+        self._update(request_factory, actor="human:operator" if principal.operator else f"human:{principal.id}",
+                     audit_action="AUTONOMY_CHANGED")
+        return result[0]
+
+    def _update(self, request, *, reset=False, actor=None, audit_action="POLICY_UPDATED", audit_data=None):
         # Shared SQLite writer lock serializes policy updates across REST/MCP processes.
         replaced, previous = False, None
         try:
             with self.db.connect(write=True) as conn:
+                if callable(request):
+                    request, audit_data = request()
+                    if request is None:
+                        # VC-only agents retain their signed authority; changing a level must
+                        # never mint a policy mandate that bypasses VC expiry or revocation.
+                        audit.append(conn, actor, audit_action, "Changed verifiable-mandate agent autonomy.", data=audit_data)
+                        return self.get()
                 previous = self.runtime_path.read_text() if self.runtime_path.exists() else None
                 before = self._editable(self.get())
                 after = self._editable(self._load(self.path) if reset else request.policy)
                 if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                     after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
-                for section in ("agents", "customers", "organisations", "identities", "rate_limits"):
+                for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy"):
                     if not reset and section not in request.policy.model_fields_set:
                         after[section] = before[section]
                 from .catalog import Catalog
@@ -110,10 +133,10 @@ class Policy:
                     for field in ("required_claims", "exclude_allergens"):
                         customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
                 resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
-                audit.append(conn, actor or f"human:{request.updated_by}", "POLICY_UPDATED",
+                audit.append(conn, actor or f"human:{request.updated_by}", audit_action,
                              "Restored default policy." if reset else "Updated procurement policy.",
                              data={"diff": self._diff(before, after), "comment": getattr(request, "comment", None),
-                                   "reset": reset, "stated_name": request.updated_by})
+                                   "reset": reset, "stated_name": request.updated_by, **(audit_data or {})})
                 self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
                 replaced = True
         except BaseException:
@@ -183,6 +206,9 @@ class Policy:
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
         ignored_codes = set(policy.approval.ignored_warnings)
         hits, rejected, approval = [], False, False
+        if mandate is not None and (mandate.autonomy or policy.autonomy.default) == "approval_required":
+            hits.append(RuleHit(rule="autonomy_level", detail="This agent's orders need sign-off until autonomy is granted."))
+            approval = True
         if mandate is not None and customer_id is not None and customer_id not in mandate.customer_ids:
             hits.append(RuleHit(rule="CUSTOMER_NOT_IN_MANDATE",
                                 detail=f"Agent {agent_id} has no mandate for customer {customer_id}"))

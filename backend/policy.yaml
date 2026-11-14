@@ -1,4 +1,10 @@
 # Fixed net EUR prices. Warnings require a human to acknowledge delivery risks.
+autonomy:
+  default: approval_required
+  promotion:
+    min_approved_unchanged: 5
+    max_rejection_share: 0.1
+    days_since_last_rejection_or_refusal: 7
 approval:
   max_auto_total_eur: 1500
   min_fit_probability: 0.80
@@ -31,10 +37,12 @@ shortlist: {catalog_pool: 40, live_max: 25}
 ranking_weights: {price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1}
 agents:
   hotel-chain-agent:
+    autonomy: autonomous_within_limits
     customer_ids: ["1"]
     max_auto_daily_total_eur: 5000
-    note: "Demo hotel-chain procurement mandate."
+    note: "autonomy granted after the pilot's approved orders (demo setting)"
   web-console:
+    autonomy: autonomous_within_limits
     customer_ids: ["1"]
     max_auto_daily_total_eur: 5000
-    note: "Operator console buyer-flow mandate."
+    note: "autonomy granted after the pilot's approved orders (demo setting)"

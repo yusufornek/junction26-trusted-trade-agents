@@ -48,5 +48,6 @@ change or extend.
 | 38 | [Connect your agent](38-connect-kit.md) | Connect your agent | in progress |
 | 39 | [Organiser answers](39-organiser-answers.md) | Whole units, unknown availability, not available, cut-off text, honour 429 | in progress |
 | 40 | [Graduated autonomy](40-graduated-autonomy.md) | Approval first, autonomy earned from a measured track record | in progress |
+| 41 | [Purchase memory](41-purchase-memory.md) | Remember purchase rhythms, suggest replenishment, turn patterns into recurring workflows over MCP | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

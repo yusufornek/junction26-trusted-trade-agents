@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_serializer, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -10,11 +10,15 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+AutonomyLevel = Literal["approval_required", "autonomous_within_limits"]
+
+
 class MandateRecord(Model):
     id: str
     issuer: str
     limits: dict[str, float]
     valid_until: datetime
+    autonomy: AutonomyLevel | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class Quantity(Model):
@@ -144,13 +148,21 @@ class Provenance(Model):
 
 
 class Availability(Model):
-    available_amount: float | None = Field(description="On-time sales units after local reservations; null when an upstream amount >= 999999 means unknown but orderable.")
-    availability_known: bool = Field(default=True, description="False for upstream amounts >= 999999, independently of logistic model; no local reservation is counted.")
+    available_amount: float | None = Field(description="On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.")
+    availability_known: bool = Field(default=True, description="False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.")
     logistic_model: str | None = None
     closing_time: datetime | None = None
     available_date: date | None = Field(default=None, description="Earliest unblocked upstream delivery date.")
     enough: bool
     coverage: float = Field(ge=0, le=1, description="Fraction of requested sales units covered by on-time stock.")
+
+    @model_serializer(mode="wrap")
+    def preserve_signed_field_presence(self, handler):
+        data = handler(self)
+        # Historical evidence must retain its signed shape through reads and saves.
+        if "availability_known" not in self.model_fields_set:
+            data.pop("availability_known", None)
+        return data
 
 
 class OfferCard(Model):
@@ -159,7 +171,7 @@ class OfferCard(Model):
     name: str
     sales_unit: str
     allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
-    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.")
+    size_per_sales_unit: float | None = Field(default=None, description="Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and this is the smaller content for a conservative display estimate requiring approval. Null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
@@ -186,6 +198,13 @@ class OfferCard(Model):
     score: float = 0
     score_breakdown: dict[str, float] = Field(default_factory=dict, description="Weighted price, coverage, reliability, co2 and fit contributions; sums to score.")
     rank_label: Literal["best", "better", "good"] | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_signed_field_presence(self, handler):
+        data = handler(self)
+        if "allowed_lot_size" not in self.model_fields_set:
+            data.pop("allowed_lot_size", None)
+        return data
 
 
 class Overbuy(Model):
@@ -335,6 +354,7 @@ class Order(Model):
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
+    approval_side: Literal["buyer", "valio_operator"] | None = Field(default=None, description="Organisation side that signed the human decision; null before review or on legacy orders.")
     comment: str | None = None
     cancelled_by: str | None = Field(default=None, description="Human name or placing agent ID responsible for cancellation.")
     cancel_reason: str | None = Field(default=None, description="Reason supplied when the order was cancelled.")
@@ -548,6 +568,7 @@ class IdentityPolicy(Model):
 
 
 class AgentMandate(Model):
+    autonomy: AutonomyLevel | None = Field(default=None, description="Omission uses policy.autonomy.default; new agents require sign-off by default.")
     rate_limits: RateLimits | None = None
     customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
     max_auto_total_eur: float | None = Field(default=None, ge=0, description="Optional per-order ceiling; the lower of this and the global ceiling applies.")
@@ -587,11 +608,67 @@ class EffectiveConstraints(Model):
     exclude_allergens: list[ConstraintSource] = Field(default_factory=list)
 
 
+class AutonomyPromotion(Model):
+    min_approved_unchanged: int = Field(default=5, ge=0, strict=True)
+    max_rejection_share: float = Field(default=0.1, ge=0, le=1)
+    days_since_last_rejection_or_refusal: int = Field(default=7, ge=0, strict=True)
+
+
+class AutonomyPolicy(Model):
+    default: AutonomyLevel = "approval_required"
+    promotion: AutonomyPromotion = Field(default_factory=AutonomyPromotion)
+
+
+class AutonomyRecommendation(Model):
+    eligible: bool
+    reasons: list[str]
+
+
+class AgentTrackRecord(Model):
+    agent_id: str
+    window_days: int
+    window_start: datetime
+    window_end: datetime
+    orders_placed: int
+    approved_unchanged: int
+    rejected: int
+    expired: int
+    evidence_changes: int
+    cancellations: int
+    hard_constraint_refusals: int
+    average_approval_time_seconds: float | None
+    approved_unchanged_share: float
+    rejection_share: float
+    last_rejection_at: datetime | None
+    last_hard_constraint_refusal_at: datetime | None
+    autonomy_recommendation: AutonomyRecommendation
+
+
+class AutonomyChange(Model):
+    level: AutonomyLevel
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value):
+        if not value.strip():
+            raise ValueError("reason must not be blank")
+        return value.strip()
+
+
+class AutonomyChangeResult(Model):
+    agent_id: str
+    level: AutonomyLevel
+    reason: str
+    track_record: AgentTrackRecord
+
+
 PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE_UNCONFIRMED",
                       "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN"}
 
 
 class PolicyDocument(Model):
+    autonomy: AutonomyPolicy = Field(default_factory=AutonomyPolicy)
     organisations: dict[str, Organisation] = Field(default_factory=dict)
     identities: dict[str, IdentityPolicy] = Field(default_factory=dict)
     rate_limits: RateLimits = Field(default_factory=RateLimits)

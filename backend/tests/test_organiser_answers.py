@@ -3,11 +3,13 @@ import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
-from app import audit
+from app import audit, valio
 from app.api import create_app
 from app.lookup import availability_for
 from app.mcp_server import create_server
@@ -83,7 +85,13 @@ def test_ac_2_unknown_stock_orderable_without_reservations(gateway, need, upstre
     assert available.coverage == 1 and available.available_amount is None
     # The sentinel must not override delivery dates, sales blocks or mismatched units.
     raw["scheduleLines"][0]["availableDate"] = (need.deliver_by + timedelta(days=1)).isoformat()
-    assert availability_for(raw, need.deliver_by, 100, sales_unit="ST")[0].coverage == 0
+    late, _ = availability_for(raw, need.deliver_by, 100, sales_unit="ST")
+    assert late.coverage == 0 and late.available_amount == 0 and late.availability_known
+    raw["scheduleLines"].append({"availableAmount": 100, "availableDate": need.deliver_by.isoformat(),
+                                 "salesUnit": "ST"})
+    mixed, _ = availability_for(raw, need.deliver_by, 100, reserved_amount=100, sales_unit="ST")
+    assert mixed.coverage == 0 and mixed.available_amount == 0 and mixed.availability_known
+    raw["scheduleLines"].pop()
     raw["salesBlock"] = True
     assert not availability_for(raw, need.deliver_by, 100, sales_unit="ST")[0].enough
     raw.pop("salesBlock")
@@ -108,7 +116,78 @@ def test_ac_3_empty_availability_rejects_without_rank(gateway, need, upstream):
     assert missing.available_amount == 0
 
 
-def test_ac_4_cutoff_warning_names_delivery_and_time(gateway, need, upstream):
+def assert_cached_cutoff_passes(gateway, need, upstream, monkeypatch, respx_mock, server_offset=0):
+    now = audit.utcnow()
+    clock = [now]
+    monkeypatch.setattr(audit, "utcnow", lambda: clock[0])
+    monkeypatch.setattr(valio, "time", SimpleNamespace(monotonic=lambda: clock[0].timestamp()))
+    upstream.cutoff = now + timedelta(seconds=server_offset + 10)
+
+    def server_clock(request):
+        body = upstream.availability_response(request).json()
+        body["timeNow"] = (clock[0] + timedelta(seconds=server_offset)).isoformat()
+        return httpx.Response(200, json=body)
+
+    respx_mock.post("https://valio.test/api/availability").mock(side_effect=server_clock)
+    gateway.valio.cache.clear()
+    before = gateway.find_offers(need)
+    first = next(o for o in before.offers if o.product_id == "1")
+    assert "CUTOFF_PASSED" not in codes(first)
+    calls = (len(upstream.price_calls), len(upstream.availability_calls))
+    clock[0] += timedelta(seconds=20)
+    after = gateway.find_offers(need)
+    offer = next(o for o in after.offers if o.product_id == "1")
+    assert after.live_calls.price == after.live_calls.availability == 0
+    assert calls == (len(upstream.price_calls), len(upstream.availability_calls))
+    assert offer.provenance["availability"] == first.provenance["availability"]
+    assert next(w.text for w in offer.warnings if w.code == "CUTOFF_PASSED") == (
+        f"Order cut-off for delivery on {need.deliver_by} passed at {upstream.cutoff.isoformat()}")
+    # An unusable supplier timestamp falls back to current local time, without adding cache age twice.
+    for fetched in (None, "bad-time"):
+        raw = {"_fetched_at": fetched, "_cache_age": 20,
+               "closingTime": (clock[0] + timedelta(seconds=10)).isoformat()}
+        assert "CUTOFF_PASSED" not in {w.code for w in availability_for(raw, need.deliver_by, 1)[1]}
+
+
+@pytest.mark.parametrize("server_offset", [-300, 0, 300])
+def test_review_cached_cutoff_reevaluated(gateway, need, upstream, monkeypatch, respx_mock, server_offset):
+    assert_cached_cutoff_passes(gateway, need, upstream, monkeypatch, respx_mock, server_offset)
+
+
+@pytest.mark.parametrize("late_amount", [20, 999999, 666666666, 9999999999])
+def test_review_future_unknown_keeps_finite_reservations(gateway, need, upstream, respx_mock, late_amount):
+    upstream.model, upstream.amount = "Stock", 10
+
+    def mixed_schedule(request):
+        body = upstream.availability_response(request).json()
+        for product in body["products"]:
+            product["scheduleLines"].append({
+                "availableAmount": late_amount,
+                "availableDate": (need.deliver_by + timedelta(days=1)).isoformat(),
+                "salesUnit": "KI", "salesBlock": False})
+        return httpx.Response(200, json=body)
+
+    respx_mock.post("https://valio.test/api/availability").mock(side_effect=mixed_schedule)
+    lookup = gateway.find_offers(need)
+    orders = []
+    for index in range(2):
+        quote = gateway.orders.create_quote(quote_request(need, qty=10, need_ref=lookup.lookup_id))
+        orders.append(gateway.orders.place_order(quote.id, f"mixed-stock-{index}"))
+    first, second = orders
+    assert first.lines[0].availability.coverage == 1
+    assert first.lines[0].availability.availability_known
+    assert first.lines[0].availability.available_amount == 10
+    assert second.lines[0].availability.coverage == 0
+    assert second.lines[0].availability.availability_known
+    assert second.lines[0].availability.available_amount == 0
+    assert "PARTIAL_STOCK" in codes(second.lines[0])
+    assert all(order.status == "PENDING_APPROVAL" for order in orders)
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT quantity FROM reservations WHERE product_id='1' AND order_id=?",
+                            (first.id,)).fetchone()[0] == 10
+
+
+def test_ac_4_cutoff_warning_names_delivery_and_time(gateway, need, upstream, monkeypatch, respx_mock):
     upstream.cutoff = audit.utcnow() - timedelta(hours=1)
     result = gateway.find_offers(need)
     offer = next(o for o in result.offers if o.product_id == "1")
@@ -117,6 +196,7 @@ def test_ac_4_cutoff_warning_names_delivery_and_time(gateway, need, upstream):
     quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=result.lookup_id))
     order = gateway.orders.place_order(quote.id, "past-cutoff")
     assert order.status == "PENDING_APPROVAL" and any(h.rule == "CUTOFF_PASSED" for h in order.policy.hits)
+    assert_cached_cutoff_passes(gateway, need, upstream, monkeypatch, respx_mock)
 
 
 def test_ac_5_429_block_cache_recovery_health_and_audit(gateway, need, upstream, upstream_pacer, respx_mock):
