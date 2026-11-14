@@ -1,4 +1,4 @@
-# Frontend to-do from the backend (14.11 evening)
+# Frontend and deploy to-do from the backend (14.11 evening)
 
 What the console can add or change now that the backend serves it. Data and behaviour only; screens, layout and
 wording are the frontend owner's call. Each item names the endpoints and the codes to handle. Field-level contracts:
@@ -99,3 +99,47 @@ that push is the truth).
 `FOUR_EYES` (403), `LAST_TENANT_ADMIN`, `EVIDENCE_CHANGED`, `CONSTRAINTS_REQUIRED` (409), `OUTSIDE_GUARDRAIL` (422),
 `AGENT_PAUSED` (423), `UPSTREAM_BUSY` / `UPSTREAM_RATE_LIMITED` (503, retry). Every error is RFC 9457 problem+json
 with `next_action`.
+
+## 8. Deploy and server (DevOps)
+
+Server file: `~/app/deploy/.env` (never in git, never in chat). After changing it: `cd ~/app && docker compose
+--env-file deploy/.env -f deploy/docker-compose.yml up -d backend`.
+
+### Variables
+
+| Variable | Needed | What to set |
+|---|---|---|
+| `VALIO_API_KEY`, `OPERATOR_TOKEN`, `AGENT_KEYS` | yes, already set | keep |
+| `OPENAI_API_KEY` | yes | the fit score; without it every order is held with `NO_FIT_SCORE` (live orders now show a score, so it looks set — confirm) |
+| `GATEWAY_PUBLIC_URL` | automatic | the deploy workflow passes `SITE_URL`; nothing to add. MCP and OAuth only accept this host, so keep `SITE_URL` the canonical address |
+| `DEMO_PLATFORM_ADMIN_PASSWORD`, `DEMO_HOTEL_ADMIN_PASSWORD`, `DEMO_HOTEL_APPROVER_PASSWORD`, `DEMO_HOTEL_VIEWER_PASSWORD`, `DEMO_HOSPITAL_ADMIN_PASSWORD`, `DEMO_HOSPITAL_APPROVER_PASSWORD` | yes, with spec 43 (next push) | strong random values; `reset_demo.py` creates the demo users with them. Generate locally with `backend/scripts/gen_keys.py --write` on a copy of the env file, or `openssl rand -base64 24` each |
+| `FRONTEND_CONSENT_URL` | optional | the console route of your own OAuth consent screen (https); empty = backend page |
+| `ANCHOR_RPC_URL`, `ANCHOR_CHAIN_ID=137`, `ANCHOR_PRIVATE_KEY`, `ANCHOR_EXPLORER_TX_URL=https://polygonscan.com/tx/`, `ANCHOR_EVERY_N_ENTRIES` | optional (TASKS #44) | wallet key from Gökalp, privately |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_CONSOLE` | optional | an OTLP collector URL if you want traces; empty = off |
+| `FORECAST_ENABLED`, `FORECAST_MODEL_PATH` | optional, keep off | Timestral forecast band; needs torch (`backend/requirements-forecast.txt`, several hundred MB) and the `mistralai/Timestral-28M` weights on disk. The statistical anomaly band works without it |
+| `SANDBOX_DB_PATH`, `SANDBOX_ADMIN_TOKEN`, `SANDBOX_AGENT_KEYS` | optional | only for a separate sandbox gateway instance (`GATEWAY_ENVIRONMENT=sandbox`); the in-process sandbox scenarios work without it |
+| `NORDFOOD_API_BASE` | no | the synthetic second supplier runs in-process by default |
+
+`AGENT_SECRET`, `SUPPLIER_AGENT_KEY` and `VTG_CONNECTION_KEY` in `.env.example` belong to the reference clients and
+examples, not to the server.
+
+### After the next push
+
+1. Let the deploy run (it builds, restarts, checks `/health` and the developer pages).
+2. The database schema migrates on start (tenants, users, connections, governance tables). Take a copy of
+   `/data/app.db` from the volume before the deploy if you want a rollback point.
+3. Seed the demo once: `docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec backend python
+   backend/scripts/reset_demo.py` (demo tenants Hotel Aurora chain and Kaari Hospital Kitchen, users, synthetic
+   history). It resets demo state, so run it before a rehearsal, not during one.
+4. Smoke: `curl -s https://luotsi.online/health`, `curl -si https://luotsi.online/v1/connections` (401),
+   `curl -s https://luotsi.online/.well-known/oauth-authorization-server` (200), sign in to the console with a demo
+   user.
+
+### Routing to check
+
+- Caddy forwards `/v1 /health /.well-known/* /oauth/* /mcp* /a2a* /developers* /llms.txt /docs /openapi.json` to the
+  backend (`/oauth/*` was added today). `/mcp/tenant`, `/mcp/operator` and `/a2a/tenant` are covered by the
+  existing patterns.
+- Webhook approval links point to `/approvals/{order_id}?revision=…`. That path is a console route today; either the
+  console opens the approval for that id, or Caddy sends `/approvals/*` with a `revision` query to the backend page.
+  Pick one.
