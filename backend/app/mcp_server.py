@@ -61,8 +61,15 @@ WARNINGS = (
 
 
 class GatewayMCPServer(MCPServer):
+    include_purchase_intents = False
+
     async def list_tools(self):
         tools = await super().list_tools()
+        # Keep the published tool inventory stable until clients opt into the
+        # purchase-intent extension. Registered commands still support recovery.
+        if not self.include_purchase_intents:
+            intent_tools = {"create_intent", "get_intent", "amend_intent", "resume_intent"}
+            tools = [tool for tool in tools if tool.name not in intent_tools]
         # SDK defaults to validation schemas; Order's computed recovery guidance is
         # emitted on the wire and must also appear in the advertised output schema.
         for tool in tools:
@@ -119,8 +126,8 @@ class GatewayMCPServer(MCPServer):
         try:
             from .auth import check_scope
             if name != "get_agent_context":
-                resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name or name == "apply_anomaly_fix" else "orders" if "order" in name else "read"
-                permission = "write" if name == "apply_anomaly_fix" or name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_")) else "read"
+                resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name or name == "apply_anomaly_fix" else "orders" if "order" in name or "intent" in name else "read"
+                permission = "write" if name == "apply_anomaly_fix" or name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_", "amend_", "resume_")) else "read"
                 check_scope(PRINCIPAL.get(), resource, permission, name)
             result = await super().call_tool(name, arguments, context)
             result.meta = {**(result.meta or {}), "environment": self.gateway.settings.environment}
@@ -148,7 +155,8 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, include_purchase_intents=False):
+    """Build the MCP server; opt in to advertising the purchase-intent extension."""
     # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
     server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
@@ -175,10 +183,14 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     server.gateway = gateway
     server.agent_id = agent_id
     server.mandate = mandate
+    server.include_purchase_intents = include_purchase_intents
 
     def current_agent():
         principal = PRINCIPAL.get()
         return principal.id if principal is not None else agent_id
+
+    from .purchase_intent_surfaces import register_tools as register_intent_tools
+    register_intent_tools(server, gateway, current_agent, PRESENTED_MANDATE)
 
     @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
     def get_agent_context() -> AgentContext:
@@ -257,10 +269,12 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None,
                      basket_ref: BasketRef | None = None,
+                     intent_id: str | None = None, intent_version: int | None = None,
                      idempotency_key: str | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref,
+                                                           intent_id=intent_id, intent_version=intent_version), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 

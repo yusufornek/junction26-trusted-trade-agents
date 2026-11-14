@@ -233,6 +233,8 @@ class Accounts:
             resource = next((name for name in ("mandates", "approvals", "connections", "orders", "quotes", "lookups", "basket-lookups", "agents", "users", "policy", "tenants", "audit", "suggestions", "spend") if name in segments), segments[-1])
             if resource in {"lookups", "basket-lookups", "offers"}:
                 resource = "lookup"
+            if path.startswith("/v1/intents"):
+                resource = "orders"
             from .auth import check_scope
             check_scope(p, resource, permission, path.rstrip("/").split("/")[-1])
 

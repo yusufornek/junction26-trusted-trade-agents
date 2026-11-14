@@ -79,6 +79,7 @@ def verify_quote(quote, jwks):
 def receipt_payload(order):
     o = order.model_dump(mode="json") if hasattr(order, "model_dump") else order
     labels = {k: o[k] for k in ("supplier_id", "synthetic", "environment", "execution") if k in o and o[k] not in ("valio", "live", False)}
+    labels.update({k: o[k] for k in ("intent_id", "intent_version") if o.get(k) is not None})
     return {**labels, "order_id": o["id"], **{k: o[k] for k in (
         "quote_id", "quote_signature_digest", "customer_id", "agent_id", "status", "currency",
         "decided_at", "decided_by_kind", "commitment")}, "total": decimal_string(o["total"])}

@@ -38,7 +38,8 @@ from .signing import unb64
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
                     "suggestion.shown", "suggestion.prepared", "suggestion.made_recurring",
-                    "suggestion.dismissed", "suggestion.snoozed"]
+                    "suggestion.dismissed", "suggestion.snoozed",
+                    "INTENT_AMENDED", "INTENT_HANDOVER", "INTENT_PARTIALLY_CONFIRMED"]
 EVENT_TYPES = set(EventType.__args__)
 
 

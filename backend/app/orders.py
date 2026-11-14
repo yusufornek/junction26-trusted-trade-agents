@@ -340,6 +340,7 @@ class Orders:
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": TASK.get()}
             quote.anomalies = self.anomalies.checks(conn, quote)
+            quote.intent_id, quote.intent_version = request.intent_id, request.intent_version
             quote.warnings.extend(self.anomalies.warnings(quote.anomalies))
             quote.signature = self.signing.sign_quote(quote)
             self.mandates.bind(conn, "quote", quote.id, mandate)
@@ -455,6 +456,7 @@ class Orders:
                           total=quote.total, currency=quote.currency, lines=lines, warnings=warnings, anomalies=checks,
                           policy=result, live_calls=counter.live())
             order.context = dict(quote.context) if quote.context else None
+            order.intent_id, order.intent_version = quote.intent_id, quote.intent_version
             if order.context and quote.need_ref:
                 _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=quote.supplier_id)
@@ -544,8 +546,9 @@ class Orders:
                 raise DomainError("UNAUTHENTICATED", "A current purchasing credential is required for supplier dispatch", 401)
         policy, record, _ = self.mandates.authorize(conn, None, order.agent_id, order.customer_id,
             products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
-        evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
-            agent_id=order.agent_id, customer_id=order.customer_id, warnings=order.warnings, policy=policy)
+        evaluation = (self.gateway.intents.evaluate(conn, quote, order.agent_id, policy, order) if order.intent_id else
+            self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
+                agent_id=order.agent_id, customer_id=order.customer_id, warnings=order.warnings, policy=policy))
         reviewed = {(hit.rule, hit.detail) for hit in order.policy.hits}
         new_hits = {(hit.rule, hit.detail) for hit in evaluation.hits} - reviewed
         if evaluation.outcome == "REJECTED" or (not order.approver and evaluation.outcome != "CONFIRMED") or new_hits:

@@ -121,6 +121,8 @@ class Gateway:
             install(self, self.webhooks, name, "mutation")
         from .a2a import ProcurementA2A
         self.a2a = ProcurementA2A(self)
+        from .purchase_intent_integrity import install as install_intents
+        install_intents(self)
 
         def after_commit():
             self.anchoring.trigger()
@@ -135,7 +137,7 @@ class Gateway:
         # Upgrade uncertain execution records from pre-outbox versions without supplier I/O.
         import json
         with self.db.connect(write=True) as conn:
-            for row in conn.execute("SELECT id,data FROM orders WHERE status='PENDING_EXECUTION'").fetchall():
+            for row in conn.execute("SELECT id,data FROM orders WHERE status='PENDING_EXECUTION' AND json_extract(data,'$.intent_id') IS NULL").fetchall():
                 conn.execute("INSERT OR IGNORE INTO supplier_execution_outbox(order_id,payload) VALUES(?,?)",
                              (row["id"], json.dumps({"order": json.loads(row["data"]), "credential": None})))
 
