@@ -9,6 +9,8 @@ from app.models import PolicyUpdateRequest
 from conftest import OPERATOR_HEADERS, agent_headers, quote_request
 from test_verifiable_mandate import buyer as vc_issuer, issue
 from app.mandates import decode
+from app import audit
+from datetime import timedelta
 
 
 @pytest.fixture
@@ -48,6 +50,131 @@ def test_ac_1_viewer_sees_only_organisation_agents_and_orders(gateway, need, ups
             assert response.status_code == 200 and response.json()["customer_ids"] == ["1"]
         assert client.get("/v1/buyer/agents", headers=agent_headers("external")).status_code == 403
         assert client.get("/v1/buyer/orders", headers=OPERATOR_HEADERS).status_code == 200
+
+
+def test_review_activity_shared_customer_isolation(gateway, need, upstream, buyer_setup):
+    body = gateway.policy._editable(gateway.policy.get())
+    body["organisations"]["B"]["customer_ids"] = ["1"]
+    body["agents"]["agent-b"]["customer_ids"] = ["1"]
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+    own = place(gateway, need)
+    foreign = place(gateway, need, agent="agent-b")
+    with TestClient(create_app(gateway), headers=agent_headers("observer")) as client:
+        events = client.get("/v1/buyer/activity").json()["activity"]
+        assert own.id in str(events)
+        assert foreign.id not in str(events)
+        assert foreign.quote_id not in str(events)
+        assert all(e["actor"] != "agent:agent-b" for e in events)
+
+
+def test_review_unassigned_agent_not_shared_by_customer(gateway, need, upstream, buyer_setup):
+    body = gateway.policy._editable(gateway.policy.get())
+    body["agents"]["agent-b"]["customer_ids"] = ["1"]
+    body["identities"].pop("agent-b")
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+    foreign = place(gateway, need, agent="agent-b")
+    with TestClient(create_app(gateway), headers=agent_headers("observer")) as client:
+        for path in ("orders", "activity", "agents"):
+            response = client.get("/v1/buyer/" + path)
+            assert foreign.id not in response.text and "agent-b" not in response.text
+
+
+@pytest.mark.parametrize("invalid", ["revoked", "expired", "issuer"])
+def test_review_spend_ignores_invalid_mandates(gateway, need, upstream, buyer_setup, vc_issuer, monkeypatch, invalid):
+    from app.mandates import sign_jwt
+    claims = decode(issue(vc_issuer, sub="external", daily=100))[1]
+    claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    token = sign_jwt(vc_issuer, claims, kid="buyer-1")
+    place(gateway, need, mandate=token)
+    if invalid == "revoked":
+        with TestClient(create_app(gateway), headers=agent_headers("hotel-agent")) as client:
+            assert client.post(f"/v1/buyer/mandates/{decode(token)[1]['jti']}/revoke").status_code == 200
+    elif invalid == "expired":
+        now = audit.utcnow()
+        monkeypatch.setattr(audit, "utcnow", lambda: now + timedelta(days=8))
+    else:
+        body = gateway.policy._editable(gateway.policy.get())
+        body["customers"]["1"]["mandate_issuers"] = {}
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+    with TestClient(create_app(gateway), headers=agent_headers("observer")) as client:
+        row = next(r for r in client.get("/v1/buyer/spend").json()["spend"] if r["agent_id"] == "external")
+        assert (row["limit"], row["limit_source"]) == (5000, "policy")
+
+
+def test_review_spend_expires_pending_commitments(gateway, need, upstream, buyer_setup, monkeypatch):
+    order = place(gateway, need, qty=200)
+    assert order.status == "PENDING_APPROVAL"
+    monkeypatch.setattr(audit, "utcnow", lambda: order.expires_at + timedelta(seconds=1))
+    with TestClient(create_app(gateway), headers=agent_headers("observer")) as client:
+        row = next(r for r in client.get("/v1/buyer/spend").json()["spend"] if r["agent_id"] == "external")
+        assert row["pending_commitments"] == 0
+
+
+@pytest.mark.parametrize("surface", ["lookup", "quote", "order", "timeline", "evidence", "buyer_orders", "activity", "task", "webhook", "owner_timeline", "owner_evidence"])
+def test_review_shared_customer_read_paths(gateway, need, upstream, buyer_setup, monkeypatch, respx_mock, surface):
+    """Agent B and B's buyer must not see A's objects or linked foreign refusals."""
+    import asyncio
+    import json
+    import socket
+    import httpx
+    from app.auth import Principal
+    from app.webhooks import SubscriptionCreate
+    from app.a2a import metadata
+    from test_a2a_service import sdk, purchase, artifact_data
+    from zipfile import ZipFile
+    import io
+
+    body = gateway.policy._editable(gateway.policy.get())
+    body["organisations"]["B"]["customer_ids"] = ["1"]
+    body["agents"]["agent-b"]["customer_ids"] = ["1"]
+    body["identities"]["buyer-b"] = {"kind": "buyer_user", "role": "buyer_viewer", "organisation_id": "B"}
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+    received = []
+    monkeypatch.setattr(gateway.webhooks, "resolver", lambda *a, **kw: [(socket.AF_INET, 1, 6, "", ("93.184.216.34", 443))])
+    def receive(request):
+        data = json.loads(request.content)
+        if data.get("type") == "webhook.challenge":
+            return httpx.Response(200, json={"challenge": data["challenge"]})
+        received.append(data)
+        return httpx.Response(200)
+    respx_mock.post("https://93.184.216.34/scope").mock(side_effect=receive)
+    sub = gateway.webhooks.create(SubscriptionCreate(url="https://receiver.test/scope", customer_ids=["1"], event_types=["order.confirmed"]),
+                                 Principal("agent-b", customer_ids=("1",), organisation_id="B"))
+    small = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10})})
+    async def buy():
+        async with sdk(gateway) as (client, _, _):
+            return await purchase(client, small)
+    task = asyncio.run(buy())
+    order = artifact_data(task, "order")
+    with TestClient(create_app(gateway), headers=agent_headers("agent-b")) as client:
+        denied = client.post(f"/v1/orders/{order['id']}/cancel", json={"cancelled_by": "B", "reason": "B PRIVATE REASON"})
+        assert denied.status_code == 404
+        paths = {"lookup": f"/v1/lookups/{metadata(task)['request_id']}", "quote": f"/v1/quotes/{order['quote_id']}",
+                 "order": f"/v1/orders/{order['id']}", "timeline": f"/v1/orders/{order['id']}/timeline", "evidence": f"/v1/orders/{order['id']}/evidence"}
+        if surface in paths:
+            response = client.get(paths[surface])
+            assert response.status_code == 404
+            assert response.json()["data"] == {}
+        elif surface in {"buyer_orders", "activity"}:
+            principal = Principal("buyer-b", kind="buyer_user", role="buyer_viewer", organisation_id="B", customer_ids=("1",))
+            result = gateway.buyer.orders(principal) if surface == "buyer_orders" else gateway.buyer.activity(principal)
+            assert order["id"] not in str(result) and order["quote_id"] not in str(result)
+        elif surface == "task":
+            response = client.post("/a2a", headers={"A2A-Version": "1.0"}, json={"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {"id": task.id}})
+            assert response.json()["error"]["code"] == -32001
+            assert order["id"] not in response.text
+        elif surface == "webhook":
+            gateway.webhooks.dispatch()
+            assert not received
+        elif surface == "owner_timeline":
+            response = client.get(f"/v1/orders/{order['id']}/timeline", headers=agent_headers("external"))
+            assert response.status_code == 200
+            assert "B PRIVATE REASON" not in response.text and "agent:agent-b" not in response.text
+        else:
+            response = client.get(f"/v1/orders/{order['id']}/evidence", headers=agent_headers("external"))
+            assert response.status_code == 200
+            with ZipFile(io.BytesIO(response.content)) as bundle:
+                assert all(b"B PRIVATE REASON" not in bundle.read(name) and b"agent:agent-b" not in bundle.read(name) for name in bundle.namelist())
 
 
 def test_ac_2_spend_equals_policy_ledger(gateway, need, upstream, buyer_setup):

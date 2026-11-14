@@ -151,17 +151,45 @@ def test_ac_5_optional_rpc_matches_checkpoint_transaction(gateway, purchase, tmp
 def test_ac_6_other_customer_data_is_hash_only(gateway, need, upstream, buyer_setup, tmp_path):
     other = place(gateway, need.model_copy(update={"customer_id": "2"}), agent="agent-b")
     own = place(gateway, need)
+    with TestClient(create_app(gateway), headers=agent_headers("agent-b")) as client:
+        denied = client.post(f"/v1/orders/{own.id}/cancel", json={"cancelled_by": "Foreign buyer", "reason": "PRIVATE FOREIGN REASON"},
+                             headers={"X-Correlation-Id": "private-foreign-correlation"})
+        assert denied.status_code == 404
     path, _, files = save(gateway, own, tmp_path)
     with gateway.db.connect() as conn:
-        private = {r[0] for r in conn.execute("SELECT id FROM audit WHERE order_id=? OR quote_id=?", (other.id, other.quote_id))}
+        private = {r[0] for r in conn.execute("SELECT id FROM audit WHERE order_id=? OR quote_id=? OR actor='agent:agent-b'", (other.id, other.quote_id))}
     assert private
     links = json.loads(files["audit.json"])
     for link in links:
         if link["seq"] in private:
             assert set(link) == {"seq", "prev_hash", "hash"}
     for body in files.values():
-        for secret in (other.id, other.quote_id, "agent-b"):
+        for secret in (other.id, other.quote_id, "agent-b", "PRIVATE FOREIGN REASON", "private-foreign-correlation"):
             assert secret.encode() not in body
+    assert verify_bundle(path, gateway.signing.jwks())[1] == 0
+
+
+def test_review_foreign_denial_is_hash_only(gateway, need, upstream, buyer_setup, tmp_path):
+    test_ac_6_other_customer_data_is_hash_only(gateway, need, upstream, buyer_setup, tmp_path)
+
+
+def test_review_historical_foreign_snapshot_is_not_disclosed(gateway, purchase, buyer_setup, monkeypatch, tmp_path):
+    from app import evidence
+    with TestClient(create_app(gateway), headers=agent_headers("agent-b")) as client:
+        assert client.post(f"/v1/orders/{purchase.id}/cancel", json={"cancelled_by": "Foreign", "reason": "PRIVATE LEGACY REASON"}).status_code == 404
+    # Recreate a ZIP persisted by the earlier disclosure predicate, without changing the audit chain.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(evidence, "audit_visible", lambda row, agent: True)
+        manifest, files = build_bundle(gateway, purchase.id, Principal("external"))
+        assert b"PRIVATE LEGACY REASON" in files["audit.json"]
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        for query in ("", "&format=json", "&artifact=audit.json", "&artifact=quote.json"):
+            response = client.get(manifest["bundle_url"] + query)
+            assert response.status_code == 404
+            assert "PRIVATE LEGACY REASON" not in response.text
+        assert client.get(f"/v1/orders/{purchase.id}").status_code == 200
+    path, _, files = save(gateway, purchase, tmp_path)
+    assert b"PRIVATE LEGACY REASON" not in files["audit.json"]
     assert verify_bundle(path, gateway.signing.jwks())[1] == 0
 
 

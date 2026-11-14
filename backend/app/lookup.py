@@ -402,9 +402,10 @@ class Lookup:
                              data={"inputs": need.model_dump(mode="json"), "error": error.code,
                                    "live_calls": counter.live().model_dump(),
                                    "decision_calls": counter.decision_calls, **error.data})
+                error.audited = True
             raise
 
-    def _find_offers(self, need, actor, mandate, counter):
+    def prepare(self, need, actor, mandate, counter):
         # Check authority before catalog screening, Decisions or any Valio call.
         with self.db.connect() as conn:
             policy, record, mandate = self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), need.customer_id)
@@ -444,11 +445,16 @@ class Lookup:
             candidates = pool[:min(policy.shortlist.live_max, max(passing, need.max_candidates))]
         else:
             candidates = pool[:need.max_candidates]
+        return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool)
+
+    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None):
+        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter)
         ids = [p.id for p in candidates]
         price, stock = {}, {}
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
-                target.update(self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
+                target.update(evidence[endpoint] if evidence is not None else
+                              self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError as error:
                 if error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED"}:
                     raise

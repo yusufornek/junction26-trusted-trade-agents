@@ -3316,6 +3316,154 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
+  /v1/basket-lookups:
+    post:
+      summary: Find a policy-checked ingredient basket with one batched price and
+        stock lookup
+      operationId: basket_lookup_v1_basket_lookups_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BasketRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BasketResult'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
   /.well-known/jwks-history.json:
     get:
       tags:
@@ -7928,6 +8076,18 @@ paths:
             minLength: 1
           - type: 'null'
           title: Idempotency-Key
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated
+            agent ID.
+          title: Agent-Mandate
+        description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated agent
+          ID.
       requestBody:
         required: true
         content:
@@ -9711,6 +9871,80 @@ components:
       - price
       - availability
       title: AverageLiveCalls
+    BasketRef:
+      properties:
+        basket_lookup_id:
+          type: string
+          minLength: 1
+          title: Basket Lookup Id
+      additionalProperties: false
+      type: object
+      required:
+      - basket_lookup_id
+      title: BasketRef
+    BasketRequest:
+      properties:
+        customer_id:
+          type: string
+          minLength: 1
+          title: Customer Id
+          description: Required non-blank Valio customer identifier.
+        deliver_by:
+          type: string
+          format: date
+          title: Deliver By
+          description: Delivery date between today and today + 60 days, Europe/Helsinki.
+        manifest:
+          $ref: '#/components/schemas/IngredientManifest'
+      additionalProperties: false
+      type: object
+      required:
+      - customer_id
+      - deliver_by
+      - manifest
+      title: BasketRequest
+    BasketResult:
+      properties:
+        basket_lookup_id:
+          type: string
+          title: Basket Lookup Id
+        agent_id:
+          type: string
+          title: Agent Id
+        context:
+          additionalProperties: true
+          type: object
+          title: Context
+        basket:
+          additionalProperties: true
+          type: object
+          title: Basket
+        live_calls:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Live Calls
+        scaled_manifest:
+          additionalProperties: true
+          type: object
+          title: Scaled Manifest
+        ingredients:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Ingredients
+      additionalProperties: false
+      type: object
+      required:
+      - basket_lookup_id
+      - agent_id
+      - context
+      - basket
+      - live_calls
+      - scaled_manifest
+      - ingredients
+      title: BasketResult
     BucketPolicy:
       properties:
         capacity:
@@ -10036,7 +10270,7 @@ components:
           items:
             $ref: '#/components/schemas/PlanLine'
           type: array
-          maxItems: 4
+          maxItems: 10
           minItems: 1
           title: Lines
         total:
@@ -10147,6 +10381,109 @@ components:
       additionalProperties: false
       type: object
       title: IdentityPolicy
+    Ingredient:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        quantity:
+          $ref: '#/components/schemas/IngredientQuantity'
+        search_terms:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Search Terms
+        required_claims:
+          items:
+            type: string
+          type: array
+          title: Required Claims
+        exclude_allergens:
+          items:
+            type: string
+          type: array
+          title: Exclude Allergens
+        substitutions_allowed:
+          type: boolean
+          title: Substitutions Allowed
+          default: false
+        density_kg_per_l:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Density Kg Per L
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - quantity
+      title: Ingredient
+    IngredientManifest:
+      properties:
+        version:
+          type: integer
+          const: 1
+          title: Version
+          default: 1
+        recipe_name:
+          type: string
+          minLength: 1
+          title: Recipe Name
+        servings:
+          type: number
+          maximum: 1000000.0
+          exclusiveMinimum: 0.0
+          title: Servings
+        base_servings:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Base Servings
+          default: 1
+        ingredients:
+          items:
+            $ref: '#/components/schemas/Ingredient'
+          type: array
+          maxItems: 10
+          minItems: 1
+          title: Ingredients
+        yield_note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Yield Note
+      additionalProperties: false
+      type: object
+      required:
+      - recipe_name
+      - servings
+      - ingredients
+      title: IngredientManifest
+    IngredientQuantity:
+      properties:
+        value:
+          type: number
+          maximum: 1000000.0
+          exclusiveMinimum: 0.0
+          title: Value
+        unit:
+          type: string
+          enum:
+          - G
+          - KG
+          - ML
+          - L
+          - SALES_UNIT
+          title: Unit
+      additionalProperties: false
+      type: object
+      required:
+      - value
+      - unit
+      title: IngredientQuantity
     JWKSet:
       properties:
         keys:
@@ -10176,6 +10513,14 @@ components:
       title: LiveCalls
     LookupResult:
       properties:
+        basket:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Basket
+          description: Ingredient basket and per-line request bindings; absent on
+            historical single needs.
         links:
           additionalProperties: true
           type: object
@@ -11528,6 +11873,11 @@ components:
           format: date
           title: Deliver By
           description: Delivery date between today and today + 60 days, Europe/Helsinki.
+        basket_ref:
+          anyOf:
+          - $ref: '#/components/schemas/BasketRef'
+          - type: 'null'
+          description: Quote the selected lines of a stored ingredient basket.
         lines:
           anyOf:
           - items:

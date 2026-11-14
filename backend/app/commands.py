@@ -4,12 +4,44 @@ import json
 from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
+from contextvars import ContextVar
 
 from pydantic import BaseModel
 
 from .canonical import canonical_json
 from .db import DomainError
 from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TRACE, correlation_id, trace_id
+
+
+ADMISSION = ContextVar("command_admission", default=None)
+
+
+def charge(gateway, identity, category):
+    credit = ADMISSION.get()
+    if credit and credit["identity"] == identity and credit["category"] == category and not credit["used"]:
+        credit["used"] = True
+    else:
+        gateway.limiter.consume(identity, category)
+
+
+def failure_audit(gateway, route, arguments, identity, error):
+    if getattr(error, "audited", False) or error.code == "RATE_LIMITED":
+        return
+    from . import audit
+    action = {"gateway.find_offers": "LOOKUP", "orders.create_quote": "CREATE_QUOTE",
+              "orders.place_order": "PLACE_ORDER", "orders.cancel": "CANCEL", "orders.approve": "APPROVE",
+              "orders.reject": "REJECT", "a2a.command": "A2A_COMMAND"}.get(route)
+    if action is None:
+        return
+    principal = PRINCIPAL.get()
+    actor = f"agent:{identity}"
+    if route in {"orders.approve", "orders.reject"} and principal:
+        actor = "human:operator" if principal.operator else f"human:buyer_approver:{principal.credential_ref}"
+    with gateway.db.connect(write=True) as conn:
+        audit.append(conn, actor, action + "_FAILED", error.message,
+                     order_id=arguments.get("order_id"), quote_id=arguments.get("quote_id"),
+                     data={"error": error.code, **error.data, "live_calls": {"price": 0, "availability": 0}})
+    error.audited = True
 
 
 def json_value(value):
@@ -99,6 +131,9 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             actor = arguments["actor"]
             check_owner(order, actor.removeprefix("agent:") if actor.startswith("agent:") else owner,
                         "ORDER_NOT_FOUND")
+            if actor.startswith("agent:"):
+                gateway.mandates.authorize(conn, arguments.get("mandate"), actor.removeprefix("agent:"), order.customer_id,
+                    products=[line.product_id for line in order.lines], bound=("order", order.id))
         else:
             authorize_review(gateway.policy.get(), principal, order)
             if route == "orders.approve":
@@ -169,17 +204,32 @@ def install(gateway, target, name, category):
         arguments = bound.arguments
         principal = PRINCIPAL.get() or arguments.get("principal")
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
-        if category != "read" and (principal is None or principal.kind == "agent"):
-            from .buyer import check_suspension
-            check_suspension(gateway.db, identity)
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         digest = fingerprint(scope, route, arguments)
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
+        prepared_token = None
         try:
+            # Receiver verification performs bounded network I/O before acquiring
+            # the idempotency writer. The write rechecks ownership/scope below.
+            if key is not None and route in {"webhooks.create", "webhooks.update"}:
+                with gateway.db.connect() as conn:
+                    previous = conn.execute("SELECT 1 FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
+                if previous is None:
+                    charge(gateway, identity, category)
+                    prepared_token = gateway.webhooks.prepare(route, arguments, principal)
+                    # The core charge was already paid before the challenge.
+                    prepared_credit = ADMISSION.set({"identity": identity, "category": category, "used": False})
+                else:
+                    prepared_credit = None
+            else:
+                prepared_credit = None
             if key is None:
-                gateway.limiter.consume(identity, category)
+                charge(gateway, identity, category)
+                if category != "read" and (principal is None or principal.kind == "agent"):
+                    from .buyer import check_suspension
+                    check_suspension(gateway.db, identity)
                 return linked(operation(*args, **kwargs))
             if not key.strip():
                 raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
@@ -190,7 +240,10 @@ def install(gateway, target, name, category):
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
                 try:
-                    gateway.limiter.consume(identity, "read" if previous else category)
+                    charge(gateway, identity, "read" if previous else category)
+                    if category != "read" and (principal is None or principal.kind == "agent"):
+                        from .buyer import check_suspension
+                        check_suspension(gateway.db, identity)
                     if previous:
                         saved = json.loads(previous["result"])
                         if not matches_command(previous, digest, name, route, arguments, saved):
@@ -218,7 +271,14 @@ def install(gateway, target, name, category):
             if error:
                 raise error
             return result
+        except DomainError as error:
+            failure_audit(gateway, route, arguments, identity, error)
+            raise
         finally:
+            if prepared_token is not None:
+                gateway.webhooks.prepared.reset(prepared_token)
+            if 'prepared_credit' in locals() and prepared_credit is not None:
+                ADMISSION.reset(prepared_credit)
             gateway.valio.flush_rate_limit_audits(gateway.db)
             TRACE.reset(trace_token)
             CORRELATION.reset(tokens[0])

@@ -1,7 +1,7 @@
 """Spec 33 acceptance: actual HTTP delivery through the durable outbox."""
 import json
 import socket
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit, parse_qs
 
 import httpx
@@ -62,18 +62,31 @@ def test_ac_1_pending_order_one_valid_signed_delivery(gateway, need, upstream, r
     assert len(rows) == 1 and rows[0]["status"] == "delivered"
 
 
-def test_ac_2_retry_grows_recovery_and_receiver_deduplicates(gateway, need, upstream, receiver):
+def test_ac_2_retry_grows_recovery_and_receiver_deduplicates(gateway, need, upstream, receiver, monkeypatch):
+    from app import audit
+    clock = [audit.utcnow()]
+    monkeypatch.setattr(audit, "utcnow", lambda: clock[0])
     sub = subscribe(gateway)
     receiver["status"] = 503
     gateway.orders.place_order(make_quote(gateway, need, qty=200).id, "retry-webhook")
     principal = Principal("external", customer_ids=("1",))
     first = gateway.webhooks.deliveries(sub["id"], principal)[0]
     first_time = datetime.fromisoformat(first["next_attempt_at"])
-    due(gateway)
+    assert first_time - clock[0] == timedelta(seconds=2)
+    clock[0] = first_time - timedelta(microseconds=1)
+    gateway.webhooks.dispatch()
+    assert len(receiver["calls"]) == 1
+    clock[0] = first_time
+    gateway.webhooks.dispatch()
     second = gateway.webhooks.deliveries(sub["id"], principal)[0]
-    assert datetime.fromisoformat(second["next_attempt_at"]) > first_time
+    second_time = datetime.fromisoformat(second["next_attempt_at"])
+    assert second_time - clock[0] == timedelta(seconds=4)
     receiver["status"] = 200
-    due(gateway)
+    clock[0] = second_time - timedelta(microseconds=1)
+    gateway.webhooks.dispatch()
+    assert len(receiver["calls"]) == 2
+    clock[0] = second_time
+    gateway.webhooks.dispatch()
     assert gateway.webhooks.deliveries(sub["id"], principal)[0]["status"] == "delivered"
     ids = [r.headers["webhook-id"] for r in receiver["calls"]]
     assert len(ids) == 3 and len(set(ids)) == 1
@@ -81,6 +94,126 @@ def test_ac_2_retry_grows_recovery_and_receiver_deduplicates(gateway, need, upst
     gateway.webhooks.redeliver(sub["id"], first["id"], principal)
     gateway.webhooks.dispatch()
     assert len(receiver["processed"]) == 1
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_review_disabled_backlog_does_not_starve_consumers(gateway, need, upstream, receiver, historical):
+    from app import audit
+    gateway.db.on_commit = None
+    sub = subscribe(gateway)
+    with gateway.db.connect(write=True) as conn:
+        for i in range(105):
+            audit.append(conn, "buyer", "MANDATE_REVOKED", "Revoked", data={"customer_id": "1", "issuer": "buyer", "jti_revoked": [str(i)], "mandate_id": str(i)})
+    gateway.webhooks.disable(sub["id"], Principal("external", customer_ids=("1",)))
+    if historical:
+        # Older releases left these pending; startup/dispatch must tolerate that state.
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE outbox SET status='pending' WHERE consumer=?", ("webhook:" + sub["id"],))
+    active = subscribe(gateway)
+    received = []
+    gateway.outbox.register("review:other", lambda event: received.append(event["id"]))
+    order = gateway.orders.place_order(make_quote(gateway, need, qty=200).id, "active-after-disabled")
+    for _ in range(3):
+        gateway.outbox.dispatch()
+        gateway.webhooks.dispatch()
+    assert received
+    assert gateway.webhooks.deliveries(active["id"], Principal("external", customer_ids=("1",)))[0]["status"] == "delivered"
+    assert any(json.loads(r.content)["aggregate_id"] == order.id for r in receiver["calls"])
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM outbox WHERE consumer=? AND status='pending'", ("webhook:" + sub["id"],)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+def test_review_challenge_bounded_outside_writer(gateway, receiver, monkeypatch, keyed):
+    import sqlite3
+    consumed = []
+    writer_available = []
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(128):
+                consumed.append(1)
+                yield b" " * 65536
+    def receive(request):
+        with sqlite3.connect(gateway.db.path, timeout=0) as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                writer_available.append(True)
+            except sqlite3.OperationalError:
+                writer_available.append(False)
+        return httpx.Response(200, stream=Body())
+    gateway.webhooks.client.close()
+    gateway.webhooks.client = httpx.Client(transport=httpx.MockTransport(receive))
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.post("/v1/webhook-subscriptions", json={"url": "https://receiver.test/hook", "customer_ids": ["1"],
+            "event_types": ["order.confirmed"]}, headers={"Idempotency-Key": "bounded"} if keyed else {})
+        assert response.status_code == 422
+    assert writer_available == [True]
+    assert len(consumed) <= 2
+
+
+def test_review_delivery_does_not_read_body(gateway, need, upstream, receiver):
+    sub = subscribe(gateway)
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            raise AssertionError("Delivery response body must not be consumed")
+        def close(self):
+            closed.append(True)
+    closed = []
+    gateway.webhooks.client.close()
+    gateway.webhooks.client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Body())))
+    gateway.orders.place_order(make_quote(gateway, need, qty=200).id, "bodyless-delivery")
+    assert closed == [True]
+    assert gateway.webhooks.deliveries(sub["id"], Principal("external", customer_ids=("1",)))[0]["status"] == "delivered"
+
+
+def test_review_challenge_overall_deadline(gateway, receiver):
+    ticks, chunks = [0], []
+    gateway.webhooks.clock = lambda: ticks[0]
+    class Body(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(100):
+                ticks[0] += 1
+                chunks.append(1)
+                yield b" "
+    gateway.webhooks.client.close()
+    gateway.webhooks.client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, stream=Body())))
+    with pytest.raises(Exception, match="WEBHOOK_CHALLENGE_FAILED"):
+        subscribe(gateway)
+    assert len(chunks) <= 5
+
+
+def test_review_retry_test_rejects_constant_delay(gateway, need, upstream, receiver, monkeypatch):
+    import inspect
+    import textwrap
+    import types
+    from app import webhooks
+    source = textwrap.dedent(inspect.getsource(webhooks.Webhooks.dispatch))
+    original = 'self.base_delay * 2 ** min(row["attempts"], 12)'
+    assert original in source
+    namespace = dict(vars(webhooks))
+    exec(compile(source.replace(original, "self.base_delay"), "<constant-delay-mutation>", "exec"), namespace)
+    monkeypatch.setattr(gateway.webhooks, "dispatch", types.MethodType(namespace["dispatch"], gateway.webhooks))
+    with pytest.raises(AssertionError):
+        test_ac_2_retry_grows_recovery_and_receiver_deduplicates(gateway, need, upstream, receiver, monkeypatch)
+
+
+def test_review_failing_subscription_does_not_own_batch(gateway, need, upstream, receiver, respx_mock):
+    from app import audit
+    gateway.db.on_commit = None
+    subscribe(gateway, event_types=["mandate.revoked"])
+    receiver["status"] = 503
+    with gateway.db.connect(write=True) as conn:
+        for index in range(105):
+            audit.append(conn, "buyer", "MANDATE_REVOKED", "Revoked", data={"customer_id": "1", "issuer": "buyer",
+                         "agent_id": "external", "jti_revoked": [str(index)], "mandate_id": str(index)})
+    respx_mock.post("https://93.184.216.34/active").mock(side_effect=lambda req: httpx.Response(200,
+        json={"challenge": json.loads(req.content).get("challenge")}))
+    active = subscribe(gateway)
+    gateway.webhooks.update(active["id"], SubscriptionPatch(url="https://receiver.test/active"), Principal("external", customer_ids=("1",)))
+    gateway.orders.place_order(make_quote(gateway, need, qty=200).id, "fair-delivery")
+    gateway.webhooks.dispatch()
+    rows = gateway.webhooks.deliveries(active["id"], Principal("external", customer_ids=("1",)))
+    assert rows and rows[0]["status"] == "delivered"
 
 
 def test_ac_3_tampering_fails_published_key_verification(gateway, need, upstream, receiver):
@@ -154,8 +287,8 @@ def test_ac_6_customer_and_subscription_ownership_isolation(gateway, need, upstr
         assert client.post("/v1/webhook-subscriptions", json={"url": "https://receiver.test/hook", "customer_ids": ["1"], "event_types": ["order.confirmed"]}).status_code == 403
     from app import audit
     with gateway.db.connect(write=True) as conn:
-        audit.append(conn, "buyer", "MANDATE_REVOKED", "Revoked", data={"issuer": "buyer", "customer_ids": ["1", "2"], "jti_revoked": ["authority"]})
-        audit.append(conn, "supplier", "PROPOSAL_RECEIVED", "Proposal", data={"proposal_id": "proposal-one", "customer_id": "1"})
+        audit.append(conn, "buyer", "MANDATE_REVOKED", "Revoked", data={"issuer": "buyer", "customer_ids": ["1", "2"], "jti_revoked": ["authority"], "agent_id": "external"})
+        audit.append(conn, "supplier", "PROPOSAL_RECEIVED", "Proposal", data={"proposal_id": "proposal-one", "customer_id": "1", "agent_id": "external"})
     received = [json.loads(r.content) for r in receiver["calls"]]
     assert [r["type"] for r in received] == ["order.approval_required", "mandate.revoked", "proposal.received"]
     assert all(r["customer_id"] == "1" for r in received)

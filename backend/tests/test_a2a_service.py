@@ -14,6 +14,10 @@ from app.api import create_app
 from app.a2a import data_part, metadata
 from app.auth import Principal
 from conftest import agent_headers, OPERATOR_HEADERS
+from test_buyer_view import buyer_setup
+from test_verifiable_mandate import buyer as vc_issuer, issue
+from app import audit
+from app.models import PolicyUpdateRequest
 
 
 @asynccontextmanager
@@ -36,6 +40,179 @@ def command(name, key, task=None, **data):
 
 def artifact_data(task, name):
     return MessageToDict(next(a for a in task.artifacts if a.name == name).parts[0])["data"]
+
+
+def test_review_relookup_invalidates_quote(gateway, need, upstream):
+    async def run():
+        async with sdk(gateway) as (client, _, _):
+            small = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10})})
+            task = await lookup(client, small)
+            task = (await client.send_message(command("select_plan", "select-old", task, plan_index=0))).task
+            old_quote = metadata(task)["quote_id"]
+            task = (await client.send_message(command("lookup", "replace", task, need=need.model_dump(mode="json")))).task
+            assert not metadata(task).get("quote_id") and not metadata(task).get("selected_plan")
+            assert not {"quote", "selected_plan"} & {a.name for a in task.artifacts}
+            with pytest.raises(InvalidParamsError) as refused:
+                await client.send_message(command("place_order", "stale-place", task))
+            assert refused.value.data["code"] == "NEED_REF_REQUIRED"
+            task = (await client.send_message(command("select_plan", "fresh-select", task, plan_index=0))).task
+            assert metadata(task)["quote_id"] != old_quote
+            task = (await client.send_message(command("place_order", "fresh-place", task))).task
+            assert artifact_data(task, "order")["context"]["request_ref"] == metadata(task)["request_id"]
+    asyncio.run(run())
+
+
+def test_review_historical_stale_task_quote_rejected(gateway, need, upstream):
+    async def run():
+        async with sdk(gateway) as (client, _, _):
+            task = await lookup(client, need)
+            task = (await client.send_message(command("select_plan", "old-select", task, plan_index=0))).task
+            old = metadata(task)["quote_id"]
+            task = (await client.send_message(command("lookup", "new-lookup", task, need=need.model_dump(mode="json")))).task
+            # Shape persisted by the previous release: a current request plus an obsolete quote.
+            with gateway.db.connect(write=True) as conn:
+                task.metadata.update({"quote_id": old})
+                gateway.a2a._save(conn, task, "external")
+            with pytest.raises(InvalidParamsError) as refused:
+                await client.send_message(command("place_order", "legacy-place", task))
+            assert refused.value.data["code"] == "NEED_REF_REQUIRED"
+            with gateway.db.connect() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+    asyncio.run(run())
+
+
+def test_review_admission_charges_core_once(gateway, need, upstream, monkeypatch):
+    charges = []
+    consume = gateway.limiter.consume
+    def count(identity, category):
+        charges.append((identity, category))
+        return consume(identity, category)
+    monkeypatch.setattr(gateway.limiter, "consume", count)
+    async def run():
+        async with sdk(gateway) as (client, _, _):
+            task = await lookup(client, need)
+            assert charges == [("external", "lookup")]
+            charges.clear()
+            task = (await client.send_message(command("select_plan", "one-select", task, plan_index=0))).task
+            assert charges == [("external", "mutation")]
+            charges.clear()
+            request = command("place_order", "one-place", task)
+            await client.send_message(request)
+            assert charges == [("external", "mutation")]
+            charges.clear()
+            await client.send_message(request)
+            assert charges == [("external", "read")]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("withdrawal", ["scope", "suspension", "revocation"])
+@pytest.mark.parametrize("stage", ["lookup", "select_plan", "place_order", "cancel", "get_evidence"])
+def test_review_replay_current_authority(gateway, need, upstream, buyer_setup, vc_issuer, withdrawal, stage):
+    from app.mandates import decode, sign_jwt
+    claims = decode(issue(vc_issuer, sub="external"))[1]
+    claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    token = sign_jwt(vc_issuer, claims, kid="buyer-1")
+    async def run():
+        async with sdk(gateway, headers={"Agent-Mandate": token}) as (client, http, _):
+            requested = need if stage != "cancel" else need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10})})
+            request = command("lookup", "bound-lookup", need=requested.model_dump(mode="json"))
+            task = (await client.send_message(request)).task
+            if stage != "lookup":
+                request = command("select_plan", "bound-select", task, plan_index=0)
+                task = (await client.send_message(request)).task
+            if stage in {"place_order", "cancel", "get_evidence"}:
+                request = command("place_order", "bound-place", task)
+                task = (await client.send_message(request)).task
+            if stage == "cancel":
+                request = command("cancel", "bound-cancel", order_id=artifact_data(task, "order")["id"])
+                await client.send_message(request)
+            if stage == "get_evidence":
+                request = command("get_evidence", "bound-evidence", task)
+                await client.send_message(request)
+            if withdrawal == "scope":
+                policy = gateway.policy._editable(gateway.policy.get())
+                policy["agents"]["external"]["customer_ids"] = ["2"]
+                gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
+                expected = "CUSTOMER_NOT_IN_MANDATE"
+            elif withdrawal == "suspension":
+                assert (await http.post("/v1/buyer/agents/external/suspend", headers=agent_headers("hotel-agent"))).status_code == 200
+                expected = "AGENT_SUSPENDED"
+            else:
+                assert (await http.post(f"/v1/buyer/mandates/{claims['jti']}/revoke", headers=agent_headers("hotel-agent"))).status_code == 200
+                expected = "MANDATE_INVALID"
+            before = len(upstream.price_calls), len(upstream.availability_calls)
+            audits = len(gateway.audit())
+            with pytest.raises(InvalidParamsError) as denied:
+                await client.send_message(request)
+            assert denied.value.data["code"] == expected
+            assert len(gateway.audit()) > audits
+            assert before == (len(upstream.price_calls), len(upstream.availability_calls))
+    asyncio.run(run())
+
+
+def test_review_invalid_commands_admission_before_persistence(gateway):
+    from app.db import DomainError
+    calls = []
+    def reject(identity, category):
+        calls.append((identity, category))
+        raise DomainError("RATE_LIMITED", "Wait", 429, {"retry_after_seconds": 7})
+    gateway.limiter.consume = reject
+    async def run():
+        async with sdk(gateway) as (_, http, _):
+            for i in range(4):
+                response = await http.post("/a2a", json={"jsonrpc": "2.0", "id": i, "method": "SendMessage",
+                    "params": MessageToDict(command("lookup", f"invalid-{i}", need={}))})
+                assert response.json()["error"]["data"][0]["metadata"]["code"] == "RATE_LIMITED"
+        with gateway.db.connect() as conn:
+            for table in ("a2a_tasks", "a2a_messages", "events", "outbox"):
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert calls == [("external", "lookup")] * 4
+    asyncio.run(run())
+
+
+def _assert_subscribe_drains_concurrent_terminal_revision(gateway, need, upstream, monkeypatch):
+    async def run():
+        async with sdk(gateway) as (client, http, _):
+            task = await purchase(client, need)
+            order = artifact_data(task, "order")
+            http.headers["X-A2A-After-Revision"] = str(int(metadata(task)["aggregate_revision"]))
+            updates = gateway.a2a.updates
+            triggered = False
+            def approve_between_reads(*args, **kwargs):
+                nonlocal triggered
+                rows = updates(*args, **kwargs)
+                if not triggered:
+                    triggered = True
+                    from fastapi.testclient import TestClient
+                    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as operator:
+                        response = operator.post(f"/v1/approvals/{order['id']}/approve", json={"approver": "Ada"})
+                        assert response.status_code == 200, response.text
+                return rows
+            monkeypatch.setattr(gateway.a2a, "updates", approve_between_reads)
+            events = [e async for e in client.subscribe(t.SubscribeToTaskRequest(id=task.id))]
+            assert any(e.HasField("status_update") and e.status_update.status.state == t.TaskState.TASK_STATE_COMPLETED for e in events)
+            assert any(e.HasField("artifact_update") and e.artifact_update.artifact.name == "receipt" for e in events)
+    asyncio.run(run())
+
+
+def test_review_subscribe_drains_concurrent_terminal_revision(gateway, need, upstream, monkeypatch):
+    _assert_subscribe_drains_concurrent_terminal_revision(gateway, need, upstream, monkeypatch)
+
+
+def test_review_advertised_basket_skill_callable(gateway, need, upstream):
+    async def run():
+        async with sdk(gateway) as (client, _, card):
+            schemas = MessageToDict(card.capabilities.extensions[0])["params"]["schemas"]
+            assert "find_basket_offers" in schemas
+            request = {"customer_id": "1", "deliver_by": str(need.deliver_by), "manifest": {
+                "version": 1, "recipe_name": "Breakfast", "servings": 2,
+                "ingredients": [{"name": "milk", "quantity": {"value": 10, "unit": "L"}, "search_terms": ["milk"]}]}}
+            task = (await client.send_message(command("lookup", "basket", skill="find_basket_offers", arguments={"request": request}))).task
+            assert artifact_data(task, "offers")["basket"]["lines"]
+            task = (await client.send_message(command("select_plan", "basket-select", task))).task
+            task = (await client.send_message(command("place_order", "basket-place", task))).task
+            assert artifact_data(task, "order")["lines"]
+    asyncio.run(run())
 
 
 async def lookup(client, need, key="lookup"):
@@ -88,6 +265,13 @@ def test_ac_2_lookup_selection_placement_and_state_artifacts(gateway, need, upst
             task = (await client.send_message(command("select_plan", "select", task, plan_index=0))).task
             assert task.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED
             assert artifact_data(task, "quote")["signature"]
+            old_quote = metadata(task)["quote_id"]
+            replacement = small.model_copy(update={"quantity": small.quantity.model_copy(update={"value": 20})})
+            task = (await client.send_message(command("lookup", "replace-ac2", task, need=replacement.model_dump(mode="json")))).task
+            assert not metadata(task).get("quote_id") and not metadata(task).get("selected_plan")
+            assert not {"quote", "selected_plan"} & {a.name for a in task.artifacts}
+            task = (await client.send_message(command("select_plan", "select-current-ac2", task, plan_index=0))).task
+            assert metadata(task)["quote_id"] != old_quote
             task = (await client.send_message(command("place_order", "place", task))).task
             assert task.status.state == t.TaskState.TASK_STATE_COMPLETED
             assert artifact_data(task, "order")["status"] == "CONFIRMED"
@@ -268,6 +452,7 @@ def test_ac_6_sdk_streaming_outbox_replay_push_and_cancel(gateway, need, upstrea
             await client.delete_task_push_notification_config(t.DeleteTaskPushNotificationConfigRequest(task_id=task.id, id=config.id))
             assert not (await client.list_task_push_notification_configs(t.ListTaskPushNotificationConfigsRequest(task_id=task.id))).configs
     asyncio.run(run())
+    _assert_subscribe_drains_concurrent_terminal_revision(gateway, need, upstream, monkeypatch)
 
 
 def test_ac_8_throttle_returns_shared_recovery_and_task_status(gateway, need, upstream):
@@ -286,12 +471,12 @@ def test_ac_8_throttle_returns_shared_recovery_and_task_status(gateway, need, up
             assert recovery["code"] == "RATE_LIMITED" and recovery["retry_after_seconds"] == 7
             assert recovery["retryable"] and recovery["next_action"] == "RETRY_SAME_COMMAND"
             assert recovery["correlation_id"] == "a2a-throttle"
-            task_response = await http.post("/a2a", headers={"A2A-Version": "1.0"}, json={"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": recovery["data"]["task_id"]}})
-            status_data = task_response.json()["result"]["status"]["message"]["parts"][1]["data"]
-            assert status_data["next_action"] == "RETRY_SAME_COMMAND" and status_data["retry_after_seconds"] == 7
+            # Admission refusal happens before task/history/outbox persistence.
+            assert "task_id" not in recovery["data"]
+            with gateway.db.connect() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM a2a_tasks").fetchone()[0] == 0
             gateway.limiter.consume = consume
             recovered = await http.post("/a2a", json={"jsonrpc": "2.0", "id": 3, "method": "SendMessage", "params": MessageToDict(command("lookup", "throttled", need=need.model_dump(mode="json")))})
-            assert recovered.json()["result"]["task"]["id"] == recovery["data"]["task_id"]
             assert recovered.json()["result"]["task"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
             with gateway.db.connect() as conn:
                 assert conn.execute("SELECT COUNT(*) FROM a2a_tasks").fetchone()[0] == 1

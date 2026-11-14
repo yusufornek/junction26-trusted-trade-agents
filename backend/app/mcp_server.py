@@ -13,7 +13,8 @@ from .db import DomainError
 from .auth import Credentials, MCPBearerMiddleware, Principal
 from .foundation import CORRELATION, PRINCIPAL, correlation_id
 from .recovery import problem, validation_problem
-from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
+from .models import BasketRef, LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
+from .baskets import BasketRequest, BasketResult, find_basket_offers as basket_offers
 from .service import Gateway
 from .evidence import EvidenceManifest, build_bundle
 from .discovery import NAME, TITLE, VERSION, DESCRIPTION, check_server
@@ -169,13 +170,17 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{current_agent()}", mandate=PRESENTED_MANDATE.get())
 
-    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation." + MANDATE_HELP)
+    @server.tool(description="Find a versioned recipe ingredient basket. Supply request {customer_id, deliver_by, manifest {version:1, recipe_name, servings, base_servings:1, ingredients:[{name, quantity:{value,unit}, search_terms?, required_claims?, exclude_allergens?, substitutions_allowed, density_kg_per_l?}]}}. Quantities scale by servings/base_servings; units G, KG, ML, L, SALES_UNIT. Standing constraints apply per ingredient. Candidate SKUs share one price and one stock batch; repeated SKUs combine into one line. Returns basket_lookup_id, scaled_manifest, per-ingredient offers, coverage, overbuy, uncovered reasons and policy_preview. Mass/volume conversion requires explicit density evidence. Quote with basket_ref {basket_lookup_id}; one simulated order reserves all lines atomically. No supplier order is transmitted." + MANDATE_HELP)
+    def find_basket_offers(request: BasketRequest) -> BasketResult:
+        return BasketResult.model_validate(basket_offers(gateway, request, current_agent(), PRESENTED_MANDATE.get()))
+
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines, plan_ref {lookup_id, plan_index}, or basket_ref {basket_lookup_id}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation." + MANDATE_HELP)
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None,
-                     idempotency_key: str | None = None) -> Quote:
+                      idempotency_key: str | None = None, basket_ref: BasketRef | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
+                                                            lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
@@ -199,10 +204,10 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     def get_order_ubl(order_id: str, document: Literal["order", "response"] = "order") -> str:
         return gateway.orders.get_order_ubl(order_id, document, current_agent())
 
-    @server.tool(description="Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
+    @server.tool(description="Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Rechecks current customer scope, suspension and the original order-bound buyer mandate on fresh attempts and exact replays; a presented VC cannot replace revoked bound authority. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
     def cancel_order(order_id: str, reason: str = "", idempotency_key: str | None = None) -> Order:
         try:
-            return gateway.orders.cancel(order_id, actor=f"agent:{current_agent()}", reason=reason, command_key=idempotency_key)
+            return gateway.orders.cancel(order_id, actor=f"agent:{current_agent()}", reason=reason, mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             # Expected refusals must retain their public code instead of becoming SDK crash errors.
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error

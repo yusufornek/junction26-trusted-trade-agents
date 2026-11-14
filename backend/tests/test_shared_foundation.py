@@ -12,9 +12,53 @@ from app.auth import Credentials
 from app.mcp_server import create_server
 from app.models import PolicyUpdateRequest
 from conftest import agent_headers, quote_request
+from test_verifiable_mandate import buyer as vc_issuer, issue
 
 
 KEYED_WRITES = ("create_quote", "place_order", "cancel", "approve", "reject", "update", "reset", "revoke", "change", "find_offers")
+
+
+@pytest.mark.parametrize("transport", ["rest", "mcp"])
+@pytest.mark.parametrize("withdrawal", ["scope", "suspension", "revocation", "invalid_header"])
+def test_review_cancel_replay_current_authority(gateway, need, upstream, vc_issuer, transport, withdrawal):
+    from app.mandates import decode, sign_jwt
+    from test_buyer_view import place
+    claims = decode(issue(vc_issuer, sub="external"))[1]
+    claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    token = sign_jwt(vc_issuer, claims, kid="buyer-1")
+    order = place(gateway, need, mandate=token)
+    server = create_server(gateway, "external", mandate=token)
+    with TestClient(create_app(gateway), headers={**agent_headers("external"), "Agent-Mandate": token}) as client:
+        def cancel(key):
+            if transport == "rest":
+                response = client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Buyer", "reason": "Changed plans"}, headers={"Idempotency-Key": key})
+                return response.status_code, response.json()
+            response = asyncio.run(server.call_tool("cancel_order", {"order_id": order.id, "reason": "Changed plans", "idempotency_key": key}))
+            return response.structured_content.get("status", 200), response.structured_content
+        assert cancel("cancel-review")[1]["status"] == "CANCELLED"
+        if withdrawal == "scope":
+            body = gateway.policy._editable(gateway.policy.get())
+            body["agents"]["external"]["customer_ids"] = ["2"]
+            gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+            expected = "CUSTOMER_NOT_IN_MANDATE"
+        elif withdrawal == "suspension":
+            with gateway.db.connect(write=True) as conn:
+                conn.execute("INSERT INTO buyer_suspensions VALUES(?,?)", ("external", json.dumps({"suspended": True})))
+            expected = "AGENT_SUSPENDED"
+        elif withdrawal == "revocation":
+            gateway.mandates.revoke(sign_jwt(vc_issuer, {"iss": claims["iss"], "jti_revoked": [claims["jti"]],
+                "iat": int(audit.utcnow().timestamp())}, kid="buyer-1"), "human:operator")
+            expected = "MANDATE_INVALID"
+        else:
+            client.headers["Agent-Mandate"] = "invalid-vc"
+            server.mandate = "invalid-vc"
+            expected = "MANDATE_INVALID"
+        audits = len(gateway.audit())
+        for key in ("fresh-cancel-review", "cancel-review"):
+            status, refused = cancel(key)
+            assert (status, refused["code"]) == (403, expected)
+            assert "lines" not in refused
+        assert len(gateway.audit()) == audits + 2
 
 
 @pytest.mark.parametrize("command", KEYED_WRITES)
