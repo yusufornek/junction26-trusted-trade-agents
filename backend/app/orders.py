@@ -425,7 +425,8 @@ class Orders:
         from .ubl import export
         self.expire()
         with self.db.connect() as conn:
-            conn.execute("BEGIN")
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             order = check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)
             return export(order, quote, document)
@@ -434,7 +435,8 @@ class Orders:
         self.expire()
         with self.db.connect() as conn:
             # Order state, quote reference and audit history share one read snapshot.
-            conn.execute("BEGIN")
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             order = self._order(conn, order_id)
             check_owner(order, agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)

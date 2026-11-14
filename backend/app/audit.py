@@ -83,7 +83,8 @@ def verify(db, checkpoint_entries=None, checkpoint_hash=None):
     # Serialize full scans per gateway so concurrent readers do not multiply
     # verification allocations. Keep just one row and one requested prefix hash.
     with db.audit_verify_lock, db.connect() as conn:
-        conn.execute("BEGIN")
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
         previous, first_break, entries, head_hash = GENESIS, None, 0, GENESIS
         checkpoint_digest = GENESIS if checkpoint_entries == 0 else None
         for index, row in enumerate(conn.execute("SELECT * FROM audit ORDER BY id"), 1):

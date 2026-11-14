@@ -43,12 +43,12 @@ def install(gateway, target, name, category):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         arguments = bound.arguments
-        principal = PRINCIPAL.get()
+        principal = PRINCIPAL.get() or arguments.get("principal")
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         payload = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
-                   if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
+                   if k not in {"agent_id", "actor", "operator", "mandate", "principal", "idempotency_key"}})}
         digest = sha256(canonical_json(payload)).hexdigest()
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())

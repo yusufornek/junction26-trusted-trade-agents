@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Literal
@@ -37,17 +38,33 @@ def create_app(gateway=None, *, settings=None, keys=None):
     async def lifespan(app):
         service = gateway or Gateway(settings)
         app.state.gateway = service
+        stop = asyncio.Event()
+        async def deliver_notifications():
+            while not stop.is_set():
+                await run_in_threadpool(service.outbox.dispatch)
+                await run_in_threadpool(service.webhooks.dispatch)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=.5)
+                except asyncio.TimeoutError:
+                    pass
+        worker = asyncio.create_task(deliver_notifications())
         try:
             yield
         finally:
+            stop.set()
+            await worker
             if gateway is None:
                 service.close()
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
-                  description="MVP fixed-price gateway. REST and MCP share one core. Bearer credentials establish agent ownership and operator authority. Commitments are gateway-simulated.",
+                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Commitments are gateway-simulated.",
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    from .webhooks import router as webhook_router
+    from .a2a import install_routes
+    app.include_router(webhook_router)
+    install_routes(app)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
@@ -56,6 +73,13 @@ def create_app(gateway=None, *, settings=None, keys=None):
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
         try:
+            if request.url.path == "/a2a":
+                try:
+                    await resolve_principal(request, await bearer(request))
+                except DomainError as error:
+                    response = await domain_error(request, error)
+                    response.headers["X-Correlation-Id"] = CORRELATION.get()
+                    return response
             response = await call_next(request)
             response.headers["X-Correlation-Id"] = CORRELATION.get()
             return response
@@ -186,7 +210,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                       coverage=svc(request).catalog.metadata("coverage"), anchoring=svc(request).anchoring.health())
 
     @app.get("/.well-known/jwks.json", response_model=JWKSet,
-             summary="Public Ed25519 signing keys for detached quote, receipt and audit-head JWS")
+             summary="Public Ed25519 keys for quote, receipt, audit-head JWS and Standard Webhooks v1a")
     def jwks(request: Request):
         return svc(request).signing.jwks()
 
