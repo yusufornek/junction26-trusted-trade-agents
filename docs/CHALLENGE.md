@@ -171,3 +171,18 @@ How the gateway follows them: spec 39.
   required at first, possibly dropped later when reliability is good enough. How the gateway follows this:
   spec 40 (approval first, autonomy earned per agent from a measured track record).
 
+## Observations from the production webshop (test account, read only, 2026-11-14)
+- Product codes in the webshop differ from the mock's product IDs (mock 464306 = webshop 8043409), but the
+  **GTIN/EAN is the same** (6408430000487). GTIN is the bridge between the mock, our UBL export and the real shop.
+- Prices differ from the mock (Arki Eila 1 l: webshop 1.43 €/kpl net for the test customer, mock 1.01 €), so the
+  mock's prices are illustrative.
+- Stock shows as "999+ kpl varastossa" (capped display); per-product "Toimitettavissa 18.11." shows the earliest
+  delivery date, matching the availability / date-shift idea.
+- Unit conversions are listed per product ("1 ltk = 24 pl", "1 ltk = 20 kpl", "1 pal = 160 kpl") with an EAN per
+  level; the comparison price confirms whole-case content (24 × 0.33 L beer: 54.17 €/ltk, 6.84 €/l = 7.92 L per
+  case), the same reading the gateway now uses.
+- Allergens and nutritional claims are shown per product (e.g. "Allergeenit: Maito"; "Laktoositon").
+- Shop features close to ours: order templates ("Lisää tilauspohjalle"), "colleagues often buy these",
+  "also bought", product comparison, availability notifications, substitute suggestions. Ordering is add to cart
+  with no approval step.
+

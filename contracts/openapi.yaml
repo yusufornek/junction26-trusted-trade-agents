@@ -426,9 +426,10 @@ paths:
     post:
       summary: Change Autonomy
       description: Operator or this agent's buyer_admin grants or removes autonomy.
-        Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Readiness
-        never grants authority automatically. A stricter signed buyer mandate still
-        wins.
+        Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional
+        Idempotency-Key replays the first result without changing authority again;
+        changed payload returns 409 IDEMPOTENCY_CONFLICT. Readiness never grants authority
+        automatically. A stricter signed buyer mandate still wins.
       operationId: change_autonomy_v1_agents__agent_id__autonomy_post
       security:
       - BearerAuth: []
@@ -439,6 +440,15 @@ paths:
         schema:
           type: string
           title: Agent Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -3314,7 +3324,8 @@ paths:
         the refreshed order before approving again. Unchanged evidence confirms. A
         revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate
         returns 403 AGENT_NOT_REGISTERED with rule hits in data; the order remains
-        pending and can be rejected.
+        pending and can be rejected. Cached approval responses recheck the reviewer's
+        current organisation and customer scope.
       operationId: approve_v1_approvals__order_id__approve_post
       security:
       - BearerAuth: []
@@ -3469,6 +3480,9 @@ paths:
   /v1/approvals/{order_id}/reject:
     post:
       summary: Reject
+      description: Reject a pending order. Optional Idempotency-Key replays the first
+        result; cached responses recheck the reviewer's current organisation and customer
+        scope.
       operationId: reject_v1_approvals__order_id__reject_post
       security:
       - BearerAuth: []

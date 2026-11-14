@@ -25,7 +25,7 @@ MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate pl
                 "(default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. "
                 "approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. "
                 "GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may "
-                "POST /v1/agents/{id}/autonomy with level and reason. Quote/order bind and expose mandate metadata; "
+                "POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key prevents repeated changes). Quote/order bind and expose mandate metadata; "
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (

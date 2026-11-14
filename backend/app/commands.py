@@ -68,6 +68,11 @@ def install(gateway, target, name, category):
                 try:
                     gateway.limiter.consume(identity, "read" if previous else category)
                     if previous:
+                        if target is gateway.orders and name in {"approve", "reject"}:
+                            # Replay returns the original result, but never the original authority.
+                            from .autonomy import authorize_review
+                            authorize_review(gateway.policy.get(), principal,
+                                             gateway.orders._order(conn, arguments["order_id"]))
                         if name == "place_order":
                             # Preserve buyer mandate revalidation and the historical replay audit.
                             return linked(operation(*args, **kwargs))

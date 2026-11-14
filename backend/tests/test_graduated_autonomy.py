@@ -1,4 +1,5 @@
 """Spec 40: one offline integration test per acceptance criterion."""
+import json
 from datetime import timedelta
 from uuid import uuid4
 
@@ -265,3 +266,173 @@ def test_ac_8_demo_mandates_keep_1010_eur_confirmation(gateway, need, respx_mock
         "hotel-chain-agent", operator=True)
     order = gateway.orders.place_order(quote.id, "hotel-demo", "hotel-chain-agent")
     assert order.status == "CONFIRMED" and order.total == 1010
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+@pytest.mark.parametrize("scope_change", ["organisation", "customers", "role"])
+def test_review_cached_approval_rechecks_scope(gateway, need, upstream, action, scope_change):
+    approval_first(gateway)
+    organisations(gateway)
+    pending = place(gateway, need)
+    headers = {**agent_headers("buyer"), "Idempotency-Key": "buyer-review"}
+    url = f"/v1/approvals/{pending.id}/{action}"
+    body = {"approver": "Buyer manager"}
+    with TestClient(create_app(gateway)) as client:
+        first = client.post(url, json=body, headers=headers)
+        assert first.status_code == 200, first.text
+        calls = len(upstream.availability_calls)
+        assert client.post(url, json=body, headers=headers).json() == first.json()
+        assert len(upstream.availability_calls) == calls
+        policy = gateway.policy._editable(gateway.policy.get())
+        if scope_change == "organisation":
+            # Even overlapping customer codes must not cross the organisation boundary.
+            policy["organisations"]["other"]["customer_ids"] = ["1"]
+            policy["identities"]["buyer"]["organisation_id"] = "other"
+        elif scope_change == "customers":
+            policy["organisations"]["hotel"]["customer_ids"] = []
+        else:
+            policy["identities"]["buyer"]["role"] = "buyer_viewer"
+        update(gateway, **policy)
+        fresh = client.post(url, json=body, headers={**headers, "Idempotency-Key": "fresh"})
+        replay = client.post(url, json=body, headers=headers)
+        assert fresh.status_code == (403 if scope_change == "role" else 404)
+        assert replay.status_code == fresh.status_code
+        assert replay.json()["code"] == fresh.json()["code"]
+        assert "lines" not in replay.json()
+    assert len([e for e in gateway.audit(order_id=pending.id) if e.action == action.upper()]) == 1
+
+
+@pytest.mark.parametrize("signed_level,invalid_authority", [
+    ("autonomous_within_limits", None), ("approval_required", None), (None, None),
+    ("autonomous_within_limits", "expired"), ("autonomous_within_limits", "revoked")])
+@pytest.mark.parametrize("vc_only", [False, True])
+def test_review_current_vc_autonomy_after_promotion(gateway, need, upstream, monkeypatch, signed_level, invalid_authority, vc_only):
+    approval_first(gateway)
+    key = Ed25519PrivateKey.generate()
+    update(gateway, customers={"1": {"mandate_issuers": {"urn:buyer:review": [{"kid": "review", "kty": "OKP", "crv": "Ed25519",
+        "x": b64(key.public_key().public_bytes_raw())}]}}})
+    agent = "outsider" if vc_only else AGENT
+    subject = {"agent_id": agent, "customer_id": "1", "max_auto_total_eur": 1500, "max_auto_daily_total_eur": 5000}
+    if signed_level is not None:
+        subject["autonomy"] = signed_level
+    now = int(audit.utcnow().timestamp())
+    mandate_id = str(uuid4())
+    token = sign_jwt(key, {"iss": "urn:buyer:review", "sub": agent, "jti": mandate_id, "nbf": now-1, "exp": now+86400,
+        "vc": {"@context": ["https://www.w3.org/ns/credentials/v2"], "type": ["VerifiableCredential", "PurchasingMandate"],
+               "credentialSubject": subject}}, kid="review")
+    delivered = []
+    gateway.outbox.register("review-test", delivered.append)
+    with TestClient(create_app(gateway)) as client:
+        url = f"/v1/agents/{agent}/autonomy"
+        if vc_only:
+            # Register the credential through a successful lookup, then tighten its grant.
+            gateway.find_offers(need, f"agent:{agent}", mandate=token)
+            assert client.post(url, headers=OPERATOR_HEADERS,
+                json={"level": "approval_required", "reason": "Pilot starts"}).status_code == 200
+        pending = place(gateway, need, agent=agent, mandate=token)
+        assert pending.status == "PENDING_APPROVAL" and pending.mandate.autonomy == "approval_required"
+        assert client.post(url, headers=OPERATOR_HEADERS,
+            json={"level": "autonomous_within_limits", "reason": "Pilot reviewed"}).status_code == 200
+        with gateway.db.connect() as conn:
+            _, current, _ = gateway.mandates.authorize(conn, None, agent, "1", bound=("order", pending.id))
+        expected = signed_level == "autonomous_within_limits"
+        assert (current.autonomy == "autonomous_within_limits") == expected
+        if invalid_authority == "expired":
+            # Keep the order's approval window open while its buyer credential expires.
+            clock = audit.utcnow()
+            monkeypatch.setattr(audit, "utcnow", lambda: clock + timedelta(days=1))
+            with gateway.db.connect(write=True) as conn:
+                order = gateway.orders._order(conn, pending.id)
+                order.expires_at = clock + timedelta(days=2)
+                gateway.orders._save_order(conn, order)
+            expected = False
+        elif invalid_authority == "revoked":
+            revocation = sign_jwt(key, {"iss": "urn:buyer:review", "iat": now,
+                "jti_revoked": [mandate_id]}, kid="review")
+            gateway.mandates.revoke(revocation, "human:buyer")
+            expected = False
+        response = client.post(f"/v1/approvals/{pending.id}/reject", headers=OPERATOR_HEADERS,
+            json={"approver": "Ada"})
+        assert response.status_code == 200, response.text
+    events = [e for e in delivered if e["type"] == "autonomy.review_suggested"]
+    assert len(events) == int(expected)
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events WHERE type='autonomy.review_suggested'").fetchone()[0] == int(expected)
+
+
+@pytest.mark.parametrize("reject_constraint", [False, True])
+def test_review_accepted_constraint_exception_is_not_refusal(gateway, need, upstream, reject_constraint):
+    approval_first(gateway)
+    policy = gateway.policy._editable(gateway.policy.get())
+    policy["reject"]["on_hard_constraint_violation"] = reject_constraint
+    policy["autonomy"]["promotion"]["min_approved_unchanged"] = 0
+    update(gateway, **policy)
+    order = place(gateway, need, product_id="2")
+    assert order.status == ("REJECTED" if reject_constraint else "PENDING_APPROVAL")
+    if not reject_constraint:
+        assert gateway.orders.approve(order.id, "Ada").status == "CONFIRMED"
+    with TestClient(create_app(gateway)) as client:
+        result = record(client)
+    assert result["rejected"] == int(reject_constraint)
+    assert result["hard_constraint_refusals"] == int(reject_constraint)
+    assert bool(result["last_hard_constraint_refusal_at"]) == reject_constraint
+    assert result["autonomy_recommendation"]["eligible"] != reject_constraint
+
+
+def test_review_track_record_ignores_foreign_lifetime_history(gateway, monkeypatch):
+    clock = [audit.utcnow() - timedelta(days=400)]
+    monkeypatch.setattr(audit, "utcnow", lambda: clock[0])
+    hit = {"rule": "hard_constraint_violation"}
+    # Historical quote-only ownership and agent-only failures must retain lifetime dates.
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT INTO quotes VALUES('own-old','ACCEPTED',?,?)",
+            (clock[0].isoformat(), json.dumps({"agent_id": AGENT})))
+        audit.append(conn, "human:old", "CREATE_QUOTE_FAILED", "Refused", quote_id="own-old", data={"rule_hits": [hit]})
+        audit.append(conn, f"agent:{AGENT}", "PLACE_ORDER", "Rejected", data={"outcome": "REJECTED"})
+    last = clock[0].isoformat()
+    clock[0] += timedelta(days=400)
+
+    def measured_record():
+        steps, statements = [], []
+        with gateway.db.connect() as conn:
+            conn.set_progress_handler(lambda: steps.append(1) or 0, 1)
+            conn.set_trace_callback(statements.append)
+            result = gateway.autonomy._record(conn, AGENT, gateway.policy.get(), 1)
+        return result, len(steps), statements
+
+    before, baseline, _ = measured_record()
+    clock[0] -= timedelta(days=400)
+    with gateway.db.connect(write=True) as conn:
+        for i in range(300):
+            qid = f"foreign-{i}"
+            conn.execute("INSERT INTO quotes VALUES(?,'ACCEPTED',?,?)",
+                (qid, clock[0].isoformat(), json.dumps({"agent_id": "other"})))
+            audit.append(conn, "agent:other", "CREATE_QUOTE_FAILED", "Foreign refusal", quote_id=qid,
+                data={"rule_hits": [hit], "marker": "foreign-review-history"})
+        # Simulate reopening a pre-fix database: indexes are added without rewriting history.
+        for index in ("audit_actor_ts", "orders_agent_created", "quotes_agent"):
+            conn.execute(f"DROP INDEX IF EXISTS {index}")
+    from app.db import Database
+    Database(gateway.db.path)
+    assert audit.verify(gateway.db)["valid"]
+    with gateway.db.connect() as conn:
+        assert json.loads(conn.execute("SELECT data FROM quotes WHERE id='own-old'").fetchone()[0]) == {"agent_id": AGENT}
+    clock[0] += timedelta(days=400)
+    loads, decoded_foreign = json.loads, []
+
+    def observe_loads(value, *args, **kwargs):
+        if isinstance(value, str) and "foreign-review-history" in value:
+            decoded_foreign.append(value)
+        return loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", observe_loads)
+    for _ in range(2):
+        result, steps, statements = measured_record()
+        assert result == before
+        assert result.orders_placed == result.hard_constraint_refusals == 0
+        assert result.last_rejection_at.isoformat() == last
+        assert result.last_hard_constraint_refusal_at.isoformat() == last
+        assert not any("SELECT data FROM quotes WHERE id='foreign-" in s for s in statements)
+        assert not decoded_foreign
+        # Indexed ownership lookups should not do work proportional to unrelated rows.
+        assert steps <= baseline + 1000, (baseline, steps)

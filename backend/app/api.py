@@ -151,10 +151,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return svc(request).autonomy.track_record(agent_id, principal, window_days)
 
     @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult,
-              description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
+              description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key replays the first result without changing authority again; changed payload returns 409 IDEMPOTENCY_CONFLICT. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
-                        principal: Principal = Depends(resolve_principal)):
-        return svc(request).autonomy.change(agent_id, body, principal)
+                        principal: Principal = Depends(resolve_principal),
+                        idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).autonomy.change(agent_id, body, principal, command_key=idempotency_key)
 
     def audit_cancel_validation(request, raw_body, message):
         """Audit a cancel request refused by validation, with a normalised actor (never raw input)."""
@@ -293,13 +294,14 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
-                          "with rule hits in data; the order remains pending and can be rejected.")
+                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
             actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
-    @app.post("/v1/approvals/{order_id}/reject", response_model=Order)
+    @app.post("/v1/approvals/{order_id}/reject", response_model=Order,
+              description="Reject a pending order. Optional Idempotency-Key replays the first result; cached responses recheck the reviewer's current organisation and customer scope.")
     def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.reject(order_id, body.approver, body.comment,

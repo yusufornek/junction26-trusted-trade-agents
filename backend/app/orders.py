@@ -118,9 +118,20 @@ class Orders:
 
     def _suggest_review(self, conn, order, reason):
         policy = self.policy.get()
+        token = self.mandates.stored(conn, "order", order.id)
+        if token is not None:
+            try:
+                # The order snapshot records placement-time effective authority. Recompute
+                # from its original signed claim and today's policy/grant instead.
+                policy, _, _ = self.mandates.authorize(conn, None, order.agent_id, order.customer_id,
+                    products=[line.product_id for line in order.lines], bound=("order", order.id), policy=policy)
+            except DomainError:
+                # Expired/revoked authority must not prevent the human from rejecting.
+                return
         row = policy.agents.get(order.agent_id)
         level = (row.autonomy or policy.autonomy.default) if row else policy.autonomy.default
-        if order.mandate is not None:
+        if token is None and order.mandate is not None:
+            # Older records without a bound credential remain loadable and conservative.
             if order.mandate.autonomy == "approval_required":
                 return
             if row is None:

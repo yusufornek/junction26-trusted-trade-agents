@@ -8,6 +8,21 @@ from .mandates import decode
 from .models import AgentTrackRecord, AutonomyChangeResult, PolicyUpdateRequest
 
 
+# UNION deduplicates entries linked through several ownership paths. Each branch
+# starts at an indexed owner, including historical quote-only and agent-only failures.
+OWNED_AUDIT = """
+WITH owned_audit AS (
+    SELECT id FROM audit WHERE actor=:actor
+    UNION
+    SELECT a.id FROM orders o JOIN audit a ON a.order_id=o.id
+    WHERE json_extract(o.data,'$.agent_id')=:agent
+    UNION
+    SELECT a.id FROM quotes q JOIN audit a ON a.quote_id=q.id
+    WHERE json_extract(q.data,'$.agent_id')=:agent
+)
+"""
+
+
 def buyer_scope(policy, principal, agent_id, customer_ids):
     target = policy.identities.get(agent_id)
     if target and target.organisation_id:
@@ -67,35 +82,49 @@ class Autonomy:
     def _record(self, conn, agent_id, policy, window_days=30):
         now = audit.utcnow()
         start = now - timedelta(days=window_days)
+        params = {"agent": agent_id, "actor": f"agent:{agent_id}", "start": start.isoformat(), "now": now.isoformat()}
         orders = {r["id"]: json.loads(r["data"]) for r in conn.execute(
-            "SELECT id,data FROM orders WHERE json_extract(data,'$.agent_id')=?", (agent_id,))}
+            "SELECT id,data FROM orders WHERE json_extract(data,'$.agent_id')=:agent "
+            "AND julianday(json_extract(data,'$.created_at')) BETWEEN julianday(:start) AND julianday(:now)", params)}
+        # julianday narrows candidates at SQLite precision; retain exact datetime
+        # boundaries for historical records with sub-millisecond timestamps.
         cohort = {oid for oid, obj in orders.items() if start <= datetime.fromisoformat(obj["created_at"]) <= now}
         actions = {oid: {} for oid in orders}
-        hard, last_rejection, last_refusal = set(), None, None
-        for r in conn.execute("SELECT * FROM audit ORDER BY id"):
+        # Audit timestamps are written in UTC. Aggregate lifetime dates in SQL so
+        # old target history is never loaded/decoded for a short-window request.
+        dates = conn.execute(OWNED_AUDIT + """
+            SELECT MAX(CASE WHEN a.action='REJECT' OR
+                            (a.action='PLACE_ORDER' AND json_extract(a.data,'$.outcome')='REJECTED')
+                       THEN a.ts END) AS rejection,
+                   MAX(CASE WHEN (a.action IN ('APPROVE_FAILED','PLACE_ORDER_FAILED','CREATE_QUOTE_FAILED') OR
+                            (a.action='PLACE_ORDER' AND json_extract(a.data,'$.outcome')='REJECTED'))
+                            AND EXISTS (SELECT 1 FROM json_each(a.data,'$.rule_hits') h
+                                        WHERE json_extract(h.value,'$.rule')='hard_constraint_violation')
+                       THEN a.ts END) AS refusal
+            FROM owned_audit own JOIN audit a ON a.id=own.id
+            WHERE julianday(a.ts)<=julianday(:now)
+            """, params).fetchone()
+        last_rejection = datetime.fromisoformat(dates["rejection"]) if dates["rejection"] else None
+        last_refusal = datetime.fromisoformat(dates["refusal"]) if dates["refusal"] else None
+        hard = set()
+        for r in conn.execute(OWNED_AUDIT + """
+            SELECT a.* FROM owned_audit own JOIN audit a ON a.id=own.id
+            WHERE julianday(a.ts) BETWEEN julianday(:start) AND julianday(:now)
+            ORDER BY a.id
+            """, params):
             ts = datetime.fromisoformat(r["ts"])
-            if ts > now:
+            if not start <= ts <= now:
                 continue
             data = json.loads(r["data"])
             oid = r["order_id"]
-            own = oid in orders or r["actor"] == f"agent:{agent_id}"
-            if not own and r["quote_id"]:
-                quote = conn.execute("SELECT data FROM quotes WHERE id=?", (r["quote_id"],)).fetchone()
-                own = bool(quote and json.loads(quote[0]).get("agent_id") == agent_id)
-            if not own:
-                continue
             if oid in actions:
                 actions[oid].setdefault(r["action"], []).append(ts)
-            rejected = r["action"] == "REJECT" or (r["action"] == "PLACE_ORDER" and data.get("outcome") == "REJECTED")
-            if rejected:
-                last_rejection = max(last_rejection, ts) if last_rejection else ts
             hits = data.get("rule_hits", [])
-            refusal = (r["action"] in {"PLACE_ORDER", "APPROVE_FAILED", "PLACE_ORDER_FAILED", "CREATE_QUOTE_FAILED"}
+            refusal = ((r["action"] == "PLACE_ORDER" and data.get("outcome") == "REJECTED"
+                        or r["action"] in {"APPROVE_FAILED", "PLACE_ORDER_FAILED", "CREATE_QUOTE_FAILED"})
                        and any(h.get("rule") == "hard_constraint_violation" for h in hits))
             if refusal:
-                last_refusal = max(last_refusal, ts) if last_refusal else ts
-                if start <= ts:
-                    hard.add(oid or f"audit:{r['id']}")
+                hard.add(oid or f"audit:{r['id']}")
         def count(action):
             return sum(any(start <= t <= now for t in actions[oid].get(action, [])) for oid in cohort)
         unchanged = sum(bool(actions[oid].get("APPROVE")) and not actions[oid].get("EVIDENCE_CHANGED")

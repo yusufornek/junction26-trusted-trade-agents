@@ -187,6 +187,30 @@ def test_approval_replay_and_conflict(gateway, need, upstream):
         assert client.post(url, json={**body, "comment": "changed"}, headers={"Idempotency-Key": "review-key"}).status_code == 409
 
 
+@pytest.mark.parametrize("scenario", ["replay", "conflict", "stale_promotion"])
+def test_review_autonomy_idempotency(gateway, scenario):
+    from conftest import OPERATOR_HEADERS
+    url = "/v1/agents/external/autonomy"
+    promotion = {"level": "autonomous_within_limits", "reason": "Pilot reviewed"}
+    demotion = {"level": "approval_required", "reason": "Human review required"}
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        first = client.post(url, json=promotion, headers={"Idempotency-Key": "promote"})
+        assert first.status_code == 200, first.text
+        if scenario == "conflict":
+            response = client.post(url, json=demotion, headers={"Idempotency-Key": "promote"})
+            assert response.status_code == 409
+            assert response.json()["code"] == "IDEMPOTENCY_CONFLICT"
+        else:
+            if scenario == "stale_promotion":
+                assert client.post(url, json=demotion, headers={"Idempotency-Key": "demote"}).status_code == 200
+            response = client.post(url, json=promotion, headers={"Idempotency-Key": "promote"})
+            assert response.status_code == 200 and response.json() == first.json()
+            expected = "approval_required" if scenario == "stale_promotion" else "autonomous_within_limits"
+            assert gateway.policy.get().agents["external"].autonomy == expected
+    entries = [e for e in gateway.audit() if e.action == "AUTONOMY_CHANGED"]
+    assert len(entries) == (2 if scenario == "stale_promotion" else 1)
+
+
 def test_mcp_wire_correlation_metadata(gateway, need, upstream):
     server = create_server(gateway, "external")
     app = server.streamable_http_app(stateless_http=True, json_response=True)

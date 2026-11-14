@@ -814,11 +814,12 @@ credential, or structured 422 after authentication.
 
 REST and MCP use `app.commands` for principal-scoped idempotency and token costs. Order placement
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
-(optional for compatibility). Policy update/reset and signed mandate revocation accept it too.
+(optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same command and payload. Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
-audit. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
+audit. Approval/rejection replays recheck the reviewer's current organisation and customer scope
+before returning the saved order. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
 domain events commit atomically. Refusals do not cache a successful command result.
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
@@ -913,8 +914,11 @@ revision 1 with no `EVIDENCE_CHANGED` audit entry; re-approved revised evidence 
 Average approval time (seconds) covers every human-approved order in the cohort, from placement
 until approval. Shares divide by orders placed (zero for an empty cohort); unavailable averages are null.
 Hard-constraint refusals count distinct orders (or attempts with no order) refused in the time window,
-including failed approval refreshes. Last rejection/refusal dates use all available history so an
-older failure still enforces its cooldown. Replays do not add observations.
+including failed approval refreshes. A placement counts only when its outcome is `REJECTED`;
+an exception routed to and accepted by a human does not start a refusal cooldown.
+Indexed order, quote and actor ownership queries restrict audit processing to the target agent.
+Last rejection/refusal dates are SQL aggregates over that agent's lifetime history so an older
+failure still enforces its cooldown without loading historical JSON into Python. Replays do not add observations.
 
 `autonomy_recommendation {eligible, reasons[]}` checks `autonomy.promotion`:
 `min_approved_unchanged` (5), `max_rejection_share` (0.1), and
@@ -923,6 +927,8 @@ failure its cooldown passes; meeting a threshold exactly passes. Readiness never
 
 An operator or the agent's `buyer_admin` calls
 `POST /v1/agents/{id}/autonomy` with `{level, reason}` (nonblank reason required).
+An optional `Idempotency-Key` returns the original result on retry without changing authority again,
+even after a later demotion; changing the payload under the same key returns `409 IDEMPOTENCY_CONFLICT`.
 The level persists in the runtime policy using its existing atomic replacement and writer lock.
 For a VC-only agent it persists in SQLite without creating a policy mandate, so subsequent purchases
 still require a valid, unrevoked VC with its expiry and limits enforced;
@@ -934,6 +940,9 @@ accepts `--autonomy` and defaults to `approval_required`.
 A human rejection or hard-constraint refusal while autonomous appends an audited
 `autonomy.review_suggested` domain event, delivered through the existing durable event/outbox
 mechanism. This suggests review; demotion is the same endpoint with `level: approval_required`.
+For a VC-bound order, this decision uses the original signed claim and current policy/grant,
+not its placement-time effective autonomy snapshot. A restrictive buyer claim still wins;
+expired or revoked authority does not prevent human rejection and does not suggest an autonomy review.
 Spec 28's buyer view and spec 33's signed webhook delivery are not installed here. This implementation
 uses the existing spec 19/22 principals, organisation scopes, audit chain and event/outbox; it does
 not claim outbound webhook delivery. The approval endpoints expose buyer/operator signing now.
