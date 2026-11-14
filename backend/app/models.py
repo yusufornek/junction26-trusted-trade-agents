@@ -118,6 +118,29 @@ class NeedSpec(RequestScope):
     preferences: Preferences = Field(default_factory=Preferences, description="Soft preferences; differences mark substitutes and require approval by default.")
 
 
+class AnomalyFix(Model):
+    id: str
+    kind: Literal["correct_quantity", "cheaper_alternative", "split", "pause", "resume"]
+    product_id: str | None = None
+    quantity_sales_units: float | None = None
+    remainder_sales_units: float | None = None
+    description: str
+    action_url: str | None = None
+
+
+class AnomalyCheck(Model):
+    code: Literal["QUANTITY_ANOMALY", "PRICE_ANOMALY", "VELOCITY_ANOMALY", "NEW_CATEGORY"]
+    status: Literal["normal", "anomaly", "insufficient_history"]
+    product_id: str | None = None
+    observed: float | str
+    expected_band: dict[str, float] | None = None
+    band_source: Literal["statistical", "forecast"] = "statistical"
+    history_window: dict
+    unit: str
+    fixes: list[AnomalyFix] = Field(default_factory=list)
+    explanation_text: str | None = None
+
+
 class Warning(Model):
     code: str = Field(description="Stable machine-readable warning code.")
     text: str = Field(description="Human-readable explanation.")
@@ -474,6 +497,7 @@ class QuoteRequest(RequestScope):
 
 
 class Quote(Model):
+    anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Spec 45 checks, including insufficient_history and one-step proposed fixes.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     supplier_id: str = "valio"
@@ -516,6 +540,7 @@ class Execution(Model):
 
 
 class Order(Model):
+    anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Anomaly evidence rechecked under the placement lock; warnings require human approval.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     atomicity: str | None = Field(default=None, exclude_if=lambda v: v is None,
@@ -918,7 +943,8 @@ class AutonomyChangeResult(Model):
 
 PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE_UNCONFIRMED",
                       "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN",
-                      "CLINICAL_REVIEW", "SUBSTITUTION_PROFILE", "PARTIAL_BASKET"}
+                      "CLINICAL_REVIEW", "SUBSTITUTION_PROFILE", "PARTIAL_BASKET",
+                      "QUANTITY_ANOMALY", "PRICE_ANOMALY", "VELOCITY_ANOMALY", "NEW_CATEGORY"}
 
 
 class ProposalQuotas(Model):
@@ -926,7 +952,23 @@ class ProposalQuotas(Model):
     per_customer_per_week: int = Field(default=10, ge=0)
 
 
+class AnomalyPolicy(Model):
+    sensitivity: Literal["strict", "normal", "relaxed"] = "normal"
+    sensitivity_k: dict[str, float] = Field(default_factory=lambda: {"strict": 2, "normal": 3, "relaxed": 5})
+    history_days: int = Field(default=90, ge=1, le=3650)
+    price_increase_pct: float = Field(default=20, ge=0)
+    velocity_min_upper: float = Field(default=5, ge=1)
+
+    @model_validator(mode="after")
+    def valid_sensitivity(self):
+        import math
+        if self.sensitivity not in self.sensitivity_k or any(not math.isfinite(k) or k <= 0 for k in self.sensitivity_k.values()):
+            raise ValueError("Sensitivity requires a finite positive k")
+        return self
+
+
 class PolicyDocument(Model):
+    anomalies: AnomalyPolicy = Field(default_factory=AnomalyPolicy)
     proposal_quotas: ProposalQuotas = Field(default_factory=ProposalQuotas)
     autonomy: AutonomyPolicy = Field(default_factory=AutonomyPolicy)
     organisations: dict[str, Organisation] = Field(default_factory=dict)

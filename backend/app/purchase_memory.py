@@ -95,6 +95,9 @@ def remember_order(conn, order_id):
         if not need:
             need = {"customer_id": customer, "intent": line.name, "quantity": {"value": quantity, "unit": unit}}
         item = {"order_id": order_id, "customer_id": customer, "product_id": line.product_id,
+                "supplier_id": quote.supplier_id, "synthetic": quote.synthetic,
+                "timestamp": order.get("decided_at") or order["created_at"],
+                "sales_units": line.units_needed, "unit_price": line.unit_price,
                 "name": line.name, "date": (order.get("decided_at") or order["created_at"])[:10],
                 "quantity": quantity, "unit": unit, "total_paid": line.total,
                 "currency": quote.currency, "agent_id": order["agent_id"], "need": need,

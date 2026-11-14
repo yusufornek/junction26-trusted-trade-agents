@@ -1,6 +1,7 @@
 """Archive local demo state and rebuild the catalog without network calls."""
 
 import argparse
+import json
 import shutil
 import socket
 import sys
@@ -13,6 +14,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.catalog import build
 from app.config import ROOT, Settings
 from app.db import Database
+
+
+def seed_anomaly_history(db, *, now=None):
+    """90 days per demo agent/customer; synthetic memory, never fake live orders.
+
+    The demo's 1,000 L milk purchase stays inside every weekday bucket. No order,
+    quote, reservation or audit row is fabricated by the history seed.
+    """
+    now = now or datetime.now(timezone.utc)
+    with db.connect(write=True) as conn:
+        product = conn.execute("SELECT id FROM products WHERE id='464306'").fetchone()
+        if product is None:
+            return 0  # Tiny fixture catalogs need not contain the demo SKU.
+        count = 0
+        for agent in ("hotel-chain-agent", "web-console"):
+            for days_ago in range(90, 0, -1):
+                when = (now - timedelta(days=days_ago)).replace(hour=9, minute=0, second=0, microsecond=0)
+                quantity = 1000 + (when.weekday() - 3) * 5 + (days_ago % 3 - 1) * 10
+                price = .97 if days_ago > 60 else .99 if days_ago > 30 else 1.01
+                reference = f"synthetic:spec45:{agent}:{when.date()}"
+                item = {"order_id": reference, "customer_id": "1", "agent_id": agent,
+                        "product_id": "464306", "supplier_id": "valio", "synthetic": True,
+                        "name": "Valio Eila lactose-free milk 1 L", "category": "10400",
+                        "date": when.date().isoformat(), "timestamp": when.isoformat(),
+                        "quantity": quantity, "unit": "L", "sales_units": quantity,
+                        "unit_price": price, "total_paid": round(quantity * price, 2), "currency": "EUR",
+                        "environment": "live", "need": {"customer_id": "1", "intent": "lactose-free milk",
+                            "search_terms": ["milk"], "required_claims": ["FREE_FROM_LACTOSE"],
+                            "quantity": {"value": quantity, "unit": "L"}},
+                        "baseline": {"lines": [{"product_id": "464306", "quantity": quantity}],
+                                     "basket_cost": round(quantity * price, 2)}}
+                conn.execute("INSERT OR IGNORE INTO purchase_memory VALUES(?,?,?)", (reference, "1", json.dumps(item)))
+                count += 1
+        return count
 
 
 @dataclass(frozen=True)
@@ -52,7 +87,9 @@ def reset_demo(db_path, runtime_policy_path, archive_root, source, reliability_p
         if path.exists():
             shutil.move(str(path), archive_dir / path.name)
 
-    result = build(Database(db_path), source, reliability_path, carbon_path)
+    db = Database(db_path)
+    result = build(db, source, reliability_path, carbon_path)
+    seed_anomaly_history(db)
     # With no runtime policy copy, Policy.get() falls back to the committed defaults.
     return ResetResult(archive_dir=archive_dir, products=result["rows"])
 

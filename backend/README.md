@@ -1701,3 +1701,55 @@ real confirmed sandbox purchases from `sandbox/monthly_milk_history.json` (June�
 2026, roughly 1,000 L on each month's first), displays the December 1 suggestion,
 prepares it over MCP, then makes it recurring. A 60-day query horizon includes it
 on the hackathon date. Neither the demo nor tests touch `backend/var/`.
+## Anomalies (spec 45)
+
+Deterministic anomaly checks run at quotation and again inside the order-placement
+transaction. `Quote.anomalies` and `Order.anomalies` expose quantity, unit-price,
+rolling-hour velocity and first-category checks, including `normal` and
+`insufficient_history`. Every result has `observed`, `unit`, `expected_band`,
+`history_window`, `band_source` and proposed `fixes`. Fewer than four observations
+never raises an anomaly warning. History is scoped to agent **and** customer **and**
+supplier. Confirmed purchase memory and stored confirmed orders are deduplicated;
+velocity also counts pending/rejected placement attempts. Quote retries and reads
+do not count as new orders.
+
+`policy.yaml` owns `anomalies.sensitivity`, `sensitivity_k`, `history_days`,
+`price_increase_pct` and `velocity_min_upper`. Future tenant profile presets can
+fill these settings. Quantity uses unscaled median ± k·MAD; a weekday bucket wins
+when it contains at least four points, otherwise the entire history window is
+used. Category fallback uses a matching physical unit. A constant series has a
+zero-width quantity band. Price warns at **>= 20%** above the last paid sales-unit
+price by default. Velocity uses completed occupied hourly buckets with a default
+minimum upper band of five orders/hour; above the band requires approval, and at
+twice the band the agent is paused in the same transaction as the pending order.
+The pause reason and `agent.anomaly_alert` are audited and delivered to the durable
+outbox, scoped to the affected customer, with `recipient: buyer_admin` until the
+later tenant/owner governance layer supplies ownership. Subsequent mutations return
+`423 AGENT_PAUSED` with the actor, time and reason. Pending orders remain readable.
+
+The four warning codes `QUANTITY_ANOMALY`, `PRICE_ANOMALY`, `VELOCITY_ANOMALY`,
+`NEW_CATEGORY` use the existing approval journey (`WAIT_FOR_APPROVAL`, polling,
+revision, signed receipt). Apply a server-proposed correction, ranked cheaper
+alternative or split using `POST /v1/quotes/{quote_id}/anomaly-fixes/{fix_id}` or MCP
+`apply_anomaly_fix`. The result contains replacement `quotes`; each uses fresh
+price/stock and normal constraints and authority checks. No fix places or approves
+an order. The original promise expires; any pending original order is cancelled
+and its reservations released atomically. A split quotes the usual quantity and
+the remainder separately; the remainder always needs approval. Fix applications
+are audited as `ANOMALY_FIX_APPLIED`. Buyer approvers can apply scoped fixes through
+REST; pause/resume fixes point to the existing buyer-admin suspend/resume routes.
+No LLM participates in these decisions; `explanation_text` is optional wording.
+
+`scripts/reset_demo.py` also seeds 90 days of explicitly synthetic milk purchase
+memory for each demo agent/customer pair without fabricating orders or audit rows.
+Customer 1's 1,000 L / SKU 464306 / EUR 1,010 hotel-chain demo remains autonomous.
+Tests never reset `backend/var/`.
+
+Forecasting is optional and off by default. `requirements-forecast.txt` pins
+Timestral; `FORECAST_ENABLED=true` and `FORECAST_MODEL_PATH` select local official
+`mistralai/Timestral-28M` weights, loaded once on CPU at gateway construction.
+No runtime download is attempted. The `Forecaster.predict(series, horizon)` seam
+returns 0.05 and 0.95 quantiles; valid forecasts replace the quantity band and record
+`band_source: forecast`. Missing packages/weights, invalid output and inference
+errors retain `band_source: statistical`. See `docs/DEPLOY.md` for provisioning and
+the production licence prerequisite already recorded in `docs/DECISIONS.md`.

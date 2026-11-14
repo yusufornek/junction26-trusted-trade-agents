@@ -149,6 +149,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -352,6 +371,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -573,6 +611,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -818,6 +875,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -1020,6 +1096,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -1270,6 +1365,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -1488,6 +1602,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -1727,6 +1860,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -1951,6 +2103,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -2207,6 +2378,28 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+            text/html:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -2414,6 +2607,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -2727,6 +2939,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -2926,6 +3157,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -3159,6 +3409,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -3358,6 +3627,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -3591,6 +3879,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -3790,6 +4097,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -4048,6 +4374,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -4287,6 +4632,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -4506,6 +4870,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -4757,6 +5140,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -4995,6 +5397,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -5193,6 +5614,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -5466,6 +5906,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -6204,6 +6663,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -6451,6 +6929,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -6659,6 +7156,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -6916,6 +7432,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -7124,6 +7659,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -7372,6 +7926,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -7576,6 +8149,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -7820,6 +8412,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -8036,6 +8647,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -8278,6 +8908,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -8490,6 +9139,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -8733,6 +9401,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -8937,6 +9624,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -9183,6 +9889,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -9393,6 +10118,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -9644,6 +10388,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -9867,6 +10630,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -10077,6 +10859,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -10328,6 +11129,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -10550,6 +11370,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -10810,6 +11649,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -11028,6 +11886,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -11278,6 +12155,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -11490,6 +12386,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -11733,6 +12648,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -11959,6 +12893,278 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+  /v1/quotes/{quote_id}/anomaly-fixes/{fix_id}:
+    post:
+      summary: Apply a proposed anomaly fix by creating fresh quotes; never places
+        or approves
+      operationId: apply_fix_v1_quotes__quote_id__anomaly_fixes__fix_id__post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: quote_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Quote Id
+      - name: fix_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Fix Id
+      - name: Agent-Mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FixResult'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -12154,6 +13360,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -12368,6 +13593,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -12601,6 +13845,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           description: Too Many Requests
           content:
@@ -12805,6 +14068,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -13045,6 +14327,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -13263,6 +14564,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -13517,6 +14837,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -13710,6 +15049,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -13921,6 +15279,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -14173,6 +15550,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -14405,6 +15801,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -14613,6 +16028,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -14858,6 +16292,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -15077,6 +16530,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -15276,6 +16748,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -15503,6 +16994,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -15744,6 +17254,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -15953,6 +17482,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -16179,6 +17727,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -16435,6 +18002,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -16644,6 +18230,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -16901,6 +18506,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -17102,6 +18726,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -17338,6 +18981,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -17548,6 +19210,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -17792,6 +19473,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -17999,6 +19699,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -18259,6 +19978,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -18455,6 +20193,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -18718,6 +20475,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -18942,6 +20718,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -19187,6 +20982,25 @@ paths:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
         '429':
           content:
             application/problem+json:
@@ -19381,6 +21195,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -19596,6 +21429,25 @@ paths:
               description: Accepted or generated request correlation identifier.
         '422':
           description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          description: Locked
           content:
             application/problem+json:
               schema:
@@ -19843,6 +21695,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
           headers:
             X-Environment:
               schema:
@@ -20194,6 +22065,151 @@ components:
       - last_hard_constraint_refusal_at
       - autonomy_recommendation
       title: AgentTrackRecord
+    AnomalyCheck:
+      properties:
+        code:
+          type: string
+          enum:
+          - QUANTITY_ANOMALY
+          - PRICE_ANOMALY
+          - VELOCITY_ANOMALY
+          - NEW_CATEGORY
+          title: Code
+        status:
+          type: string
+          enum:
+          - normal
+          - anomaly
+          - insufficient_history
+          title: Status
+        product_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Product Id
+        observed:
+          anyOf:
+          - type: number
+          - type: string
+          title: Observed
+        expected_band:
+          anyOf:
+          - additionalProperties:
+              type: number
+            type: object
+          - type: 'null'
+          title: Expected Band
+        band_source:
+          type: string
+          enum:
+          - statistical
+          - forecast
+          title: Band Source
+          default: statistical
+        history_window:
+          additionalProperties: true
+          type: object
+          title: History Window
+        unit:
+          type: string
+          title: Unit
+        fixes:
+          items:
+            $ref: '#/components/schemas/AnomalyFix'
+          type: array
+          title: Fixes
+        explanation_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Explanation Text
+      additionalProperties: false
+      type: object
+      required:
+      - code
+      - status
+      - observed
+      - history_window
+      - unit
+      title: AnomalyCheck
+    AnomalyFix:
+      properties:
+        id:
+          type: string
+          title: Id
+        kind:
+          type: string
+          enum:
+          - correct_quantity
+          - cheaper_alternative
+          - split
+          - pause
+          - resume
+          title: Kind
+        product_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Product Id
+        quantity_sales_units:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Quantity Sales Units
+        remainder_sales_units:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Remainder Sales Units
+        description:
+          type: string
+          title: Description
+        action_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Action Url
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - kind
+      - description
+      title: AnomalyFix
+    AnomalyPolicy:
+      properties:
+        sensitivity:
+          type: string
+          enum:
+          - strict
+          - normal
+          - relaxed
+          title: Sensitivity
+          default: normal
+        sensitivity_k:
+          additionalProperties:
+            type: number
+          type: object
+          title: Sensitivity K
+        history_days:
+          type: integer
+          maximum: 3650.0
+          minimum: 1.0
+          title: History Days
+          default: 90
+        price_increase_pct:
+          type: number
+          minimum: 0.0
+          title: Price Increase Pct
+          default: 20
+        velocity_min_upper:
+          type: number
+          minimum: 1.0
+          title: Velocity Min Upper
+          default: 5
+      additionalProperties: false
+      type: object
+      title: AnomalyPolicy
     ApprovalItem:
       properties:
         order:
@@ -21153,6 +23169,26 @@ components:
       - mode
       - status
       title: Execution
+    FixResult:
+      properties:
+        quotes:
+          items:
+            $ref: '#/components/schemas/Quote'
+          type: array
+          title: Quotes
+        source_quote_id:
+          type: string
+          title: Source Quote Id
+        fix_id:
+          type: string
+          title: Fix Id
+      additionalProperties: false
+      type: object
+      required:
+      - quotes
+      - source_quote_id
+      - fix_id
+      title: FixResult
     FulfilmentPlan:
       properties:
         kind:
@@ -22141,6 +24177,13 @@ components:
       title: OfferCard
     Order:
       properties:
+        anomalies:
+          items:
+            $ref: '#/components/schemas/AnomalyCheck'
+          type: array
+          title: Anomalies
+          description: Anomaly evidence rechecked under the placement lock; warnings
+            require human approval.
         basket_ref:
           anyOf:
           - $ref: '#/components/schemas/BasketRef'
@@ -22552,6 +24595,8 @@ components:
       title: PolicyResetRequest
     PolicyResource:
       properties:
+        anomalies:
+          $ref: '#/components/schemas/AnomalyPolicy'
         proposal_quotas:
           $ref: '#/components/schemas/ProposalQuotas'
         autonomy:
@@ -23159,6 +25204,13 @@ components:
       title: QuietPeriod
     Quote:
       properties:
+        anomalies:
+          items:
+            $ref: '#/components/schemas/AnomalyCheck'
+          type: array
+          title: Anomalies
+          description: Spec 45 checks, including insufficient_history and one-step
+            proposed fixes.
         basket_ref:
           anyOf:
           - $ref: '#/components/schemas/BasketRef'

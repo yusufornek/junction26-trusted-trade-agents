@@ -71,6 +71,8 @@ EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
+EVENT_ACTIONS.update(AGENT_ANOMALY_ALERT="agent.anomaly_alert", ANOMALY_FIX_APPLIED="quote.anomaly_fixed",
+                     ANOMALY_DETECTED="quote.anomaly_detected")
 EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
