@@ -329,7 +329,7 @@ export default function Shell() {
           <Card className="mx-auto mt-10 w-full max-w-md">
             <form className="flex flex-col gap-4" onSubmit={signIn}>
               <div className="flex flex-col gap-4">
-                <LuotsiWordmark className="block h-8 w-auto self-start text-brand" />
+                <LuotsiWordmark className="block h-8 w-auto self-center text-brand" />
                 <div className="min-w-0">
                   <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
                   <p className="label">The token lives in memory only, so a reload asks again.</p>
