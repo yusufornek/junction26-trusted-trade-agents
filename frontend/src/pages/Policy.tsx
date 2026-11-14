@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Bot, RotateCcw, Save, Users } from "lucide-react";
 import { api, type AgentMandate, type PolicyDocument, type PolicyResource } from "../api";
 import { Avatar } from "../charts";
@@ -237,6 +238,17 @@ export default function Policy() {
                 An agent without a mandate can look and quote, but its orders are refused. Limits here sit on top of
                 the rules above.
               </p>
+              <p className="label mt-1">
+                New agents start{" "}
+                <strong className="text-ink">
+                  {(data.autonomy?.default ?? "approval_required") === "approval_required" ? "approval first" : "autonomous within limits"}
+                </strong>
+                . Autonomy is granted or withdrawn per agent from its track record on{" "}
+                <Link to="/agents" className="font-medium text-brand hover:underline">
+                  Agents
+                </Link>
+                , so every change is audited with the record it was based on.
+              </p>
             </div>
           </div>
           {!draft.agents || !Object.keys(draft.agents).length ? (
@@ -261,6 +273,15 @@ export default function Policy() {
                         {c}
                       </span>
                     ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="label mr-1">autonomy</span>
+                    {(m.autonomy ?? data.autonomy?.default ?? "approval_required") === "autonomous_within_limits" ? (
+                      <span className="chip bg-positive-soft text-positive">autonomous within limits</span>
+                    ) : (
+                      <span className="chip bg-warn-soft text-warn">approval first</span>
+                    )}
+                    {!m.autonomy ? <span className="text-[11px] text-ink-muted">policy default</span> : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="flex flex-col gap-1.5">

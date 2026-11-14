@@ -47,7 +47,7 @@ database.
 | `/products/:id` | Catalog facts the agent judged on: pack and units, claims and labels, allergen statuses and whether a declaration exists |
 | `/audit` | Append-only record, expandable to the raw entry payload |
 | `/policy` | The guardrails, editable: ceiling, confidence floor, warnings that need a signature or are informational, hard stops, shortlist sizes, ranking weights, **agent mandates**; standing customer constraints shown read-only |
-| `/agents` | Every agent and its mandate: customers, per-order and per-day limits, autonomous spend in the last 24 h, unregistered agents; revoke a buyer-issued VC-JWT mandate |
+| `/agents` | **Graduated autonomy (spec 40):** the approval-first → track record → autonomy path with the policy's thresholds; per agent its level, 30-day track record and recommendation, and grant / withdraw with an audited reason. Also each mandate's customers, per-order and per-day limits, autonomous spend in the last 24 h, unregistered agents, and revoking a buyer-issued VC-JWT mandate |
 | `/trust` | Audit chain head and full verification, public Polygon anchors, the published signing keys, how an outside agent connects (REST, MCP stdio, MCP HTTP) and the open standards `/v1/meta` reports |
 
 ## Conventions
@@ -69,6 +69,6 @@ database.
 
 ## Not done
 
-Auth beyond the operator token (deliberate for the demo). Graduated autonomy (spec 40) has no contract
-fields yet, so it has no screen. The dashboard derives its daily spend series from orders on the client,
-because the gateway stores events rather than a time series.
+Auth beyond the operator token (deliberate for the demo). Spec 40 R-5 (showing whether a buyer approver or
+the Valio operator signed) has no contract field yet. The dashboard derives its daily spend series from
+orders on the client, because the gateway stores events rather than a time series.

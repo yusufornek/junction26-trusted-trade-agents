@@ -5,6 +5,7 @@
  * Never imported by production builds (see MOCK in api.ts).
  */
 import type {
+  AgentTrackRecord,
   AuditEntry,
   FulfilmentPlan,
   LookupResult,
@@ -206,6 +207,8 @@ type Seed = {
   hits?: { rule: string; detail: string }[]; approver?: string; comment?: string; cancelReason?: string;
 };
 
+const AUTONOMY_HIT = { rule: "autonomy_level", detail: "This agent's orders need sign-off until autonomy is granted." };
+
 const SEEDS: Seed[] = [
   { id: "d03628db-3531-4965-b3fc-c860c80bfd6a", status: "CONFIRMED", agent: "hotel-chain-agent", minutesAgo: 60 * 26, lines: [["469330", 201]],
     hits: [{ rule: "max_auto_total_eur", detail: "Net total 1716.54 exceeds 1500.00 EUR" }, { rule: "CUTOFF_PASSED", detail: "469330: Upstream closingTime is before timeNow" }],
@@ -222,6 +225,14 @@ const SEEDS: Seed[] = [
     hits: [{ rule: "max_auto_total_eur", detail: "Net total 1597.00 exceeds 1500.00 EUR" }, { rule: "CUTOFF_PASSED", detail: "463038: Upstream closingTime is before timeNow" }] },
   { id: "c2f6b8d1-9e4a-4c7b-a3f5-6d8e0b1c2a93", status: "PENDING_APPROVAL", agent: "hotel-chain-agent", minutesAgo: 2, lines: [["469386", 120], ["464407", 400]],
     hits: [{ rule: "OUTSIDE_PREFERENCE", detail: "469386: brand Arla, preferred Valio" }] },
+  // Spec 40: a newly registered agent on the approval-first path. Small in-limit orders, all signed off unchanged
+  // so far — three of the five the promotion threshold asks for.
+  ...[60 * 70, 60 * 46, 60 * 23].map((minutesAgo, i): Seed => ({
+    id: `f1a0c3e5-7b2d-4e8f-9a1c-00000000000${i + 1}`, status: "CONFIRMED", agent: "kitchen-planner-agent", minutesAgo,
+    lines: [["464308", 300 + i * 50]], hits: [AUTONOMY_HIT], approver: "Ada", comment: "Unchanged, within budget",
+  })),
+  { id: "f1a0c3e5-7b2d-4e8f-9a1c-000000000004", status: "PENDING_APPROVAL", agent: "kitchen-planner-agent", minutesAgo: 4,
+    lines: [["464407", 400]], hits: [AUTONOMY_HIT] },
 ];
 
 const ORDERS: Order[] = SEEDS.map((s, i) => {
@@ -321,8 +332,16 @@ const POLICY: PolicyResource = {
   ranking_weights: { price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1 },
   shortlist: { catalog_pool: 40, live_max: 25 },
   agents: {
-    "hotel-chain-agent": { customer_ids: ["1"], max_auto_daily_total_eur: 5000, note: "Demo hotel-chain procurement mandate." },
-    "web-console": { customer_ids: ["1"], max_auto_daily_total_eur: 5000, note: "Operator console buyer-flow mandate." },
+    // Same as backend/policy.yaml (spec 40 R-6): the demo mandates carry autonomy so the demo still confirms alone.
+    "hotel-chain-agent": { autonomy: "autonomous_within_limits", customer_ids: ["1"], max_auto_daily_total_eur: 5000,
+      note: "autonomy granted after the pilot's approved orders (demo setting)" },
+    "web-console": { autonomy: "autonomous_within_limits", customer_ids: ["1"], max_auto_daily_total_eur: 5000,
+      note: "autonomy granted after the pilot's approved orders (demo setting)" },
+    "kitchen-planner-agent": { customer_ids: ["1"], max_auto_daily_total_eur: 1500, note: "Central-kitchen planner, registered this week." },
+  },
+  autonomy: {
+    default: "approval_required",
+    promotion: { min_approved_unchanged: 5, max_rejection_share: 0.1, days_since_last_rejection_or_refusal: 7 },
   },
   customers: {
     "1": { required_claims: ["FREE_FROM_LACTOSE"], exclude_allergens: ["AE"], note: "Hotel-chain standing procurement constraints." },
@@ -362,7 +381,7 @@ function stats(): Stats {
     top_warning_codes: [...warnings].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
     top_rule_hits: [...rules].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
     agents_seen: [
-      ...[...agents].map(([id, n]) => ({ actor: `agent:${id}`, order_count: n, registered: true, mandate_id: id === "hotel-chain-agent" ? "mandate-hotel-1" : null })),
+      ...[...agents].map(([id, n]) => ({ actor: `agent:${id}`, order_count: n, registered: id in (POLICY.agents ?? {}), mandate_id: id === "hotel-chain-agent" ? "mandate-hotel-1" : null })),
       { actor: "agent:unknown-reseller-bot", order_count: 0, registered: false, mandate_id: null },
     ],
     throttles: 0,
@@ -407,7 +426,47 @@ function product(id: string) {
   };
 }
 
-const HEAD_HASH = "9f3c1d7ab25e4c08f6e1d93b7a40c2e58b1f6d09a3e7c4b25d8f01e6a9c3b7d42";
+/** Same thresholds and wording shape as the gateway: every unmet threshold is named, and a person decides. */
+function trackRecord(agentId: string, windowDays: number): AgentTrackRecord {
+  const DAY = 86400000;
+  const since = NOW - windowDays * DAY;
+  const mine = ORDERS.filter((o) => o.agent_id === agentId && Date.parse(o.created_at) >= since);
+  const approvedUnchanged = mine.filter((o) => o.status === "CONFIRMED" && o.approver).length;
+  const rejected = mine.filter((o) => o.status === "REJECTED");
+  const lastRejection = rejected.map((o) => o.decided_at ?? o.created_at).sort().at(-1) ?? null;
+  const promo = POLICY.autonomy?.promotion ?? {};
+  const need = promo.min_approved_unchanged ?? 5;
+  const maxShare = promo.max_rejection_share ?? 0.1;
+  const quietDays = promo.days_since_last_rejection_or_refusal ?? 7;
+  const rejectionShare = mine.length ? rejected.length / mine.length : 0;
+  const reasons: string[] = [];
+  if (approvedUnchanged < need) reasons.push(`${approvedUnchanged} of ${need} orders approved unchanged`);
+  if (rejectionShare > maxShare)
+    reasons.push(`${Math.round(rejectionShare * 100)}% of orders rejected; at most ${Math.round(maxShare * 100)}% allowed`);
+  if (lastRejection && NOW - Date.parse(lastRejection) < quietDays * DAY)
+    reasons.push(`last rejection ${Math.round((NOW - Date.parse(lastRejection)) / 3600000)} h ago; ${quietDays} days without one required`);
+  return {
+    agent_id: agentId,
+    window_days: windowDays,
+    window_start: new Date(since).toISOString(),
+    window_end: new Date(NOW).toISOString(),
+    orders_placed: mine.length,
+    approved_unchanged: approvedUnchanged,
+    rejected: rejected.length,
+    expired: mine.filter((o) => o.status === "EXPIRED").length,
+    evidence_changes: 0,
+    cancellations: mine.filter((o) => o.status === "CANCELLED").length,
+    hard_constraint_refusals: 0,
+    average_approval_time_seconds: mine.some((o) => o.approver) ? 240 : null,
+    approved_unchanged_share: mine.length ? approvedUnchanged / mine.length : 0,
+    rejection_share: rejectionShare,
+    last_rejection_at: lastRejection,
+    last_hard_constraint_refusal_at: null,
+    autonomy_recommendation: { eligible: reasons.length === 0, reasons },
+  };
+}
+
+const HEAD_HASH ="9f3c1d7ab25e4c08f6e1d93b7a40c2e58b1f6d09a3e7c4b25d8f01e6a9c3b7d42";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -452,6 +511,15 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
   }
   if (p === "/v1/policy/reset") return Object.assign(POLICY, { updated_by: body.updated_by, updated_at: new Date().toISOString() });
   if (p === "/v1/mandates/revocations") return { revoked: true };
+  if ((m = p.match(/^\/v1\/agents\/([^/]+)\/track-record$/)))
+    return trackRecord(decodeURIComponent(m[1]), Number(url.searchParams.get("window_days") ?? 30));
+  if ((m = p.match(/^\/v1\/agents\/([^/]+)\/autonomy$/)) && method === "POST") {
+    const id = decodeURIComponent(m[1]);
+    const mandate = POLICY.agents?.[id];
+    if (!mandate) throw new Error(`mock: no mandate for ${id}`);
+    mandate.autonomy = body.level;
+    return { agent_id: id, level: body.level, reason: body.reason, track_record: trackRecord(id, 30) };
+  }
   if (p === "/v1/quotes" && method === "POST") {
     const plan = body.plan_ref ? PLANS[body.plan_ref.plan_index] : null;
     const lines = plan

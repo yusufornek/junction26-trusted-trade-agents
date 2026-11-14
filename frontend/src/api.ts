@@ -228,11 +228,53 @@ export type Product = {
 
 export type Health = { status: string; catalog_rows: number };
 
+/** Spec 40: every agent starts approval-first and earns autonomy from a measured track record. */
+export type AutonomyLevel = "approval_required" | "autonomous_within_limits";
+
 export type AgentMandate = {
   customer_ids: string[];
   max_auto_total_eur?: number | null;
   max_auto_daily_total_eur: number;
+  /** Missing means the policy default applies. */
+  autonomy?: AutonomyLevel | null;
   note?: string;
+};
+
+export type AutonomyPolicy = {
+  default?: AutonomyLevel;
+  promotion?: {
+    min_approved_unchanged?: number;
+    max_rejection_share?: number;
+    days_since_last_rejection_or_refusal?: number;
+  };
+};
+
+export type AgentTrackRecord = {
+  agent_id: string;
+  window_days: number;
+  window_start: string;
+  window_end: string;
+  orders_placed: number;
+  approved_unchanged: number;
+  rejected: number;
+  expired: number;
+  evidence_changes: number;
+  cancellations: number;
+  hard_constraint_refusals: number;
+  average_approval_time_seconds: number | null;
+  approved_unchanged_share: number;
+  rejection_share: number;
+  last_rejection_at: string | null;
+  last_hard_constraint_refusal_at: string | null;
+  /** A recommendation only — a person decides. `reasons` names every unmet threshold. */
+  autonomy_recommendation: { eligible: boolean; reasons: string[] };
+};
+
+export type AutonomyChangeResult = {
+  agent_id: string;
+  level: AutonomyLevel;
+  reason: string;
+  track_record: AgentTrackRecord;
 };
 
 export type PolicyResource = {
@@ -247,6 +289,7 @@ export type PolicyResource = {
   ranking_weights: { price: number; coverage: number; reliability: number; co2: number; fit: number };
   shortlist: { catalog_pool: number; live_max?: number };
   agents?: Record<string, AgentMandate>;
+  autonomy?: AutonomyPolicy;
   customers?: Record<string, { required_claims?: string[]; exclude_allergens?: string[]; note?: string }>;
   updated_at: string | null;
   updated_by: string | null;
@@ -432,6 +475,14 @@ export const api = {
     }),
   resetPolicy: (updated_by: string) =>
     call<PolicyResource>("/v1/policy/reset", { method: "POST", body: JSON.stringify({ updated_by }) }),
+  trackRecord: (agentId: string, windowDays = 30) =>
+    call<AgentTrackRecord>(`/v1/agents/${encodeURIComponent(agentId)}/track-record?window_days=${windowDays}`),
+  setAutonomy: (agentId: string, level: AutonomyLevel, reason: string) =>
+    call<AutonomyChangeResult>(`/v1/agents/${encodeURIComponent(agentId)}/autonomy`, {
+      method: "POST",
+      body: JSON.stringify({ level, reason }),
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    }),
   revokeMandate: (jwt: string) =>
     call<Record<string, unknown>>("/v1/mandates/revocations", { method: "POST", body: JSON.stringify({ jwt }) }),
   stats: (since?: string) => call<Stats>("/v1/stats" + (since ? `?since=${encodeURIComponent(since)}` : "")),
