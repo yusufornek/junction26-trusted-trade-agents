@@ -237,7 +237,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   using AND tokens. `find_offers` reports `retrieval {mode, terms_used}`: explicit `search_terms` uses
   mode `terms`, otherwise all intent words use mode `intent`. Only an empty intent search broadens
   deterministically to mode `intent_broadened`: lower-case meaningful words, with numbers, common
-  English/Finnish stop words and units removed; hyphenated words are also tried in parts. OR results
+  English/Finnish stop words and units removed (including decilitres, centilitres, litraa and kiloa);
+  hyphenated words are also tried in parts. OR results
   are ordered by most distinct terms matched, then FTS rank and product ID. Hard constraints stay
   unchanged and Decisions receives the original intent. `RETRIEVAL_BROADENED` names the tried words;
   if no products match, `no_match_reason` names them and suggests `search_terms`. Explicit terms never
@@ -280,7 +281,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   CASE sales content needs no base-unit multiplier. Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
-  `size_suspect` remains their aggregate. Legacy records without the dimension flags recompute them when used.
+  `size_suspect` remains their aggregate. Both English and Finnish names supply size evidence at build.
+  Reconciliation rechecks both names even for legacy records with missing or incorrectly false dimension flags.
   Suspect content falls back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
   uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
@@ -317,6 +319,7 @@ Old stored lookups without preferences/plans remain readable, including through 
   Legacy runtime policies without `approval.ignored_warnings` acquire the new default evidence/reject codes
   on load. Explicit current-policy edits retain their configured warning lists across reloads.
 - `purchase_total` is units needed times net sales-unit price, rounded in decimal currency arithmetic;
+  requested quantity is divided by pack size in decimal arithmetic before ceiling to the sales-unit step.
   `overbuy {amount, unit}` shows whole-pack excess. Both are explained in offer text; `unit_price` remains
   per sales unit. The price factor uses purchase total when size is known; unknown-size offers compare
   their valid per-unit prices within a separate range, retaining `SIZE_UNKNOWN` and no rank label.
@@ -406,6 +409,7 @@ can only access their own lookups, quotes, orders, cancellations and timelines. 
 return 404, and `GET /v1/orders` returns only the caller's orders. Legacy records without ownership
 are operator-only. Operators can see all objects. Approvals/rejections, the approval inbox, policy
 read/write/reset, audit and stats require the operator credential (`403 OPERATOR_REQUIRED` for agents).
+Credential and operator checks precede validation errors on every protected route, including malformed JSON.
 Operator changes use audit actor `human:operator`; typed names remain on the order/policy and in
 `data.stated_name`. The console buyer identity remains subject to its mandate and budgets.
 

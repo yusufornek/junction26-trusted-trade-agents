@@ -26,6 +26,25 @@ def test_review_written_units_are_not_search_terms(gateway, need, upstream, tmp_
     assert not result.offers and not upstream.decision_calls
 
 
+@pytest.mark.parametrize("unit", [
+    "decilitre", "decilitres", "deciliter", "deciliters",
+    "centilitre", "centilitres", "centiliter", "centiliters",
+    "litra", "litraa", "litrat", "kilo", "kiloa", "kilot",
+    "kilogramma", "kilogrammaa", "gramma", "grammaa",
+    "millilitra", "millilitraa", "desilitra", "desilitraa", "senttilitra", "senttilitraa",
+])
+def test_review_measurement_words_do_not_retrieve_products(gateway, need, upstream, tmp_path, unit):
+    request = intent_need(need, f"1000 {unit} of quuxfruit")
+    replace_catalog(gateway, tmp_path, [raw_product("unit", f"Milk sold in {unit}")])
+    request.exclude_allergens = []
+    assert broadened_terms(request.intent) == ["quuxfruit"]
+    result = gateway.find_offers(request)
+    assert result.retrieval.terms_used == ["quuxfruit"]
+    assert result.matched_count == result.screened_count == result.priced_count == 0
+    assert not result.offers and not upstream.decision_calls
+    assert not upstream.price_calls and not upstream.availability_calls
+
+
 def test_review_long_broadening_does_not_hit_sqlite_limit(gateway, need, upstream):
     from fastapi.testclient import TestClient
     from app.api import create_app

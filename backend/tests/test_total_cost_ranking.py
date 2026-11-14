@@ -33,6 +33,13 @@ def total_case(gateway, need, upstream, tmp_path, *, amount=1001, pack_size=5, p
     return {o.product_id: o for o in result.offers}
 
 
+def test_review_exact_decimal_packs(gateway, need, upstream, tmp_path):
+    offer = total_case(gateway, need, upstream, tmp_path, amount=2.1, pack_size=0.3, pack_price=1)["b"]
+    assert (offer.units_needed, offer.purchase_total, offer.overbuy.amount) == (7, 7, 0)
+    assert "7.00 EUR" in " ".join(offer.matched_because)
+    assert "overbuy: 0 L" in " ".join(offer.matched_because)
+
+
 def test_ac_1_purchase_totals_and_overbuy_use_whole_packs(gateway, need, upstream, tmp_path):
     offers = total_case(gateway, need, upstream, tmp_path)
     a, b = offers["a"], offers["b"]

@@ -44,6 +44,12 @@ INTENT_STOP_WORDS = frozenset({
     "of", "for", "the", "a", "an", "and", "with", "to", "by", "per",
     "litre", "litres", "liter", "liters", "l", "kg", "g", "ml", "dl", "cl", "pcs", "kpl",
     "kilogram", "kilograms", "gram", "grams", "millilitre", "millilitres", "milliliter", "milliliters",
+    "decilitre", "decilitres", "deciliter", "deciliters",
+    "centilitre", "centilitres", "centiliter", "centiliters",
+    "litra", "litraa", "litrat", "kilo", "kiloa", "kilot",
+    "kilogramma", "kilogrammaa", "kilogrammat", "gramma", "grammaa", "grammat",
+    "millilitra", "millilitraa", "millilitrat", "desilitra", "desilitraa", "desilitrat",
+    "senttilitra", "senttilitraa", "senttilitrat",
     "ja", "tai", "sekä",
 })
 
@@ -107,12 +113,11 @@ def reconcile_size(product, price, requested_unit):
     content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
     sales_content = product.sales_volume_l if requested_unit == "L" else product.sales_net_weight_kg
     suspect = product.volume_suspect if requested_unit == "L" else product.weight_suspect
-    if suspect is None:
-        # Older product JSON only has a product-wide flag. Recompute each dimension using the
-        # retained evidence instead of letting a bad volume discard a valid weight (or vice versa).
-        names = [product.name_en, product.name_fi]
-        suspect = suspect_content(content, names, requested_unit) or suspect_content(
-            sales_content / (multiplier or 1) if sales_content is not None else None, names, requested_unit)
+    # Recheck retained evidence even when an older build stored False after checking only English.
+    # Keep each dimension independent so a bad volume does not discard a valid weight (or vice versa).
+    names = [product.name_en, product.name_fi]
+    suspect = bool(suspect) or suspect_content(content, names, requested_unit) or suspect_content(
+        sales_content / (multiplier or 1) if sales_content is not None else None, names, requested_unit)
     if not suspect and sales_content and sales_content > 0:
         exact["catalog"] = sales_content  # CASE content already describes one sales unit.
     if multiplier is not None and multiplier > 0:
@@ -201,7 +206,7 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
 def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, reserved_amount=0, sources=None):
     size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
-        round_quantity(need.quantity.value / size, product) if size else None)
+        round_quantity(Decimal(str(need.quantity.value)) / Decimal(str(size)), product) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount, product.sales_unit)
     warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}

@@ -51,6 +51,32 @@ def test_review_malformed_cancellation_authenticates_before_audit(client, gatewa
         assert gateway.audit()[-1].action == "CANCEL_FAILED"
 
 
+@pytest.mark.parametrize("method,path,operator_only", [
+    ("post", "/v1/offers", False),
+    ("post", "/v1/quotes", False),
+    ("post", "/v1/orders", False),
+    ("post", "/v1/mandates/revocations", False),
+    ("post", "/v1/orders/missing/cancel", False),
+    ("post", "/v1/approvals/missing/approve", True),
+    ("post", "/v1/approvals/missing/reject", True),
+    ("put", "/v1/policy", True),
+    ("post", "/v1/policy/reset", True),
+])
+@pytest.mark.parametrize("caller", ["missing", "unknown", "agent", "operator"])
+def test_review_malformed_json_authentication(client, gateway, method, path, operator_only, caller):
+    headers = {"missing": {}, "unknown": {"Authorization": "Bearer unknown"},
+               "agent": agent_headers("agent-a"), "operator": OPERATOR_HEADERS}[caller]
+    status, code = ((401, "UNAUTHENTICATED") if caller in {"missing", "unknown"} else
+                    (403, "OPERATOR_REQUIRED") if operator_only and caller == "agent" else
+                    (422, "VALIDATION_ERROR"))
+    response = client.request(method, path, content="{", headers={**headers, "Content-Type": "application/json"})
+    assert (response.status_code, response.json()["code"]) == (status, code)
+    if status == 401:
+        assert response.headers["www-authenticate"] == "Bearer"
+    if status in {401, 403}:
+        assert not gateway.audit()
+
+
 def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
@@ -60,10 +86,11 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
             for headers in ({}, {"Authorization": "Bearer unknown"}, {"X-Agent-Id": "agent-a"},
                             {"Authorization": "Basic unknown"}):
-                response = client.request(method, url, json={}, headers=headers)
-                assert response.status_code == 401, (method, path, response.text)
-                assert response.json()["code"] == "UNAUTHENTICATED"
-                assert response.headers["www-authenticate"] == "Bearer"
+                for payload in ({"json": {}}, {"content": "{", "headers": {**headers, "Content-Type": "application/json"}}):
+                    response = client.request(method, url, **({"headers": headers} | payload))
+                    assert response.status_code == 401, (method, path, response.text)
+                    assert response.json()["code"] == "UNAUTHENTICATED"
+                    assert response.headers["www-authenticate"] == "Bearer"
     for url in ("/health", "/docs", "/openapi.json", "/.well-known/jwks.json"):
         assert client.get(url).status_code == 200
     cors = client.options("/v1/offers", headers={"Origin": "http://localhost:5173",
@@ -105,8 +132,10 @@ def test_ac_3_operator_scope(client, gateway):
              ("get", "/v1/approvals", None), ("get", "/v1/audit", None),
              ("get", "/v1/stats", None), ("get", "/v1/policy", None)]
     for method, path, body in calls:
-        response = client.request(method, path, json=body, headers=agent_headers("agent-a"))
-        assert response.status_code == 403 and response.json()["code"] == "OPERATOR_REQUIRED"
+        headers = agent_headers("agent-a")
+        for payload in ({"json": body}, {"content": "{", "headers": {**headers, "Content-Type": "application/json"}}):
+            response = client.request(method, path, **({"headers": headers} | payload))
+            assert response.status_code == 403 and response.json()["code"] == "OPERATOR_REQUIRED"
 
 
 def test_ac_4_object_ownership(client, gateway, need, upstream):

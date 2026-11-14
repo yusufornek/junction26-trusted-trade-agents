@@ -55,16 +55,29 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
+        # JSON decoding can fail before FastAPI resolves dependencies. Apply the matched route's
+        # existing credential/operator guards first, without duplicating its authorization policy.
+        route = request.scope.get("route")
+        dependencies = [getattr(route, "dependant", None)]
+        guards = set()
+        while dependencies:
+            dependency = dependencies.pop()
+            if dependency is not None:
+                if dependency.call in (resolve_principal, require_operator):
+                    guards.add(dependency.call)
+                dependencies.extend(dependency.dependencies)
+        if guards:
+            try:
+                principal = getattr(request.state, "principal", None)
+                if principal is None:
+                    principal = resolve_principal(request, await bearer(request))
+                if require_operator in guards:
+                    require_operator(principal)
+            except DomainError as auth_error:
+                return await domain_error(request, auth_error)
         # Omit input values from errors, retaining the field location and explanation.
         message = "; ".join(f"{'.'.join(str(v) for v in e['loc'])}: {e['msg']}" for e in error.errors())
-        if getattr(request.scope.get("route"), "path", None) == "/v1/orders/{order_id}/cancel":
-            # Invalid JSON can precede dependency resolution. Authenticate before auditing or
-            # reporting validation, preserving spec19's 401 for missing/unknown credentials.
-            if getattr(request.state, "principal", None) is None:
-                try:
-                    resolve_principal(request, await bearer(request))
-                except DomainError as auth_error:
-                    return await domain_error(request, auth_error)
+        if getattr(route, "path", None) == "/v1/orders/{order_id}/cancel":
             # Blocking SQLite write: keep it off the event loop, and never let an audit failure replace the 422.
             try:
                 await run_in_threadpool(audit_cancel_validation, request, error.body, message)

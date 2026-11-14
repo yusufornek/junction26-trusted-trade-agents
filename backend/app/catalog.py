@@ -74,14 +74,14 @@ def extract(raw, reliability, carbon):
     volumes, weights = {"LTR": 1, "MLT": .001, "CLT": .01}, {"KGM": 1, "GRM": .001}
     volume_l, weight_kg = content(base, "volume", volumes), content(base, "netWeight", weights)
     case_l, case_kg = content(case, "volume", volumes), content(case, "netWeight", weights)
-    name = localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi")
-    suspicion = {"L": suspect_content(volume_l, [name], "L"),
-                 "KG": suspect_content(weight_kg, [name], "KG")}
+    names = [localized(synkka.get("names"), language) for language in ("en", "fi")]
+    suspicion = {"L": suspect_content(volume_l, names, "L"),
+                 "KG": suspect_content(weight_kg, names, "KG")}
     multiplier = next((number(u.get("sizeInBaseUnits")) for u in raw.get("units") or []
                        if u.get("unitId") == raw.get("salesUnit")), 1) or 1
     for value, unit in ((case_l, "L"), (case_kg, "KG")):
         per_base = value / multiplier if value is not None else None
-        suspicion[unit] |= suspect_content(per_base, [name], unit)
+        suspicion[unit] |= suspect_content(per_base, names, unit)
     statuses, declaration = {}, False
     for group in ("allergen", "nonAllergen"):
         for entry in grouped.get(group, []):

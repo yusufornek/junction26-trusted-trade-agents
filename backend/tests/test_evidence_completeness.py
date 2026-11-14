@@ -92,6 +92,43 @@ def codes(offer):
     return {w.code for w in offer.warnings}
 
 
+@pytest.mark.parametrize("packaging", ["BASE_UNIT_OR_EACH", "CASE"])
+@pytest.mark.parametrize("unit,field,catalog_unit", [("L", "volume", "LTR"), ("KG", "netWeight", "KGM")])
+@pytest.mark.parametrize("stored", ["current", "legacy_false", "legacy_missing"])
+def test_review_finnish_size_evidence(gateway, tmp_path, packaging, unit, field, catalog_unit, stored):
+    from app.lookup import reconcile_size
+    row = raw_product("localized", "Milk", multiplier=2)
+    row["synkkaData"]["names"][1]["value"] = f"Maito 1 {'l' if unit == 'L' else 'kg'}"
+    row["synkkaData"]["unitConversions"] = [
+        {"synkkaPackagingType": packaging, field: {"value": 20 if packaging == "CASE" else 10, "unit": catalog_unit}}]
+    rebuild_catalog(gateway, tmp_path, [row])
+    product = gateway.catalog.get("localized")
+    if stored == "current":
+        assert product.size_suspect
+        assert getattr(product, "volume_suspect" if unit == "L" else "weight_suspect")
+    else:
+        data = product.model_dump()
+        for key in ("size_suspect", "volume_suspect", "weight_suspect"):
+            if stored == "legacy_missing":
+                data.pop(key)
+            else:
+                data[key] = False
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE products SET data=? WHERE id=?", (json.dumps(data), product.id))
+        product = gateway.catalog.get(product.id)
+    size, source, confirmed, warnings = reconcile_size(product, {}, unit)
+    assert (size, source, confirmed) == (2, "name_parse", False)
+    assert {w.code for w in warnings} == {"SIZE_UNCONFIRMED"}
+
+
+def test_review_ac14_requires_price_error_independently(gateway, need, upstream, monkeypatch):
+    from app import models
+    monkeypatch.setattr(models, "PROTECTED_WARNINGS", models.PROTECTED_WARNINGS - {"PRICE_ERROR"})
+    # The AC test must detect removal of the spec's explicit PRICE_ERROR protection.
+    with pytest.raises(AssertionError, match="PRICE_ERROR"):
+        test_ac_14_policy_fails_closed_and_protected_warnings_cannot_be_ignored(gateway, need, upstream)
+
+
 def mutate_response(respx_mock, upstream, endpoint, mutate):
     original = getattr(upstream, endpoint + "_response")
 
@@ -392,14 +429,16 @@ def test_ac_14_policy_fails_closed_and_protected_warnings_cannot_be_ignored(gate
         assert client.put("/v1/policy", json={"policy": policy, "updated_by": "Ada"}).status_code == 200
         offer = gateway.find_offers(need).offers[0]
         from app.lookup import warning
-        from app.models import PROTECTED_WARNINGS, Warning
+        from app.models import Warning
         for code in ("PARTIAL_STOCK", "FUTURE_UNKNOWN_WARNING"):
             offer.warnings = [Warning(code=code, text="Evidence needs review")]
             assert gateway.policy.evaluate(10, [offer]).outcome == "PENDING_APPROVAL"
-        for code in PROTECTED_WARNINGS:
+        # Literal spec15 R-14 requirements: do not derive the oracle from production validation.
+        for code in ("PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE_UNCONFIRMED",
+                     "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN"):
             body = copy.deepcopy(policy)
             body["approval"]["ignored_warnings"] = [code]
-            assert client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"}).status_code == 422
+            assert client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"}).status_code == 422, code
         policy["reject"]["on_hard_constraint_violation"] = False
         assert client.put("/v1/policy", json={"policy": policy, "updated_by": "Ada"}).status_code == 200
         offer.warnings = []
