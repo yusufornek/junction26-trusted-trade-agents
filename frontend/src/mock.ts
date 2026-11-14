@@ -307,7 +307,10 @@ const quoteFor = (o: Order): Quote => ({
 const EXTRA_AUDIT: Omit<AuditEntry, "id">[] = [];
 const CONNECTIONS: Connection[] = [
   { connection_id: "con_5d1e7a2b", agent_id: "hotel-chain-agent", client: "claude_desktop", key_prefix: "vak_3f9c",
-    created_at: ago(60 * 30), last_used_at: ago(6), revoked_at: null },
+    created_at: ago(60 * 30), last_used_at: ago(6), revoked_at: null, credential_kind: "api_key" },
+  // An operator approved ChatGPT's sign-in: no key exists, so the prefix is only a label.
+  { connection_id: "con_9a4f0c6e", agent_id: "events-buyer-agent", client: "chatgpt", key_prefix: "oauth",
+    created_at: ago(60 * 3), last_used_at: ago(40), revoked_at: null, credential_kind: "oauth" },
 ];
 
 function auditFor(): AuditEntry[] {
@@ -544,7 +547,7 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
       note: "connected from the console" });
     const key = `vak_${crypto.randomUUID().replaceAll("-", "")}`;
     const c: Connection = { connection_id: `con_${crypto.randomUUID().slice(0, 8)}`, agent_id: id, client: body.client,
-      key_prefix: key.slice(0, 8), created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+      key_prefix: key.slice(0, 8), created_at: new Date().toISOString(), last_used_at: null, revoked_at: null, credential_kind: "api_key" };
     CONNECTIONS.unshift(c);
     // The new agent "calls" a few seconds later so the Check-it-works step can be reviewed turning green.
     setTimeout(() => {

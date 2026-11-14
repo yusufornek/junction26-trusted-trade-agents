@@ -351,6 +351,8 @@ export type Connection = {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** "oauth": approved through the sign-in window (ChatGPT, claude.ai); no key, and key_prefix is just a label. */
+  credential_kind?: "api_key" | "oauth";
 };
 
 /** The key is returned once, at creation; the gateway keeps only a hash. */
