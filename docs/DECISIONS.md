@@ -2,6 +2,13 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The live server gets the synthetic purchase history without a demo reset.** `reset_demo.py` archives
+  the whole database; only its `seed_anomaly_history` step ran on the live server, after a backup. Why: anomaly
+  warnings and suggestions need history, and a reset would have removed the live orders, keys and OAuth grants.
+- 2026-11-14 — **The console shows only what the operator token can use.** Built: anomaly notes and corrections, recipe
+  basket, suggestions, suppliers, approval links. Left out until accounts land: recurring-order list and runs,
+  proposals inbox, memory preferences (buyer credentials) and sandbox scenarios (separate deployment). Why: an empty
+  list or a button that always answers 403 reads as broken in a demo.
 - 2026-11-14 — **The live address is https://luotsi.online** (bought by the user at Hostinger, pointed at the Webdock
   server): it is the public URL for MCP host checks, connection URLs and link previews. The Webdock address keeps
   serving the site for old links, but MCP answers only on luotsi.online, since the gateway allows one public host.

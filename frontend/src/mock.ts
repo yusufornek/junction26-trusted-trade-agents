@@ -5,6 +5,7 @@
  * Never imported by production builds (see MOCK in api.ts).
  */
 import type {
+  Anomaly,
   AgentTrackRecord,
   AuditEntry,
   Connection,
@@ -20,6 +21,8 @@ import type {
   TimelineStep,
   Warning,
 } from "./api";
+import { mockRepeat } from "./repeat";
+import { mockBasket } from "./basket";
 
 const NOW = Date.now();
 const ago = (min: number) => new Date(NOW - min * 60000).toISOString();
@@ -282,6 +285,16 @@ const ORDERS: Order[] = SEEDS.map((s, i) => {
     next_action: s.status === "PENDING_APPROVAL" ? "WAIT_FOR_APPROVAL" : "STOP",
   };
 });
+
+// Spec 45: the pending novobox order is far above this buyer's usual quantity; the gateway proposes a split.
+const UNUSUAL: Anomaly = {
+  code: "QUANTITY_ANOMALY", status: "anomaly", product_id: "463038", observed: 100, unit: "SALES_UNIT",
+  expected_band: { lower: 38, upper: 46, median: 42 }, band_source: "statistical",
+  history_window: { start: ago(60 * 24 * 84), end: ago(60 * 24 * 7), points: 12, weekday: 5 },
+  fixes: [{ id: "463038:split", kind: "split", product_id: "463038", quantity_sales_units: 42, remainder_sales_units: 58,
+    description: "Quote the usual quantity now and hold the remainder for human approval." }],
+};
+ORDERS.find((o) => o.id === "a41c7e90-2d58-4f3b-8e16-7c0d9b5a3f28")!.anomalies = [UNUSUAL];
 
 const quoteFor = (o: Order): Quote => ({
   id: o.quote_id,
@@ -572,6 +585,26 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     mandate.autonomy = body.level;
     return { agent_id: id, level: body.level, reason: body.reason, track_record: trackRecord(id, 30) };
   }
+  if (p === "/v1/suppliers") return [
+    { supplier_id: "valio", synthetic: false, capabilities: { currencies: ["EUR"], pricing: "sale-unit", stock: ["finite", "unknown"],
+      execution: { mode: "simulated", atomicity: "atomic", partial_acceptance: false } } },
+    { supplier_id: "nordfood", synthetic: true, capabilities: { currencies: ["EUR", "SEK"], pricing: "case; minimum case quantity", stock: ["finite"],
+      execution: { mode: "supplier_backed", atomicity: "atomic", partial_acceptance: false } } },
+  ];
+  if ((m = p.match(/^\/v1\/quotes\/([^/]+)\/anomaly-fixes\/([^/]+)$/)) && method === "POST") {
+    const source = ORDERS.find((o) => o.quote_id === m![1]);
+    if (source?.status === "PENDING_APPROVAL") source.status = "CANCELLED";
+    const fix = UNUSUAL.fixes[0];
+    const quotes = [fix.quantity_sales_units!, fix.remainder_sales_units!].map((units, i): Quote => {
+      const l = line(fix.product_id!, units);
+      const q: Quote = { id: `q-${Math.random().toString(16).slice(2, 10)}`, customer_id: "1", deliver_by: DELIVER_BY, need_ref: LOOKUP_ID,
+        status: "OPEN", created_at: new Date().toISOString(), expires_at: ahead(30), lines: [l], total: l.total ?? 0, currency: "EUR",
+        hard_constraint_violations: [], live_calls: { price: 1, availability: 1 }, anomalies: i ? [{ ...UNUSUAL, observed: units, fixes: [] }] : [] };
+      QUOTES.set(q.id, q);
+      return q;
+    });
+    return { source_quote_id: m[1], fix_id: decodeURIComponent(m[2]), quotes };
+  }
   if (p === "/v1/quotes" && method === "POST") {
     const plan = body.plan_ref ? PLANS[body.plan_ref.plan_index] : null;
     const lines = plan
@@ -636,6 +669,11 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     const all = auditFor();
     const order = url.searchParams.get("order_id");
     return order ? all.filter((e) => e.order_id === order) : all;
+  }
+  // Pages added later keep their fixtures beside their own API module.
+  for (const handle of [mockRepeat, mockBasket]) {
+    const result = handle(method, p, body);
+    if (result !== undefined) return result;
   }
   throw new Error(`mock: no fixture for ${method} ${p}`);
 }

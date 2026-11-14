@@ -90,6 +90,10 @@ const RULE_LABELS: Record<string, string> = {
   SALES_BLOCK: "Blocked for sale",
   RETRIEVAL_BROADENED: "Search broadened",
   POOL_TRUNCATED: "Partly screened",
+  QUANTITY_ANOMALY: "Unusual quantity",
+  PRICE_ANOMALY: "Unusual price",
+  VELOCITY_ANOMALY: "Unusually many orders",
+  NEW_CATEGORY: "New kind of product",
 };
 
 /** What a person reads instead of a code; any other code in sentence case ("NOT_AVAILABLE" → "Not available").

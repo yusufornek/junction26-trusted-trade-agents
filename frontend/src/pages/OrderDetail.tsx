@@ -13,7 +13,8 @@ import {
   Ticket,
   X,
 } from "lucide-react";
-import { ApiError, api, type TimelineStep } from "../api";
+import { ApiError, api, type Quote, type TimelineStep } from "../api";
+import { ANOMALY_CODES, AnomalyNotes, CorrectedQuotes } from "../anomalies";
 import { Avatar } from "../charts";
 import {
   Card,
@@ -63,6 +64,8 @@ export default function OrderDetail() {
   const timeline = useAsync(() => api.timeline(id), [id], 5000);
   // Which codes reject outright, so a rejection by policy can lead with the rule that decided it.
   const policy = useAsync(() => api.policy(), []);
+  /** Fresh quotes from an anomaly correction on this order; the order itself is cancelled by it. */
+  const [corrected, setCorrected] = useState<Quote[] | null>(null);
   const quoteId = order.data?.quote_id;
   // What else the agent considered: the lookup behind this order's quote still holds the ranked offers.
   const alternatives = useAsync(async () => {
@@ -287,6 +290,15 @@ export default function OrderDetail() {
                       : `cancelled by ${o.cancelled_by ?? "an operator"}`}
               </p>
             ) : null}
+            <AnomalyNotes
+              anomalies={o.anomalies}
+              quoteId={o.status === "PENDING_APPROVAL" ? o.quote_id : undefined}
+              onFixed={(quotes) => {
+                setCorrected(quotes);
+                order.reload();
+              }}
+            />
+            {corrected ? <CorrectedQuotes quotes={corrected} /> : null}
             {o.policy?.hits.length ? (
               <>
                 {/* A rejection leads with the rule that decided it; the other rules would only have asked for a human. */}
@@ -297,7 +309,10 @@ export default function OrderDetail() {
                   <div className="flex flex-col gap-2">
                     {decisive.length ? <span className="label">Also flagged</span> : null}
                     <ul className="flex flex-col gap-2 text-[13px]">
-                      {flagged.map((h) => (
+                      {flagged
+                        // Shown above as a sentence; the hit repeats it with the band as a raw dictionary.
+                        .filter((h) => !ANOMALY_CODES.has(h.rule))
+                        .map((h) => (
                         <li key={h.rule + h.detail} className="rounded-[var(--radius-tile)] bg-warn-soft p-2.5">
                           <strong className="text-warn" title={h.rule}>
                             {ruleLabel(h.rule)}

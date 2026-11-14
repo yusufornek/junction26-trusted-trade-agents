@@ -11,6 +11,7 @@ import {
   type Quote,
   type Warning,
 } from "../api";
+import { ANOMALY_CODES, AnomalyNotes, CorrectedQuotes } from "../anomalies";
 import { Progress } from "../charts";
 import {
   Card,
@@ -82,6 +83,9 @@ const FACTOR_STYLE: Record<string, string> = {
   fit: "bg-warn",
 };
 
+/** The contract's third unit is the product's own sales unit; a person calls that a pack. */
+const unitName = (unit?: string | null) => (unit === "SALES_UNIT" ? "packs" : (unit ?? ""));
+
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 export default function Buyer() {
@@ -90,6 +94,8 @@ export default function Buyer() {
   const [lookup, setLookup] = useState<LookupResult | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
+  /** The fresh quotes an anomaly correction returned; they replace the quote they came from. */
+  const [corrected, setCorrected] = useState<Quote[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   /** product_id → sales units. Several offers can be split across one quote when no single one covers the need. */
@@ -97,8 +103,14 @@ export default function Buyer() {
   // The quote and the order render below the whole offer list; without this, "Quote this plan" looks like it did nothing.
   const quoteRef = useRef<HTMLDivElement>(null);
   const orderRef = useRef<HTMLDivElement>(null);
-  useEffect(() => quoteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), [quote]);
-  useEffect(() => orderRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), [order]);
+  // Block bodies on purpose: newer Chromium returns a Promise from scrollIntoView, and React treats anything an
+  // effect returns as its clean-up, so the next quote crashed the page with "destroy is not a function".
+  useEffect(() => {
+    quoteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [quote]);
+  useEffect(() => {
+    orderRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [order]);
 
   const guard = async (stage: string, fn: () => Promise<void>) => {
     setBusy(stage);
@@ -119,6 +131,7 @@ export default function Buyer() {
     guard("search", async () => {
       setQuote(null);
       setOrder(null);
+      setCorrected(null);
       setCart({});
       setLookup(await api.offers(need));
     });
@@ -137,6 +150,7 @@ export default function Buyer() {
   const lockCart = () =>
     guard("quote", async () => {
       setOrder(null);
+      setCorrected(null);
       setQuote(
         await api.createQuote({
           customer_id: need.customer_id,
@@ -153,6 +167,7 @@ export default function Buyer() {
   const lockPlan = (index: number) =>
     guard("plan:" + index, async () => {
       setOrder(null);
+      setCorrected(null);
       setCart({});
       setQuote(
         await api.createQuote({
@@ -220,6 +235,8 @@ export default function Buyer() {
                 </option>
                 <option value="L">L</option>
                 <option value="KG">KG</option>
+                {/* For goods counted, not measured: chocolate boxes asked for in litres came back unconvertible. */}
+                <option value="SALES_UNIT">packs</option>
               </select>
             </div>
           </label>
@@ -279,7 +296,7 @@ export default function Buyer() {
                 />
               </label>
               <label className="flex flex-col gap-1.5">
-                <span className="label">Pack size{need.quantity.unit ? ` (${need.quantity.unit})` : ""} min – max</span>
+                <span className="label">Pack size{need.quantity.unit ? ` (${unitName(need.quantity.unit)})` : ""} min – max</span>
                 <div className="flex gap-2">
                   <input
                     className="field"
@@ -309,7 +326,7 @@ export default function Buyer() {
           <button className="btn-dark" onClick={search} disabled={busy === "search" || needsQuantity}>
             {busy === "search" ? "Searching…" : "Find offers"}
           </button>
-          {needsQuantity ? <span className="label">Enter how much is needed, in litres or kilograms.</span> : null}
+          {needsQuantity ? <span className="label">Enter how much is needed, in litres, kilograms or packs.</span> : null}
           {lookup ? <LookupSummary lookup={lookup} /> : null}
         </div>
       </Card>
@@ -384,7 +401,7 @@ export default function Buyer() {
                 {cartOffers.length} line{cartOffers.length > 1 ? "s" : ""} selected
               </div>
               <div className="label">
-                covers {num(cartCovered)} of {num(asked.value)} {asked.unit}
+                covers {num(cartCovered)} of {num(asked.value)} {unitName(asked.unit)}
                 {cartCovered < asked.value ? (
                   <span className="text-warn"> · {num(asked.value - cartCovered)} short</span>
                 ) : (
@@ -430,6 +447,17 @@ export default function Buyer() {
 
           {quote.warnings?.length ? <WarningChips warnings={quote.warnings} /> : null}
 
+          <AnomalyNotes
+            anomalies={quote.anomalies}
+            quoteId={quote.id}
+            onFixed={(quotes) => {
+              // The correction cancelled this quote and any order waiting on it.
+              setCorrected(quotes);
+              setQuote(null);
+              setOrder(null);
+            }}
+          />
+
           {quote.hard_constraint_violations.length ? (
             <div className="rounded-[var(--radius-tile)] bg-negative-soft p-3 text-[12px] text-negative">
               {quote.hard_constraint_violations.join(" · ")}
@@ -458,6 +486,8 @@ export default function Buyer() {
         </div>
       ) : null}
 
+      {corrected ? <CorrectedQuotes quotes={corrected} /> : null}
+
       {order ? (
         <div ref={orderRef} className="card flex scroll-mb-4 flex-col gap-3 p-5">
           <div className="flex items-baseline gap-3">
@@ -470,6 +500,7 @@ export default function Buyer() {
                   : "Order " + order.status.toLowerCase()}
             </h2>
           </div>
+          <AnomalyNotes anomalies={order.anomalies} />
           {/* A rejection leads with the rule that decided it; the other rules would only have asked for a human. */}
           {decisive.map((h) => (
             <RejectionReason key={h.rule + h.detail} hit={h} />
@@ -478,7 +509,10 @@ export default function Buyer() {
             <div className="flex flex-col gap-1.5">
               {decisive.length ? <span className="label">Also flagged</span> : null}
               <ul className="flex flex-col gap-1.5 text-[13px]">
-                {flagged.map((h) => (
+                {flagged
+                  // Shown above as a sentence; the hit repeats it with the band as a raw dictionary.
+                  .filter((h) => !ANOMALY_CODES.has(h.rule))
+                  .map((h) => (
                   <li key={h.rule + h.detail} className="flex gap-2">
                     <Zap size={14} className="mt-0.5 shrink-0 text-warn" />
                     <span>
@@ -615,7 +649,7 @@ function PlanCard({
               {offersById.get(l.product_id)?.name ?? `#${l.product_id}`}
             </Link>
             <span className="num shrink-0 text-ink-muted">
-              {num(l.covers.value)} {l.covers.unit}
+              {num(l.covers.value)} {unitName(l.covers.unit)}
             </span>
           </li>
         ))}
@@ -626,11 +660,11 @@ function PlanCard({
           <Progress value={covered} tone={covered >= 1 ? "positive" : "warn"} />
           <div className="flex justify-between gap-3 text-[12px] text-ink-muted">
             <span>
-              covers {num(plan.coverage.value)} {plan.coverage.unit}
+              covers {num(plan.coverage.value)} {unitName(plan.coverage.unit)}
             </span>
             {plan.uncovered.value > 0 ? (
               <span className="text-warn">
-                {num(plan.uncovered.value)} {plan.uncovered.unit} uncovered
+                {num(plan.uncovered.value)} {unitName(plan.uncovered.unit)} uncovered
               </span>
             ) : (
               <span className="text-positive">need met</span>
@@ -709,13 +743,13 @@ function OfferView({
         <div className="shrink-0 text-right">
           <div className="num text-[20px] font-semibold">{eur(o.purchase_total ?? o.total, o.currency ?? "EUR")}</div>
           <div className="label">
-            {eur(o.price_per_l_or_kg, o.currency ?? "EUR")} / {o.size_unit ?? "unit"}
+            {eur(o.price_per_l_or_kg, o.currency ?? "EUR")} / {(o.size_unit === "SALES_UNIT" ? o.sales_unit : o.size_unit) ?? "unit"}
           </div>
         </div>
       </div>
 
       <div className="rounded-[var(--radius-tile)] bg-page p-3 text-[12px] text-ink-muted">
-        {num(need.quantity.value)} {need.quantity.unit} ÷ {num(o.size_per_sales_unit, 2)} {o.size_unit}/{o.sales_unit} ={" "}
+        {num(need.quantity.value)} {unitName(need.quantity.unit)} ÷ {num(o.size_per_sales_unit, 2)} {unitName(o.size_unit)}/{o.sales_unit} ={" "}
         <strong className="text-ink">
           {num(o.units_needed)} {o.sales_unit}
         </strong>{" "}

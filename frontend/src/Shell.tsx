@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
   Bell,
+  ChefHat,
+  Repeat,
   Bot,
   ChevronDown,
   CircleHelp,
@@ -26,6 +28,8 @@ import { Card, ErrorNote, useAsync } from "./ui";
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
   { to: "/buyer", icon: Search, label: "Buyer flow" },
+  { to: "/basket", icon: ChefHat, label: "Recipe basket" },
+  { to: "/repeat", icon: Repeat, label: "Repeat buying" },
   { to: "/approvals", icon: Inbox, label: "Approvals" },
   { to: "/orders", icon: Package, label: "Orders" },
   { to: "/audit", icon: ScrollText, label: "Audit trail" },
@@ -38,6 +42,8 @@ const NAV = [
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Good day, operator", sub: "Here is what the purchasing agent did on your behalf." },
   "/buyer": { title: "Buyer flow", sub: "Describe the need, compare offers, lock a price, order." },
+  "/basket": { title: "Recipe basket", sub: "Turn a recipe and a number of portions into one priced basket." },
+  "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },
@@ -97,7 +103,9 @@ export default function Shell() {
   const approvals = useAsync(() => (signedIn ? api.approvals() : Promise.resolve([])), [signedIn], 10000);
   const head =
     TITLES[pathname] ??
-    (pathname.startsWith("/products/")
+    (pathname.startsWith("/approvals/")
+      ? TITLES["/approvals"]
+      : pathname.startsWith("/products/")
       ? { title: "Product", sub: "Catalog facts the agent judged this product on." }
       : { title: "Order", sub: "Commitment detail" });
   const range = RANGES[rangeIndex];
