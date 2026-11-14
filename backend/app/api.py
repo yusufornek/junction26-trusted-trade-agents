@@ -65,6 +65,10 @@ def create_app(gateway=None, *, settings=None, keys=None):
     from .a2a import install_routes
     app.include_router(webhook_router)
     install_routes(app)
+    from .buyer import router as buyer_router
+    from .evidence import router as evidence_router
+    app.include_router(buyer_router)
+    app.include_router(evidence_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

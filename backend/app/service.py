@@ -24,6 +24,8 @@ class Gateway:
         self.anchoring = Anchoring(self.db, self.settings.anchoring)
         self.db.on_commit = self.anchoring.trigger
         self.mandates = Mandates(self.db, self.policy, self.catalog)
+        from .buyer import Buyer
+        self.buyer = Buyer(self)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy, self.mandates)
         self.orders = Orders(self.db, self.catalog, self.valio, self.policy, self.signing, self.mandates)
         from .autonomy import Autonomy
@@ -42,6 +44,8 @@ class Gateway:
         install(self, self.policy, "update", "mutation")
         install(self, self.mandates, "revoke", "mutation")
         install(self, self.autonomy, "change", "mutation")
+        install(self, self.buyer, "control", "mutation")
+        install(self, self.buyer, "revoke", "mutation")
 
         from .webhooks import Webhooks
         self.webhooks = Webhooks(self)

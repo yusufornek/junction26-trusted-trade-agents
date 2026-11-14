@@ -40,14 +40,16 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "MANDATE_REVOKED": "mandate.revoked"}
 EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
+EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     if action == "MANDATE_REVOKED" and data.get("customer_ids") and not data.get("customer_id"):
+        scoped_data = {key: value for key, value in data.items() if key != "customer_ids"}
         for customer in data["customer_ids"]:
             for mandate in data.get("jti_revoked", []):
                 emit(conn, action, actor, ts, audit_id,
-                     {"issuer": data["issuer"], "customer_id": customer, "mandate_id": mandate, "jti_revoked": [mandate]})
+                     {**scoped_data, "customer_id": customer, "mandate_id": mandate, "jti_revoked": [mandate]})
         return
     event_type = EVENT_ACTIONS.get(action)
     if event_type is None:
@@ -58,7 +60,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":
         aggregate_id = data.get("proposal_id", aggregate_id)
-    if kind == "autonomy":
+    if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
     if aggregate_id is None:
         return  # Historical/imported audit notes do not themselves change an aggregate.
@@ -66,8 +68,9 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
-    if kind == "autonomy":
-        context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", [])}
+    if kind in {"autonomy", "agent", "mandate"}:
+        context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
+                   "organisation_id": data.get("organisation_id")}
     revision = conn.execute("SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM events WHERE aggregate_type=? AND aggregate_id=?",
                             (kind, aggregate_id)).fetchone()[0]
     event_id = obj.get("links", {}).get("event_id") if action in {"LOOKUP", "CREATE_QUOTE"} else None

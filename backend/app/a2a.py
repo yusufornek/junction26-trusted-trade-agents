@@ -358,15 +358,12 @@ class ProcurementA2A:
             terminal_state = task.status.state if task.status.state in TERMINAL else None
             if not meta.get("order_id"):
                 raise DomainError("ORDER_NOT_FOUND", "Task has no order evidence", 404)
-            evidence = shared_tool(self.gateway, principal, "get_order_evidence", {"order_id": meta["order_id"]}, mandate)
+            from .evidence import build_bundle
+            # Share the evidence core on this transaction's thread; the MCP SDK
+            # dispatches synchronous tools to a different SQLite-incompatible thread.
+            evidence = build_bundle(self.gateway, meta["order_id"], principal)[0]
             order = self.gateway.orders.get_order(meta["order_id"], principal.id)
-            quote = self.gateway.orders.get_quote(order.quote_id, principal.id)
-            artifact(task, "evidence", evidence if evidence is not None else {
-                     "order": order.model_dump(mode="json"), "quote": quote.model_dump(mode="json"),
-                     "receipt": order.receipt, "jwks": self.gateway.signing.jwks(),
-                     "audit": self.gateway.orders.timeline(order.id, principal.id).model_dump(mode="json"),
-                     "audit_checkpoint": audit.head(self.db, self.gateway.signing),
-                     "audit_url": f"/v1/orders/{order.id}/timeline"})
+            artifact(task, "evidence", evidence)
             self._order_result(conn, task, order, state=terminal_state)
 
     def create_push(self, params, principal):

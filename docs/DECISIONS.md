@@ -134,3 +134,12 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   and vault folders.
 - 2026-11-13 — Working model: Claude = advisor/orchestrator/reviewer, Codex = builder,
   Claude subagents = research/review/tests.
+
+## 2026-11-14 — Accounts, tenants and agent connections (spec 42)
+- Decision: the gateway is multi-tenant. Buyer businesses sign in with email + password (scrypt, session cookie +
+  CSRF) and connect their own agents over MCP, REST, A2A, webhooks or a tool-calling pack. Remote MCP and A2A use
+  OAuth 2.1 per the MCP authorization specification (2026-07-28, vendored), alongside API keys shown once.
+  Each tenant's approvers approve that tenant's orders; Valio staff work as `platform_admin` across tenants.
+- Why: the challenge is about outside agents buying on behalf of real businesses; a connection must be bound to
+  exactly one account, and a buyer business owns its approvals. Gökalp chose OAuth + API keys, all connection
+  types, tenant approvers and email + password.

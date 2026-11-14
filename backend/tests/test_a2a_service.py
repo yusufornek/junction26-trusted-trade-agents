@@ -79,7 +79,7 @@ def test_ac_1_card_valid_1_0_bearer_shared_skills(gateway):
 def test_ac_2_lookup_selection_placement_and_state_artifacts(gateway, need, upstream, monkeypatch):
     async def run():
         small = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10})})
-        async with sdk(gateway) as (client, _, _):
+        async with sdk(gateway) as (client, http, _):
             task = await lookup(client, small)
             assert task.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED
             offers = artifact_data(task, "offers")
@@ -93,7 +93,15 @@ def test_ac_2_lookup_selection_placement_and_state_artifacts(gateway, need, upst
             assert artifact_data(task, "order")["status"] == "CONFIRMED"
             assert artifact_data(task, "receipt")["receipt"]
             task = (await client.send_message(command("get_evidence", "evidence", task))).task
-            assert artifact_data(task, "evidence")["quote"]["signature"]
+            evidence = artifact_data(task, "evidence")
+            assert evidence["order_id"] == artifact_data(task, "order")["id"]
+            assert evidence["signature"] and evidence["supplier_acceptance"] == "simulated"
+            quote_file = next(file for file in evidence["files"] if file["name"] == "quote.json")
+            quote_response = await http.get(quote_file["href"])
+            assert quote_response.status_code == 200
+            assert quote_response.json()["signature"]
+            from hashlib import sha256
+            assert sha256(quote_response.content).hexdigest() == quote_file["sha256"]
             states = [json.loads(r["payload"])["task"]["status"]["state"] for r in gateway.a2a.updates(task.id, Principal("external"))]
             assert "TASK_STATE_WORKING" in states and states[-1] == "TASK_STATE_COMPLETED"
             # Missing request details are an interactive task, not a server crash.

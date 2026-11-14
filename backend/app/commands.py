@@ -41,6 +41,10 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             require_operator(principal)
     elif route == "mandates.revoke":
         gateway.mandates.authorize_revocation(conn, arguments["token"])
+    elif route == "buyer.control":
+        gateway.buyer.authorize_control(arguments["agent_id"], principal or arguments["principal"])
+    elif route == "buyer.revoke":
+        gateway.buyer.authorize_revocation(arguments["jti"], principal or arguments["principal"])
     elif route in {"webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}:
         hooks = gateway.webhooks
         if route == "webhooks.create":
@@ -107,6 +111,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                           "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
+                           "buyer.control", "buyer.revoke",
                           "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"})
 
 
@@ -136,7 +141,7 @@ def matches_command(previous, digest, name, route, arguments, saved):
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "webhooks") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")
@@ -160,6 +165,9 @@ def install(gateway, target, name, category):
         arguments = bound.arguments
         principal = PRINCIPAL.get() or arguments.get("principal")
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
+        if category != "read" and (principal is None or principal.kind == "agent"):
+            from .buyer import check_suspension
+            check_suspension(gateway.db, identity)
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         digest = fingerprint(scope, route, arguments)

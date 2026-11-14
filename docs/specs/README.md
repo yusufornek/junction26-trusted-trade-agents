@@ -49,5 +49,6 @@ change or extend.
 | 39 | [Organiser answers](39-organiser-answers.md) | Whole units, unknown availability, not available, cut-off text, honour 429 | in progress |
 | 40 | [Graduated autonomy](40-graduated-autonomy.md) | Approval first, autonomy earned from a measured track record | in progress |
 | 41 | [Purchase memory](41-purchase-memory.md) | Remember purchase rhythms, suggest replenishment, turn patterns into recurring workflows over MCP | in progress |
+| 42 | [Accounts, tenants and agent connections](42-accounts-and-agent-connections.md) | Buyer businesses sign in and bind their own agents over MCP (OAuth or key), REST, A2A, webhooks or tool packs; strict tenant isolation | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .
