@@ -242,7 +242,7 @@ class Catalog:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
     def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
-               removed_by=None, mode="and", counts=None, sources=None):
+               removed_by=None, mode="and", counts=None, sources=None, categories=None):
         """Keep the (products, excluded) API; optional counts includes every hard-filter match.
 
         OR retrieval orders by distinct terms matched, then FTS rank and product ID.
@@ -280,6 +280,8 @@ class Catalog:
                 "WHERE products_fts MATCH ? ORDER BY " + order + "bm25(products_fts), p.id", (*params, expression))
             for row in rows:
                 p = Product.model_validate_json(row["data"])
+                if categories is not None and p.category not in categories:
+                    continue
                 failures = constraint_failures(p, required_claims, exclude_allergens)
                 if failures:
                     excluded += 1

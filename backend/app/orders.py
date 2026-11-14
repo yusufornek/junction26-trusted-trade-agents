@@ -66,9 +66,26 @@ class Orders:
         check_owner(SimpleNamespace(agent_id=raw.get("agent_id")), agent_id, "QUOTE_NOT_FOUND")
         try:
             verify_jws(raw["signature"], quote_payload(raw), self.signing.jwks())
-            return Quote.model_validate(raw)
+            quote = Quote.model_validate(raw)
+            if (quote.expires_at.utcoffset() is None or quote.currency != "EUR" or
+                    any(line.currency != quote.currency for line in quote.lines)):
+                raise ValueError("Inconsistent quote promise")
+            if quote.need_ref:
+                bound = self.lookup_need(conn, quote.need_ref)
+                if bound.need.customer_id != quote.customer_id or bound.need.deliver_by != quote.deliver_by:
+                    raise ValueError("Inconsistent need binding")
+            # A legacy absence is allowed only when itself authenticated by the
+            # immutable payload. _violations still enforces current customer rules.
+            return quote
         except (InvalidSignature, ValueError, TypeError, KeyError, AttributeError):
             raise DomainError("QUOTE_SIGNATURE_INVALID", "Stored quote signature does not match its promise") from None
+
+    @staticmethod
+    def lookup_need(conn, need_ref):
+        row = conn.execute("SELECT data FROM lookups WHERE id=?", (need_ref,)).fetchone()
+        if row is None:
+            raise ValueError("Missing need binding")
+        return LookupResult.model_validate_json(row[0], context={"stored": True})
 
     def _run(self, action, actor, inputs, operation):
         counter = RequestCounter()
@@ -121,6 +138,8 @@ class Orders:
                     # Malformed signed fields must reach placement's explicit
                     # signature refusal rather than crashing its expiry sweep.
                     continue
+                if quote.expires_at.utcoffset() is None:
+                    continue  # Historical records still load; placement audits signature refusal.
                 if quote.expires_at <= now:
                     quote.status = "EXPIRED"
                     self._save_quote(conn, quote)
@@ -239,6 +258,21 @@ class Orders:
         with self.db.connect(write=True) as conn:
             policy = self.policy.get()
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=?", (key,)).fetchone()
+            if existing:
+                order = Order.model_validate_json(existing["data"])
+                quote = check_owner(self._quote(conn, quote_id), None if operator else agent_id, "QUOTE_NOT_FOUND")
+                if order.quote_id != quote_id or order.agent_id != agent_id:
+                    raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent")
+                # Replay commits no new purchase. Historical signatures/retired keys
+                # must not prevent it, but current buyer authority still applies.
+                bound = ("order", order.id) if self.mandates.stored(conn, "order", order.id) else ("quote", quote_id)
+                if mandate is not None or self.mandates.stored(conn, *bound) is not None:
+                    self.mandates.authorize(conn, mandate, agent_id, order.customer_id or quote.customer_id,
+                        products=[line.product_id for line in order.lines], bound=bound, policy=policy)
+                audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
+                             order_id=order.id, quote_id=order.quote_id,
+                             data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
+                return order
             stored_mandate = self.mandates.stored(conn, "quote", quote_id)
             if not existing and mandate is None and stored_mandate is None and agent_id not in policy.agents:
                 raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
@@ -248,14 +282,6 @@ class Orders:
                     products=[o.product_id for o in quote.lines], bound=("quote", quote_id), policy=policy)
             else:
                 record = None
-            if existing:
-                order = Order.model_validate_json(existing["data"])
-                if order.quote_id != quote_id or order.agent_id != agent_id:
-                    raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent")
-                audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
-                             order_id=order.id, quote_id=order.quote_id,
-                             data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
-                return order
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired; create a new quote before ordering")

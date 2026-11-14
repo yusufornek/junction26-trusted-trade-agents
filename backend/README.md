@@ -497,6 +497,10 @@ canonical JSON payload (`app.signing.quote_payload`) contains:
 
 - id, customer_id, deliver_by, total, expires_at, price_commitment;
 - lines: product_id, units (from units_needed), unit_price, currency, gtin, provenance.
+- integrity: every immutable quote resource field, including agent_id, currency,
+  need_ref, plan_ref, mandate, warnings, hard_constraint_violations and full lines
+  (totals, fit, tax prices, units and all decision/export evidence). It excludes
+  only signature, status and live_calls; all numeric values become decimal strings.
 
 Money and quantity values in the signed payload are normalized decimal strings
 (no exponent or unnecessary trailing zeros); the existing JSON resource keeps
@@ -507,7 +511,13 @@ signing input is `base64url(protected) + '.' + base64url(canonical_payload)`
 (RFC 7515 encoded payload, not RFC 7797). Quote status changes do not alter the
 signed price promise. Placement checks the persisted signature before stock
 lookup or committing; alteration is refused and audited as QUOTE_SIGNATURE_INVALID.
-Legacy unsigned quotes must be re-quoted.
+Legacy unsigned or earlier narrower-payload quotes remain readable and must be
+re-quoted for a new order. Existing orders replay after ownership/identity checks
+without requiring a historical quote key to remain published. Their stored buyer
+mandate is still revalidated, including when no header is supplied.
+An authenticated legacy absence of `need_ref` remains loadable and enforces its
+recorded violations plus current customer constraints; deleting a signed binding
+cannot turn a current quote into such a legacy record.
 
 Every new order decision carries a receipt over
 `{order_id, quote_id, quote_signature_digest, customer_id, agent_id, status,
@@ -560,6 +570,9 @@ head. Raw audit entries remain operator-only under spec 19. A chain in the same
 database cannot prove integrity against an attacker who rewrites the whole
 database without an independently held checkpoint. Signed heads provide that
 checkpoint, not an external timestamp or proof of upstream truth.
+Audit entry exports preserve the exact stored `ts` string (including `+00:00`
+versus `Z`) used by the hash, including migrated rows. Verification streams one
+SQLite read snapshot with bounded memory; full scans are serialized per gateway.
 
 
 ## Buyer-issued verifiable mandates (spec 12)
@@ -647,14 +660,21 @@ An invalid revocation returns 422 `REVOCATION_INVALID`. The next procurement
 call with that mandate returns 403 `MANDATE_INVALID`, naming `revoked`.
 Other named checks include `format`, `signature`, `issuer`, `nbf`, `exp`,
 `sub`, `customer`, `category`, and `binding`. Invalid calls are audited.
-Lookup filters out categories outside the mandate before live calls; explicit
+Lookup and local search filter mandate categories before counting, limiting or
+deciding to broaden retrieval; explicit
 quote/order lines must all be allowed. Quote/order records bind the original
 JWT privately, so omitting a later header or swapping the mandate cannot bypass
 revocation. Human approval revalidates the **placing agent's stored mandate**,
 including expiry, issuer, customer and category, while the approver must still
 be an authenticated operator. A revoked pending order can be rejected.
 Objects and successful audit entries expose `mandate {id, issuer, limits,
-valid_until}` with effective limits; stats `agents_seen` includes `mandate_id`.
+valid_until}` with effective limits; stats `agents_seen` includes the currently
+valid, trusted, unrevoked `mandate_id`. Registration reflects current policy or
+current buyer authority; historical evidence stays on objects and audit entries.
+New revocations apply only to customers trusting the actual signing key, even
+when an issuer ID or key ID is reused with different keys. Legacy unscoped
+revocations retain their prior denial through migration because their signer
+scope was not recorded; migration never silently restores revoked authority.
 The JWT itself is not returned in objects or audit entries. Holder binding uses
 the existing agent secret; key-bound proof of possession and OAuth remain follow-ups.
 
@@ -691,16 +711,22 @@ From `backend/`, anchor once:
 
 The command prints `sent:` or `confirmed:` and the explorer link. Without
 configuration it exits 1 and names the missing variables. Run again to poll a
-sent transaction; it is not resubmitted. Confirmed receipts update `audit_anchors`
+sent transaction. The computed hash and signed bytes are stored before broadcast;
+after an uncertain send, retry checks that hash and may rebroadcast identical
+bytes if the node does not know it, without allocating a new nonce. Existing
+anchor rows lacking signed bytes still load and reconcile by their recorded hash.
+Confirmed receipts update `audit_anchors`
 and append exactly one `AUDIT_ANCHORED` event. RPC errors produce sanitized
 messages and a failed row; retry preserves a previously broadcast transaction
 hash. `GET /v1/audit/anchors` lists checkpoints for authenticated callers.
 
 With `ANCHOR_EVERY_N_ENTRIES` set, a post-commit background worker anchors after
 N new audit entries. RPC work runs outside the request database transaction;
-failures do not fail business calls and the next new-entry trigger retries.
-`AUDIT_ANCHORED` entries do not recursively trigger anchors. Pending receipts
-are checked on a subsequent trigger or CLI invocation. Configuration and worker
+failures do not fail business calls and the next trigger retries even without
+new audit entries. Triggers arriving while busy are retained; after completion
+the worker checks the threshold again. `AUDIT_ANCHORED` entries do not recursively
+trigger anchors. Pending receipts are polled in the background every second,
+independently of new business traffic, and can also be checked by CLI. Configuration and worker
 state are process-local; a file lock serializes CLI/worker submissions across
 processes sharing the database.
 

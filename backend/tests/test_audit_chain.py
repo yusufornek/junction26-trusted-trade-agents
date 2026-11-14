@@ -3,6 +3,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import hashlib
+import tracemalloc
 
 from fastapi.testclient import TestClient
 import pytest
@@ -11,6 +13,7 @@ from app import audit
 from app.api import create_app
 from app.config import BACKEND
 from app.db import Database
+from app.canonical import canonical_json
 from conftest import OPERATOR_HEADERS, agent_headers
 from test_signed_quotes import independent_verify, make_quote
 
@@ -166,6 +169,35 @@ def test_existing_rows_migrated_once_with_start_event(tmp_path):
     assert entries[1].action == "AUDIT_CHAIN_START" and entries[1].data["migrated_entries"] == 1
     assert audit.verify(db)["valid"]
     assert len(audit.read(Database(database))) == 2
+    assert entries[0].model_dump(mode="json")["ts"] == "2026-11-13T10:00:00+00:00"
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         with db.connect(write=True) as conn:
             conn.execute("UPDATE audit SET summary='forbidden' WHERE id=1")
+
+
+def test_review_rest_audit_hash_reproduced_from_export(gateway):
+    add(gateway.db)
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        rows = client.get("/v1/audit").json()
+    previous = audit.GENESIS
+    for row in rows:
+        payload = {"seq": row["id"], **{k: row[k] for k in (
+            "ts", "actor", "action", "summary", "order_id", "quote_id", "data")}}
+        digest = hashlib.sha256(previous.encode("ascii") + canonical_json(payload)).hexdigest()
+        assert digest == row["hash"] and row["prev_hash"] == previous
+        previous = digest
+
+
+def test_review_audit_verify_bounded_memory(gateway):
+    for i in range(80):
+        with gateway.db.connect(write=True) as conn:
+            audit.append(conn, "system", "TEST", str(i), data={"blob": "x" * 65536})
+    checkpoint = audit.head(gateway.db, gateway.signing)
+    tracemalloc.start()
+    try:
+        result = audit.verify(gateway.db, checkpoint["entries"], checkpoint["head_hash"])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result["valid"] and result["checkpoint_match"] and result["entries"] == 80
+    assert peak < 1_500_000, peak

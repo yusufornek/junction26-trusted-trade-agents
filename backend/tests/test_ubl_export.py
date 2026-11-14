@@ -63,10 +63,33 @@ def test_ac_2_peppol_mapping_and_missing_data_are_explicit(gateway, trade):
     _, _, order = trade
     for file in (BACKEND / "README.md", BACKEND.parent / "docs/specs/13-open-standard-mapping.md"):
         text = file.read_text()
-        for term in ("BuyerCustomerParty", "SellerSupplierParty", "EndpointID", "schemeID", "needs data from Valio Aimo",
-                     "GTIN", "Quantity", "PriceAmount", "TaxTotal", "PayableAmount", "CustomizationID", "ProfileID",
-                     "Delivery", "OrderResponseCode"):
-            assert term in text, (file, term)
+        # Explicit business-field inventory: each must have its own mapping row,
+        # with a UBL target or an honest missing-data marker, not a stray mention.
+        inventory = {
+            "Standard / process identifiers": ("UBLVersionID", "CustomizationID", "ProfileID"),
+            "Order.id / response ID": ("cbc:ID", "OrderReference/ID"),
+            "Order.created_at / decided_at": ("IssueDate", "IssueTime"),
+            "Order.currency": ("DocumentCurrencyCode",),
+            "Quote.customer_id, Order.customer_id": ("BuyerCustomerParty",),
+            "Seller identity": ("SellerSupplierParty",),
+            "Buyer and seller electronic address (mandatory Peppol routing data)": ("EndpointID", "schemeID"),
+            "Party legal registration, postal addresses, country codes, VAT identifiers, contacts": ("PartyLegalEntity", "PostalAddress/Country"),
+            "Quote.deliver_by": ("Delivery/RequestedDeliveryPeriod/EndDate",),
+            "Line index": ("OrderLine/LineItem/ID",),
+            "Line.product_id / GTIN": ("Item/SellersItemIdentification/ID",),
+            "Line.name": ("Item/Name",),
+            "Line.units_needed": ("Quantity", "unitCode"),
+            "Line.unit_price": ("PriceAmount",),
+            "Line.total / Order.total": ("LineExtensionAmount", "TaxExclusiveAmount"),
+            "Tax / gross / payable": ("TaxTotal/TaxAmount", "PayableAmount"),
+            "Allowances, charges, rounding, payment means/terms, accounting references, originator references": ("AllowanceCharge", "PaymentMeans", "PaymentTerms"),
+            "Order.status": ("OrderResponseCode",),
+        }
+        rows = {cells[0]: cells for line in text.splitlines() if line.startswith("|")
+                if len(cells := [c.strip() for c in line.strip("|").split("|")]) == 3}
+        for field, targets in inventory.items():
+            assert field in rows, (file, field)
+            assert all(target in rows[field][1] for target in targets) or "needs data from Valio Aimo" in rows[field][2], (file, field)
     root = ET.fromstring(gateway.orders.get_order_ubl(order.id))
     endpoints = root.findall(".//cbc:EndpointID", NS)
     assert len(endpoints) == 2
@@ -95,6 +118,19 @@ def test_ac_3_gtins_quantities_prices_and_all_catalog_units(gateway, trade):
     unknown = ET.fromstring(xml)
     assert unknown.find("cac:OrderLine/cac:LineItem/cbc:Quantity", NS).attrib["unitCode"] == "H87"
     assert any("Unknown sales unit UNKNOWN" in (n.text or "") for n in unknown.findall("cbc:Note", NS))
+
+
+def test_review_ac_2_requires_document_id_mapping(gateway, trade, monkeypatch):
+    from pathlib import Path
+    original = Path.read_text
+    def without_ids(file, *args, **kwargs):
+        text = original(file, *args, **kwargs)
+        if file.name in {"README.md", "13-open-standard-mapping.md"}:
+            return "\n".join(line for line in text.splitlines() if not line.startswith("| Order.id / response ID |"))
+        return text
+    monkeypatch.setattr(Path, "read_text", without_ids)
+    with pytest.raises(AssertionError):
+        test_ac_2_peppol_mapping_and_missing_data_are_explicit(gateway, trade)
 
 
 @pytest.mark.parametrize("status,code", [("CONFIRMED", "AP"), ("REJECTED", "RE"), ("PENDING_APPROVAL", "CA")])

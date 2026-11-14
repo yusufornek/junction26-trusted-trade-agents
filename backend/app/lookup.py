@@ -354,25 +354,24 @@ class Lookup:
         original_need = need
         need, effective = self.policy.effective_need(need, policy)
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
+        categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories") if mandate is not None else None
         removed_by, counts = {}, {}
         retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
                               terms_used=list(need.search_terms) if need.search_terms else
                               re.findall(r"[^\W_]+", need.intent, re.UNICODE))
         pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
-                                             max_limit=pool_size, removed_by=removed_by, counts=counts, sources=effective)
+                                             max_limit=pool_size, removed_by=removed_by, counts=counts, sources=effective,
+                                             categories=categories)
         global_warnings = []
         if not pool and retrieval.mode == "intent":
             retrieval = Retrieval(mode="intent_broadened", terms_used=broadened_terms(need.intent))
             removed_by, counts = {}, {}
             pool, excluded = self.catalog.search(" ".join(retrieval.terms_used), need.required_claims,
                                                  need.exclude_allergens, pool_size, max_limit=pool_size,
-                                                 removed_by=removed_by, mode="or", counts=counts, sources=effective)
+                                                 removed_by=removed_by, mode="or", counts=counts, sources=effective,
+                                                 categories=categories)
             global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
                 f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
-        if mandate is not None:
-            categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories")
-            if categories is not None:
-                pool = [p for p in pool if p.category in categories]
         matched_count = counts.get("matched_count", len(pool))
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)

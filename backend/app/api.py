@@ -141,7 +141,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def stats(request: Request, since: datetime | None = None, principal: Principal = Depends(require_operator)):
         service = svc(request)
         service.orders.expire()
-        return read_stats(service.db, since, registered_agents=set(service.policy.get().agents))
+        return read_stats(service.db, since, registered_agents=set(service.policy.get().agents), mandates=service.mandates)
 
     @app.get("/v1/products/{id}", response_model=Product)
     def product(id: str, request: Request, principal: Principal = Depends(resolve_principal)):

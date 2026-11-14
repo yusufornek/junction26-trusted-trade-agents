@@ -2,7 +2,7 @@
 
 import json
 from collections import Counter
-from datetime import timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from .models import AuditEntry, LookupResult, Order, Stats
@@ -11,7 +11,7 @@ ORDER_STATUSES = ("CONFIRMED", "PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCE
 PLACEMENT_STATUSES = ORDER_STATUSES[:3]
 
 
-def read_stats(db, since=None, *, registered_agents=()):
+def read_stats(db, since=None, *, registered_agents=(), mandates=None):
     if since is not None:
         since = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since.astimezone(timezone.utc)
     with db.connect() as conn:
@@ -19,7 +19,7 @@ def read_stats(db, since=None, *, registered_agents=()):
         conn.execute("BEGIN")
         events = [AuditEntry(**{**dict(row), "data": json.loads(row["data"])})
                   for row in conn.execute("SELECT * FROM audit ORDER BY id")]
-        events = [event for event in events if since is None or event.ts >= since]
+        events = [event for event in events if since is None or datetime.fromisoformat(event.ts) >= since]
         orders = [Order.model_validate_json(row[0]) for row in conn.execute("SELECT data FROM orders")]
         orders = [order for order in orders if since is None or order.created_at >= since]
         lookup_events = [event for event in events if event.action == "LOOKUP"]
@@ -29,6 +29,20 @@ def read_stats(db, since=None, *, registered_agents=()):
             if row:
                 lookup = LookupResult.model_validate_json(row[0], context={"stored": True})
                 warnings.update(w.code for offer in lookup.offers for w in offer.warnings)
+        current_mandates = {}
+        if mandates is not None:
+            from .db import DomainError
+            from .mandates import decode
+            # Authority is current even if the latest historical use falls outside
+            # the reporting window. Never infer it from an audit metadata object.
+            for row in conn.execute("SELECT DISTINCT jwt FROM mandate_credentials ORDER BY rowid DESC"):
+                try:
+                    claims = decode(row[0])[1]
+                    subject = claims["vc"]["credentialSubject"]
+                    record, _ = mandates.verify(conn, row[0], claims["sub"], subject["customer_id"])
+                    current_mandates.setdefault(f"agent:{claims['sub']}", record.id)
+                except (DomainError, KeyError, TypeError):
+                    continue
 
     statuses = Counter(order.status for order in orders)
     placements, rules = Counter(), Counter()
@@ -45,12 +59,7 @@ def read_stats(db, since=None, *, registered_agents=()):
         rules.update(hit["rule"] for hit in event.data.get("rule_hits", []))
 
     count = len(lookup_events)
-    mandate_ids = {}
-    for event in events:
-        if event.data.get("mandate"):
-            identity = event.actor if event.actor.startswith("agent:") else None
-            if identity:
-                mandate_ids[identity] = event.data["mandate"]["id"]
+    mandate_ids = current_mandates
     agents = sorted({event.actor for event in events if event.actor.startswith("agent:")})
     agent_orders = Counter(f"agent:{order.agent_id}" for order in orders)
     spend = sum((Decimal(str(order.total)) for order in orders

@@ -4,6 +4,7 @@ import shutil
 import socket
 import subprocess
 import time
+import threading
 from datetime import datetime, timezone
 
 import httpx
@@ -156,7 +157,8 @@ def test_ac_4_automatic_failure_isolated_and_next_trigger_retries(gateway, ancho
         anchor._worker.join(timeout=5)
         assert anchor.list()[0]["status"] == "failed"
         rpc.fail, rpc.mined = False, True
-        result = client.post("/v1/offers", json=need.model_dump(mode="json"))
+        # A normal read's expiry sweep triggers retry without another audit entry.
+        result = client.get("/v1/orders")
         assert result.status_code == 200, result.text
         anchor._worker.join(timeout=5)
         assert [row["status"] for row in anchor.list()] == ["confirmed", "failed"]
@@ -164,6 +166,116 @@ def test_ac_4_automatic_failure_isolated_and_next_trigger_retries(gateway, ancho
         anchor.trigger()
         assert len(rpc.calls) == calls
     assert audit.verify(gateway.db)["valid"]
+
+
+def wait_for(predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "Anchoring worker did not complete"
+        time.sleep(.01)
+
+
+@pytest.mark.parametrize("known_to_node", [True, False])
+def test_review_ambiguous_broadcast_reuses_signed_transaction(gateway, anchor, rpc, respx_mock, known_to_node):
+    add_event(gateway)
+    original = rpc.respond
+    accepted = []
+    def respond(request):
+        body = json.loads(request.content)
+        response = original(request)
+        if body["method"] == "eth_getTransactionByHash" and not known_to_node:
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": None})
+        if body["method"] == "eth_sendRawTransaction":
+            accepted.append(body["params"][0])
+            if len(accepted) == 1:
+                raise httpx.ReadTimeout("Accepted but response lost", request=request)
+        return response
+    respx_mock.post(RPC_URL).mock(side_effect=respond)
+    with pytest.raises(AnchorError): anchor.anchor_once()
+    assert anchor.list()[0]["tx_hash"] == rpc.tx_hash
+    # Pending/unseen transaction: retries may rebroadcast, but must reuse nonce/hash/bytes.
+    # A fresh process/worker can recover solely from the stored signed transaction.
+    restarted = Anchoring(gateway.db, anchor.config)
+    restarted.anchor_once()
+    assert len(set(accepted)) == 1
+    assert len(accepted) == (1 if known_to_node else 2)
+    assert rpc.calls.count("eth_getTransactionCount") == 1
+    rpc.mined = True
+    row = anchor.anchor_once()
+    assert row["status"] == "confirmed" and len(anchor.list()) == 1
+    assert [e.action for e in gateway.audit()].count("AUDIT_ANCHORED") == 1
+
+
+def test_review_busy_anchor_preserves_new_commit(gateway, anchor, rpc, respx_mock):
+    captured, release = threading.Event(), threading.Event()
+    original = rpc.respond
+    def respond(request):
+        if json.loads(request.content)["method"] == "eth_sendRawTransaction" and not captured.is_set():
+            captured.set()
+            assert release.wait(5)
+        return original(request)
+    respx_mock.post(RPC_URL).mock(side_effect=respond)
+    rpc.mined = True
+    anchor.config.every_n_entries = "1"
+    try:
+        add_event(gateway, "FIRST")
+        assert captured.wait(5)
+        add_event(gateway, "SECOND")
+    finally:
+        release.set()
+    wait_for(lambda: len([a for a in anchor.list() if a["status"] == "confirmed"]) == 2)
+    assert max(a["entries"] for a in anchor.list()) >= 2
+    assert rpc.calls.count("eth_sendRawTransaction") == 2
+
+
+@pytest.mark.parametrize("state", ["failed", "sent"])
+def test_review_unresolved_anchor_retries_without_new_entry(gateway, anchor, rpc, state):
+    anchor.config.every_n_entries = "1"
+    rpc.fail = state == "failed"
+    add_event(gateway)
+    wait_for(lambda: bool(anchor.list()) and anchor.list()[0]["status"] == state)
+    # Wait until the first attempt reached RPC before simulating recovery/mining.
+    wait_for(lambda: "eth_chainId" in rpc.calls if state == "failed" else "eth_getTransactionReceipt" in rpc.calls)
+    if state == "failed": anchor._worker.join(timeout=5)
+    rpc.fail, rpc.mined = False, True
+    gateway.orders.list_orders()
+    wait_for(lambda: anchor.list()[0]["status"] == "confirmed")
+    assert rpc.calls.count("eth_sendRawTransaction") == 1
+    assert [e.action for e in gateway.audit()].count("AUDIT_ANCHORED") == 1
+
+
+def test_review_pending_receipt_confirmed_in_background(gateway, anchor, rpc):
+    anchor.config.every_n_entries = "1"
+    add_event(gateway)
+    wait_for(lambda: "eth_getTransactionReceipt" in rpc.calls)
+    rpc.mined = True  # No business call or explicit trigger follows.
+    wait_for(lambda: anchor.list()[0]["status"] == "confirmed")
+    assert anchor.verify("latest")["anchor_match"] is True
+    assert rpc.calls.count("eth_sendRawTransaction") == 1
+
+
+def test_legacy_anchor_without_signed_bytes_reconciles(anchor, tmp_path, monkeypatch):
+    import sqlite3
+    from app.db import Database
+    database = tmp_path / "legacy-anchors.db"
+    tx_hash = "0x" + "ab" * 32
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE audit_anchors (id INTEGER PRIMARY KEY AUTOINCREMENT, entries INTEGER NOT NULL, head_hash TEXT NOT NULL, chain_id INTEGER NOT NULL, tx_hash TEXT, block_number INTEGER, status TEXT NOT NULL, explorer_url TEXT, at TEXT NOT NULL)")
+        conn.execute("INSERT INTO audit_anchors(entries,head_hash,chain_id,tx_hash,status,at) VALUES(?,?,?,?,?,?)",
+                     (0, audit.GENESIS, 80002, tx_hash, "sent", audit.utcnow().isoformat()))
+    db = Database(database)
+    local = Anchoring(db, anchor.config)
+    calls = []
+    def rpc(client, method, params):
+        calls.append(method)
+        if method == "eth_chainId": return "0x13882"
+        assert method == "eth_getTransactionReceipt" and params == [tx_hash]
+        return {"transactionHash": tx_hash, "blockNumber": "0x2a", "status": "0x1"}
+    monkeypatch.setattr(local, "_rpc", rpc)
+    assert local.anchor_once()["status"] == "confirmed"
+    assert calls == ["eth_chainId", "eth_getTransactionReceipt"]
+    assert len(Anchoring(Database(database), anchor.config).list()) == 1
+    assert audit.verify(db)["valid"]
 
 
 def test_ac_5_key_never_appears_in_responses_logs_audit_or_errors(gateway, anchor, rpc, caplog, capsys, monkeypatch):

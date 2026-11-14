@@ -49,7 +49,10 @@ def check_signature(header, message, signature, keys):
 
 
 def number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 class Mandates:
@@ -122,8 +125,8 @@ class Mandates:
             invalid("nbf")
         if now >= claims["exp"]:
             invalid("exp")
-        if conn.execute("SELECT 1 FROM mandate_revocations WHERE issuer=? AND mandate_id=?",
-                        (claims["iss"], claims["jti"])).fetchone():
+        if conn.execute("SELECT 1 FROM mandate_revocations WHERE customer_id IN ('',?) AND issuer=? AND mandate_id=?",
+                        (subject["customer_id"], claims["iss"], claims["jti"])).fetchone():
             invalid("revoked")
         if claims["sub"] != agent_id or subject.get("agent_id") != agent_id:
             invalid("sub")
@@ -153,10 +156,8 @@ class Mandates:
                 invalid("format")
             with self.db.connect(write=True) as conn:
                 _, record, _ = self.authorize(conn, token, agent_id, customer_id)
-                products = self.catalog.search(query, required_claims, exclude_allergens, limit)[0]
                 categories = claims["vc"]["credentialSubject"].get("categories")
-                if categories is not None:
-                    products = [p for p in products if p.category in categories]
+                products = self.catalog.search(query, required_claims, exclude_allergens, limit, categories=categories)[0]
                 self.verify(conn, token, agent_id, customer_id, products=[p.id for p in products])
                 audit.append(conn, actor, "LOOKUP_SEARCH", "Searched the local catalog under buyer authority.",
                              data={**evidence(record), "products": [p.id for p in products],
@@ -177,15 +178,21 @@ class Mandates:
                     not number(issued_at) or issued_at > audit.utcnow().timestamp()):
                 invalid("revocation")
             with self.db.connect(write=True) as conn:
-                keys = [key for c in self.policy.get().customers.values() for key in c.mandate_issuers.get(issuer, [])]
-                # An issuer can be registered for several customers with the same key.
-                keys = list({(key.kid, key.x): key for key in keys}.values())
-                check_signature(header, message, signature, keys)
-                for mandate_id in ids:
-                    conn.execute("INSERT OR IGNORE INTO mandate_revocations VALUES(?,?,?)",
-                                 (issuer, mandate_id, audit.utcnow().isoformat()))
+                customers = []
+                for customer_id, customer in self.policy.get().customers.items():
+                    try:
+                        check_signature(header, message, signature, customer.mandate_issuers.get(issuer, []))
+                    except DomainError:
+                        continue
+                    customers.append(customer_id)
+                if not customers:
+                    invalid("signature")
+                for customer_id in customers:
+                    for mandate_id in ids:
+                        conn.execute("INSERT OR IGNORE INTO mandate_revocations(customer_id,issuer,mandate_id,at) VALUES(?,?,?,?)",
+                                     (customer_id, issuer, mandate_id, audit.utcnow().isoformat()))
                 audit.append(conn, actor, "MANDATE_REVOKED", "Buyer revoked purchasing authority.",
-                             data={"issuer": issuer, "jti_revoked": ids})
+                             data={"issuer": issuer, "jti_revoked": ids, "customer_ids": customers})
             return {"issuer": issuer, "jti_revoked": ids}
         except DomainError:
             raise DomainError("REVOCATION_INVALID", "Revocation signature or claims are invalid", 422) from None

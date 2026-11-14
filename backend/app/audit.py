@@ -73,32 +73,35 @@ def head(db, signing):
 
 
 def verify(db, checkpoint_entries=None, checkpoint_hash=None):
-    with db.connect() as conn:
+    # Serialize full scans per gateway so concurrent readers do not multiply
+    # verification allocations. Keep just one row and one requested prefix hash.
+    with db.audit_verify_lock, db.connect() as conn:
         conn.execute("BEGIN")
-        rows = conn.execute("SELECT * FROM audit ORDER BY id").fetchall()
+        previous, first_break, entries, head_hash = GENESIS, None, 0, GENESIS
+        checkpoint_digest = GENESIS if checkpoint_entries == 0 else None
+        for index, row in enumerate(conn.execute("SELECT * FROM audit ORDER BY id"), 1):
+            try:
+                digest = entry_hash(previous, entry_payload(row))
+                matches = row["id"] == index and row["prev_hash"] == previous and row["hash"] == digest
+            except (ValueError, TypeError, UnicodeError):
+                digest, matches = "", False
+            if not matches and first_break is None:
+                first_break = index
+            previous = digest
+            entries, head_hash = index, row["hash"]
+            if index == checkpoint_entries:
+                checkpoint_digest = digest
         sequence = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='audit'").fetchone()
-    previous, first_break = GENESIS, None
-    prefix_hashes = [GENESIS]
-    for index, row in enumerate(rows, 1):
-        try:
-            digest = entry_hash(previous, entry_payload(row))
-            matches = row["id"] == index and row["prev_hash"] == previous and row["hash"] == digest
-        except (ValueError, TypeError, UnicodeError):
-            digest, matches = "", False
-        if not matches and first_break is None:
-            first_break = index
-        previous = digest
-        prefix_hashes.append(digest)
     # AUTOINCREMENT also reveals removal of the tail, unless the attacker rewrites
     # SQLite's sequence too; independently-held checkpoints cover that limit.
-    if first_break is None and sequence and sequence[0] != len(rows):
-        first_break = len(rows) + 1
-    result = {"valid": first_break is None, "entries": len(rows),
-              "head_hash": rows[-1]["hash"] if rows else GENESIS, "first_break": first_break}
+    if first_break is None and sequence and sequence[0] != entries:
+        first_break = entries + 1
+    result = {"valid": first_break is None, "entries": entries,
+              "head_hash": head_hash, "first_break": first_break}
     if checkpoint_entries is not None:
-        result["checkpoint_match"] = (0 <= checkpoint_entries < len(prefix_hashes) and
+        result["checkpoint_match"] = (0 <= checkpoint_entries <= entries and
             (first_break is None or first_break > checkpoint_entries) and
-            prefix_hashes[checkpoint_entries] == checkpoint_hash)
+            checkpoint_digest == checkpoint_hash)
     return result
 
 
@@ -121,4 +124,4 @@ def read_timeline(conn, order_id, quote_id, lookup_id):
         (order_id, quote_id, lookup_id),
     )
     events = [AuditEntry(**{**dict(row), "data": json.loads(row["data"])}) for row in rows]
-    return sorted(events, key=lambda event: (event.ts, event.id))
+    return sorted(events, key=lambda event: (datetime.fromisoformat(event.ts), event.id))

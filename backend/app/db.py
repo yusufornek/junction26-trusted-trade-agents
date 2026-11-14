@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS audit_anchors (
 class Database:
     def __init__(self, path: Path):
         self.on_commit = None
+        self.audit_verify_lock = threading.Lock()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
@@ -75,6 +77,18 @@ class Database:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")
             from .audit import migrate
             migrate(conn)
+            anchor_columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_anchors)")}
+            if "raw_transaction" not in anchor_columns:
+                conn.execute("ALTER TABLE audit_anchors ADD COLUMN raw_transaction TEXT")
+            revocation_columns = {row[1] for row in conn.execute("PRAGMA table_info(mandate_revocations)")}
+            if "customer_id" not in revocation_columns:
+                conn.execute("ALTER TABLE mandate_revocations RENAME TO legacy_mandate_revocations")
+                conn.execute("CREATE TABLE mandate_revocations (customer_id TEXT NOT NULL, issuer TEXT NOT NULL, "
+                             "mandate_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(customer_id,issuer,mandate_id))")
+                # Old records lack signer/customer evidence. Preserve their prior
+                # denial rather than silently restoring revoked authority.
+                conn.execute("INSERT INTO mandate_revocations SELECT '',issuer,mandate_id,at FROM legacy_mandate_revocations")
+                conn.execute("DROP TABLE legacy_mandate_revocations")
 
     @contextmanager
     def connect(self, write=False):

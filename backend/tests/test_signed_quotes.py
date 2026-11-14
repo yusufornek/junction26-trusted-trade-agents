@@ -45,11 +45,11 @@ def test_ac_1_quote_jwk_and_each_signed_field(gateway, need, upstream):
         assert response.status_code == 200  # deliberately no auth
         jwks = response.json()
     payload = quote_payload(quote)
-    assert set(payload) == {"id", "customer_id", "deliver_by", "lines", "total", "expires_at", "price_commitment"}
+    assert set(payload) == {"id", "customer_id", "deliver_by", "lines", "total", "expires_at", "price_commitment", "integrity"}
     assert set(payload["lines"][0]) == {"product_id", "units", "unit_price", "currency", "gtin", "provenance"}
     assert all(isinstance(payload["lines"][0][k], str) for k in ("units", "unit_price"))
     independent_verify(quote.signature, payload, jwks)
-    for field in set(payload) - {"lines"}:
+    for field in set(payload) - {"lines", "integrity"}:
         changed = deepcopy(payload)
         changed[field] += "tamper"
         with pytest.raises(InvalidSignature):
@@ -68,11 +68,14 @@ def test_ac_1_quote_jwk_and_each_signed_field(gateway, need, upstream):
 
 
 @pytest.mark.parametrize("field", ["id", "customer_id", "deliver_by", "total", "expires_at", "units_needed",
-                                  "unit_price", "currency", "gtin", "provenance", "price_commitment", "signature"])
+                                  "unit_price", "currency", "gtin", "provenance", "price_commitment", "signature",
+                                  "naive_past", "naive_future"])
 def test_ac_2_stored_tampering_refused_and_audited(gateway, need, upstream, field):
     quote = make_quote(gateway, need)
     data = quote.model_dump(mode="json")
-    if field in {"units_needed", "unit_price"}:
+    if field.startswith("naive_"):
+        data["expires_at"] = (audit.utcnow() + timedelta(days=-1 if field == "naive_past" else 1)).replace(tzinfo=None).isoformat()
+    elif field in {"units_needed", "unit_price"}:
         data["lines"][0][field] += 1
     elif field == "currency":
         data["lines"][0][field] = "USD"
@@ -101,6 +104,33 @@ def test_ac_2_stored_tampering_refused_and_audited(gateway, need, upstream, fiel
     entries = gateway.audit(quote_id=quote.id)
     assert entries[-1].data["error"] == "QUOTE_SIGNATURE_INVALID"
     assert audit.verify(gateway.db)["valid"]
+
+
+@pytest.mark.parametrize("field", ["currency", "agent_id", "need_ref", "line_total", "fit", "warnings",
+                                  "violations", "tax_price", "sales_unit"])
+def test_review_quote_immutable_inputs_authenticated(gateway, need, upstream, field):
+    quote = make_quote(gateway, need)
+    data = quote.model_dump(mode="json")
+    caller = "external"
+    if field == "currency": data["currency"] = "USD"
+    elif field == "agent_id":
+        data["agent_id"] = caller = "hotel-chain-agent"
+    elif field == "need_ref": data["need_ref"] = None
+    elif field == "line_total": data["lines"][0]["total"] = 0.01
+    elif field == "fit": data["lines"][0]["fit"] = 1
+    elif field == "warnings": data["lines"][0]["warnings"] = [{"code": "NO_FIT_SCORE", "text": "changed"}]
+    elif field == "violations": data["hard_constraint_violations"] = ["changed"]
+    elif field == "tax_price": data["lines"][0]["unit_price_with_tax"] = 0.01
+    elif field == "sales_unit": data["lines"][0]["sales_unit"] = "KG"
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
+    before = len(upstream.availability_calls)
+    with TestClient(create_app(gateway), headers=agent_headers(caller)) as client:
+        response = client.post("/v1/orders", json={"quote_id": quote.id}, headers={"Idempotency-Key": "immutable"})
+    assert response.status_code == 409 and response.json()["code"] == "QUOTE_SIGNATURE_INVALID"
+    assert len(upstream.availability_calls) == before
+    assert gateway.orders.list_orders() == []
+    assert gateway.audit(quote_id=quote.id)[-1].data["error"] == "QUOTE_SIGNATURE_INVALID"
 
 
 def test_ac_3_rotation_retains_old_kid_seven_days(gateway, need, upstream):

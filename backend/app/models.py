@@ -273,7 +273,7 @@ class QuoteRequest(RequestScope):
 class Quote(Model):
     mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
-    signature: str | None = Field(default=None, description="Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload (decimal-string units and money, line provenance and price_commitment). kid is in the protected header; public keys at /.well-known/jwks.json. Legacy unsigned quotes cannot be placed.")
+    signature: str | None = Field(default=None, description="Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload: decimal-string units/money, provenance, price_commitment, plus integrity containing every immutable resource field (all except signature, status, live_calls; numeric values normalized to decimal strings). Authenticates ownership, currency, need binding and decision/export evidence. kid is in the protected header; public keys at /.well-known/jwks.json. Legacy unsigned or narrower-payload quotes remain readable but require re-quoting for new placement; existing orders remain replayable.")
     price_commitment: Literal["gateway-locked"] = Field(default="gateway-locked", description="Gateway holds the fixed price until expires_at; included in the signature.")
     agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     customer_id: str
@@ -350,7 +350,7 @@ class AuditEntry(Model):
     id: int
     prev_hash: str = ""
     hash: str = ""
-    ts: datetime
+    ts: str = Field(description="Exact stored timestamp string used in the audit hash; preserve its UTC offset spelling for independent verification.")
     actor: str
     action: str
     order_id: str | None
@@ -584,8 +584,8 @@ class RuleCount(Model):
 class AgentStats(Model):
     actor: str = Field(description="Distinct agent audit actor, including the agent: prefix.")
     order_count: int = Field(description="Orders created by this agent in the window, regardless of current status.")
-    registered: bool = Field(description="Whether the agent currently has a mandate in the effective policy.")
-    mandate_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    registered: bool = Field(description="Whether the agent currently has a policy mandate or a valid, trusted, unrevoked buyer credential.")
+    mandate_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Currently valid buyer mandate in use; historical IDs remain on objects and audit entries.")
 
 
 class Stats(Model):

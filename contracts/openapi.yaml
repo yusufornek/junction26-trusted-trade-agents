@@ -1694,13 +1694,15 @@ components:
         registered:
           type: boolean
           title: Registered
-          description: Whether the agent currently has a mandate in the effective
-            policy.
+          description: Whether the agent currently has a policy mandate or a valid,
+            trusted, unrevoked buyer credential.
         mandate_id:
           anyOf:
           - type: string
           - type: 'null'
           title: Mandate Id
+          description: Currently valid buyer mandate in use; historical IDs remain
+            on objects and audit entries.
       additionalProperties: false
       type: object
       required:
@@ -1839,8 +1841,9 @@ components:
           default: ''
         ts:
           type: string
-          format: date-time
           title: Ts
+          description: Exact stored timestamp string used in the audit hash; preserve
+            its UTC offset spelling for independent verification.
         actor:
           type: string
           title: Actor
@@ -3311,10 +3314,14 @@ components:
           - type: string
           - type: 'null'
           title: Signature
-          description: Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload (decimal-string
-            units and money, line provenance and price_commitment). kid is in the
-            protected header; public keys at /.well-known/jwks.json. Legacy unsigned
-            quotes cannot be placed.
+          description: 'Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload: decimal-string
+            units/money, provenance, price_commitment, plus integrity containing every
+            immutable resource field (all except signature, status, live_calls; numeric
+            values normalized to decimal strings). Authenticates ownership, currency,
+            need binding and decision/export evidence. kid is in the protected header;
+            public keys at /.well-known/jwks.json. Legacy unsigned or narrower-payload
+            quotes remain readable but require re-quoting for new placement; existing
+            orders remain replayable.'
         price_commitment:
           type: string
           const: gateway-locked

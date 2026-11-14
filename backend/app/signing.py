@@ -26,12 +26,23 @@ def unb64(value):
 def quote_payload(quote):
     """Reconstruct from the JSON resource, also used by the standalone verifier."""
     q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
+    def immutable(value):
+        if isinstance(value, dict):
+            return {k: immutable(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [immutable(v) for v in value]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return decimal_string(value)
+        return value
+    # Keep the spec 10 promise fields, and authenticate the complete immutable
+    # decision/export evidence too. Only lifecycle state and request counters vary.
+    integrity = immutable({k: v for k, v in q.items() if k not in {"signature", "status", "live_calls"}})
     return {"id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
             "lines": [{"product_id": line["product_id"], "units": decimal_string(line["units_needed"]),
                        "unit_price": decimal_string(line["unit_price"]), "currency": line["currency"],
                        "gtin": line.get("gtin"), "provenance": line["provenance"]} for line in q["lines"]],
             "total": decimal_string(q["total"]), "expires_at": q["expires_at"],
-            "price_commitment": q["price_commitment"]}
+            "price_commitment": q["price_commitment"], "integrity": integrity}
 
 
 def receipt_payload(order):

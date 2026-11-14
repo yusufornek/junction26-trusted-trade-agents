@@ -20,7 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from app.models import PolicyUpdateRequest
 from app.valio import RequestCounter
 from app.signing import b64
-from conftest import OPERATOR_HEADERS, agent_headers, quote_request
+from conftest import OPERATOR_HEADERS, agent_headers, quote_request, raw_product, rebuild_catalog
 
 AGENT = "outsider"
 ISSUER = "urn:buyer:test"
@@ -252,6 +252,13 @@ mcp_server.main()
     try:
         rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}})
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"); process.stdin.flush()
+        # No policy row or bound object can authorize this fresh catalog search.
+        found = rpc({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "search_products", "arguments": {"query": "milk"}}})
+        assert not found["result"].get("isError"), (found, error_log.read_text())
+        searches = [e for e in gateway.audit() if e.action == "LOOKUP_SEARCH"]
+        assert searches, "CLI must load the mandate for a fresh search"
+        assert searches[-1].data["mandate"]["id"] == decode(token)[1]["jti"]
+        assert searches[-1].data["mandate"]["limits"]["max_auto_total_eur"] == 500
         result = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "place_order", "arguments": {"quote_id": q.id, "idempotency_key": "stdio-vc"}}})
         assert not result["result"].get("isError"), (result, error_log.read_text())
         order = result["result"]["structuredContent"]
@@ -271,3 +278,132 @@ mcp_server.main()
         client.headers.pop("Agent-Mandate")
         result = client.post("/mcp", json={"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "find_offers", "arguments": {"need": need.model_dump(mode="json")}}})
         assert result.json()["result"]["isError"]
+
+
+@pytest.mark.parametrize("other_kid", ["buyer-1", "buyer-2"])
+def test_review_revocation_respects_customer_signing_key(gateway, need, upstream, buyer, other_kid):
+    other_key = Ed25519PrivateKey.generate()
+    body = gateway.policy.get().model_dump(mode="json")
+    body["customers"]["2"] = {"mandate_issuers": {ISSUER: [{"kid": other_kid, "x": b64(other_key.public_key().public_bytes_raw())}]}}
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    token1 = issue(buyer, jti="shared-id")
+    claims = decode(token1)[1]
+    claims["vc"]["credentialSubject"]["customer_id"] = "2"
+    token2 = sign_jwt(other_key, claims, kid=other_kid)
+    revoke = sign_jwt(buyer, {"iss": ISSUER, "jti_revoked": ["shared-id"], "iat": int(audit.utcnow().timestamp())}, kid="buyer-1", typ="JWT")
+    gateway.mandates.revoke(revoke, "agent:outsider")
+    with gateway.db.connect() as conn:
+        assert gateway.mandates.verify(conn, token2, AGENT, "2")[0].id == "shared-id"
+        from app.db import DomainError
+        with pytest.raises(DomainError, match="revoked"):
+            gateway.mandates.verify(conn, token1, AGENT, "1")
+
+
+def test_review_ac_8_requires_cli_mandate_file(gateway, need, upstream, buyer, tmp_path, monkeypatch):
+    original = subprocess.Popen
+    def without_mandate(command, *args, **kwargs):
+        command = list(command)
+        command[2] = command[2].replace(', "--mandate", sys.argv[4]', '')
+        return original(command, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "Popen", without_mandate)
+    with pytest.raises(AssertionError):
+        test_ac_8_stdio_cli_mandate_and_http_header(gateway, need, upstream, buyer, tmp_path)
+
+
+def test_review_order_bound_mandate_checked_on_headerless_replay(gateway, need, upstream, buyer):
+    from test_signed_quotes import make_quote
+    token = issue(buyer, sub="external")
+    claims = decode(token)[1]
+    claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    token = sign_jwt(buyer, claims, kid="buyer-1")
+    q = make_quote(gateway, need)
+    order = gateway.orders.place_order(q.id, "placement-only", mandate=token)
+    revoke = sign_jwt(buyer, {"iss": ISSUER, "jti_revoked": [claims["jti"]], "iat": int(audit.utcnow().timestamp())}, kid="buyer-1", typ="JWT")
+    gateway.mandates.revoke(revoke, "agent:external")
+    before = len(upstream.availability_calls)
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.post("/v1/orders", json={"quote_id": q.id}, headers={"Idempotency-Key": "placement-only"})
+    assert response.status_code == 403 and response.json()["data"]["check"] == "revoked"
+    assert len(upstream.availability_calls) == before
+    assert gateway.orders.get_order(order.id) == order
+    assert gateway.audit()[-1].data["check"] == "revoked"
+
+
+@pytest.mark.parametrize("operation", ["search", "lookup", "broadened"])
+def test_review_category_filter_precedes_limits_and_counts(gateway, need, upstream, buyer, tmp_path, operation):
+    rows = [raw_product(str(i).zfill(2), "Milk unauthorized") for i in range(40)]
+    for row in rows: row["category"] = "OTHER"
+    rows.append(raw_product("z", "Milk eligible"))
+    vocabulary = raw_product("egg-vocabulary", "Egg declaration vocabulary", egg=True)
+    vocabulary["category"] = "OTHER"
+    rows.append(vocabulary)
+    rebuild_catalog(gateway, tmp_path, rows)
+    token = issue(buyer, categories=["10400"])
+    if operation == "search":
+        products = gateway.mandates.search("milk", [], [], 1, token=token, agent_id=AGENT)
+        assert [p.id for p in products] == ["z"]
+    else:
+        if operation == "broadened":
+            need = need.model_copy(update={"search_terms": [], "intent": "1000 litres milk for hotel"})
+        result = gateway.find_offers(need, f"agent:{AGENT}", mandate=token)
+        assert [o.product_id for o in result.offers] == ["z"]
+        assert result.matched_count == result.screened_count == result.priced_count == 1
+        assert "POOL_TRUNCATED" not in [w.code for w in result.warnings]
+        assert (result.retrieval.mode == "intent_broadened") == (operation == "broadened")
+
+
+@pytest.mark.parametrize("withdrawal", ["revoked", "expired", "issuer_removed"])
+@pytest.mark.parametrize("policy_row", [False, True])
+def test_review_stats_registration_uses_current_authority(gateway, need, upstream, buyer, monkeypatch, withdrawal, policy_row):
+    token = issue(buyer)
+    q = quote(gateway, need, token, qty=1)
+    if policy_row:
+        body = gateway.policy.get().model_dump(mode="json")
+        body["agents"][AGENT] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 5000}
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    if withdrawal == "revoked":
+        revoke = sign_jwt(buyer, {"iss": ISSUER, "jti_revoked": [decode(token)[1]["jti"]], "iat": int(audit.utcnow().timestamp())}, kid="buyer-1", typ="JWT")
+        gateway.mandates.revoke(revoke, "agent:outsider")
+    elif withdrawal == "expired":
+        later = audit.utcnow() + timedelta(days=2)
+        monkeypatch.setattr(audit, "utcnow", lambda: later)
+    else:
+        body = gateway.policy.get().model_dump(mode="json")
+        body["customers"]["1"]["mandate_issuers"] = {}
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        stats = client.get("/v1/stats").json()
+    row = next(a for a in stats["agents_seen"] if a["actor"] == f"agent:{AGENT}")
+    assert row["registered"] is policy_row
+    assert row.get("mandate_id") is None
+    assert gateway.orders.get_quote(q.id).mandate.id == decode(token)[1]["jti"]  # history remains readable
+
+
+@pytest.mark.parametrize("field", ["max_auto_total_eur", "max_auto_daily_total_eur", "nbf", "exp"])
+def test_review_oversized_jwt_integer_is_audited_refusal(gateway, need, upstream, buyer, field):
+    claims = decode(issue(buyer))[1]
+    target = claims if field in ("nbf", "exp") else claims["vc"]["credentialSubject"]
+    target[field] = 10**400
+    bad = sign_jwt(Ed25519PrivateKey.generate(), claims, kid="buyer-1")
+    with TestClient(create_app(gateway), headers=headers(bad), raise_server_exceptions=False) as client:
+        result = client.post("/v1/offers", json=need.model_dump(mode="json"))
+    assert result.status_code == 403 and result.json()["code"] == "MANDATE_INVALID"
+    assert gateway.audit()[-1].data["error"] == "MANDATE_INVALID"
+    assert not upstream.price_calls and not upstream.availability_calls
+
+
+def test_legacy_revocations_migrate_without_restoring_authority(gateway, buyer, tmp_path):
+    import sqlite3
+    from app.db import Database, DomainError
+    database = tmp_path / "legacy-revocations.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE mandate_revocations (issuer TEXT NOT NULL, mandate_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(issuer,mandate_id))")
+        conn.execute("INSERT INTO mandate_revocations VALUES(?,?,?)", (ISSUER, "old-revoked", audit.utcnow().isoformat()))
+    token = issue(buyer, jti="old-revoked")
+    for _ in range(2):
+        db = Database(database)
+        with db.connect() as conn:
+            row, = conn.execute("SELECT * FROM mandate_revocations")
+            assert row["customer_id"] == "" and row["mandate_id"] == "old-revoked"
+            with pytest.raises(DomainError, match="revoked"):
+                gateway.mandates.verify(conn, token, AGENT, "1")

@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -230,3 +231,23 @@ def test_quote_without_known_price_fails_audited(gateway, need, upstream, respx_
         gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     assert error.value.code == "VALIO_UNAVAILABLE"
     assert gateway.audit()[-1].data["live_calls"] == {"price": 1, "availability": 0}
+@pytest.mark.parametrize("historical", ["unsigned", "retired_key"])
+def test_review_existing_order_replay_survives_quote_upgrade(gateway, need, upstream, historical):
+    from test_signed_quotes import make_quote
+    quote = make_quote(gateway, need)
+    order = gateway.orders.place_order(quote.id, "historical-replay")
+    if historical == "unsigned":
+        data = quote.model_dump(mode="json")
+        data["signature"] = None
+        data["status"] = "ACCEPTED"
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
+    else:
+        gateway.signing.rotate(now=audit.utcnow() - timedelta(days=8))
+    before = len(upstream.availability_calls)
+    replay = gateway.orders.place_order(quote.id, "historical-replay")
+    assert replay == order
+    assert gateway.audit()[-1].action == "ORDER_REPLAY"
+    assert len(upstream.availability_calls) == before
+    with pytest.raises(DomainError, match="QUOTE_NOT_FOUND"):
+        gateway.orders.place_order(quote.id, "historical-replay", "hotel-chain-agent")

@@ -52,7 +52,10 @@ class Anchoring:
         self._guard = threading.Lock()
         self._worker = None
         self._closed = False
-        self._last_attempt = 0
+        self._running = False
+        self._pending = False
+        self._stop = threading.Event()
+        self._receipt_retry_seconds = 1
 
     def health(self):
         if not self.config.enabled:
@@ -83,7 +86,7 @@ class Anchoring:
     def _confirm(self, client, anchor_id, tx_hash):
         receipt = self._rpc(client, "eth_getTransactionReceipt", [tx_hash])
         if receipt is None:
-            return
+            return False
         if receipt.get("transactionHash", "").lower() != tx_hash.lower():
             raise AnchorError("Anchoring receipt mismatch")
         block = int(receipt["blockNumber"], 16)
@@ -95,6 +98,12 @@ class Anchoring:
             if success and row["status"] != "confirmed":
                 audit.append(conn, "system", "AUDIT_ANCHORED", "Audit checkpoint confirmed on chain.",
                              data={key: row[key] for key in ("entries", "head_hash", "chain_id", "tx_hash", "explorer_url")})
+        return True
+
+    def _broadcast(self, client, raw_transaction, expected_hash):
+        tx_hash = self._rpc(client, "eth_sendRawTransaction", [raw_transaction])
+        if not isinstance(tx_hash, str) or tx_hash.lower() != expected_hash.lower():
+            raise AnchorError("Anchoring transaction hash mismatch")
 
     def anchor_once(self):
         if not self.config.enabled:
@@ -107,12 +116,19 @@ class Anchoring:
                 with httpx.Client(timeout=10, trust_env=False) as client:
                     chain_id = int(self.config.chain_id)
                     with self.db.connect() as conn:
-                        pending = conn.execute("SELECT id,tx_hash FROM audit_anchors WHERE tx_hash IS NOT NULL AND block_number IS NULL AND status IN ('sent','failed') ORDER BY id LIMIT 1").fetchone()
+                        pending = conn.execute("SELECT id,tx_hash,raw_transaction,chain_id FROM audit_anchors WHERE tx_hash IS NOT NULL AND block_number IS NULL AND status IN ('sent','failed') ORDER BY id LIMIT 1").fetchone()
                     if pending:
                         anchor_id = pending["id"]
-                        if int(self._rpc(client, "eth_chainId", []), 16) != chain_id:
+                        if pending["chain_id"] != chain_id or int(self._rpc(client, "eth_chainId", []), 16) != chain_id:
                             raise AnchorError("Anchoring chain ID mismatch")
-                        self._confirm(client, anchor_id, pending["tx_hash"])
+                        tx_hash = pending["tx_hash"]
+                        with self.db.connect(write=True) as conn:
+                            conn.execute("UPDATE audit_anchors SET status='sent' WHERE id=?", (anchor_id,))
+                        if not self._confirm(client, anchor_id, tx_hash) and pending["raw_transaction"]:
+                            known = self._rpc(client, "eth_getTransactionByHash", [tx_hash])
+                            if known is None:
+                                self._broadcast(client, pending["raw_transaction"], tx_hash)
+                                self._confirm(client, anchor_id, tx_hash)
                     else:
                         checkpoint = audit.verify(self.db)
                         if not checkpoint["valid"]:
@@ -136,12 +152,15 @@ class Anchoring:
                                                                              "from": account.address}]), 16)
                         signed = account.sign_transaction(tx)
                         expected_hash = "0x" + signed.hash.hex().removeprefix("0x")
-                        tx_hash = self._rpc(client, "eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])
-                        if not isinstance(tx_hash, str) or tx_hash.lower() != expected_hash.lower():
-                            raise AnchorError("Anchoring transaction hash mismatch")
+                        tx_hash = expected_hash
+                        raw_transaction = "0x" + signed.raw_transaction.hex().removeprefix("0x")
                         explorer_url = self.config.explorer_tx_url.rstrip("/") + "/" + tx_hash
+                        # Persist before any send: an accepted transaction can outlive
+                        # a lost RPC response or process crash. Never allocate a new nonce.
                         with self.db.connect(write=True) as conn:
-                            conn.execute("UPDATE audit_anchors SET tx_hash=?,explorer_url=? WHERE id=?", (tx_hash, explorer_url, anchor_id))
+                            conn.execute("UPDATE audit_anchors SET tx_hash=?,explorer_url=?,raw_transaction=? WHERE id=?",
+                                         (tx_hash, explorer_url, raw_transaction, anchor_id))
+                        self._broadcast(client, raw_transaction, tx_hash)
                         self._confirm(client, anchor_id, tx_hash)
                 return next(row for row in self.list() if row["tx_hash"] == (pending["tx_hash"] if pending else tx_hash))
         except Exception:
@@ -185,29 +204,65 @@ class Anchoring:
             pass  # Unavailable or malformed chain evidence is never a positive verification.
         return result
 
+    def _needs_work(self):
+        with self.db.connect() as conn:
+            conn.execute("BEGIN")
+            count = conn.execute("SELECT count(*) FROM audit WHERE action!='AUDIT_ANCHORED'").fetchone()[0]
+            latest = conn.execute("SELECT entries FROM audit_anchors WHERE status='confirmed' ORDER BY entries DESC LIMIT 1").fetchone()
+            baseline = conn.execute("SELECT count(*) FROM (SELECT action FROM audit ORDER BY id LIMIT ?) WHERE action!='AUDIT_ANCHORED'",
+                                    (latest[0],)).fetchone()[0] if latest else 0
+            outstanding = conn.execute("SELECT 1 FROM audit_anchors WHERE "
+                "(tx_hash IS NOT NULL AND block_number IS NULL AND status IN ('sent','failed')) OR "
+                "(status='failed' AND entries>?) LIMIT 1", (latest[0] if latest else -1,)).fetchone()
+        return bool(outstanding) or count - baseline >= self.config.every
+
     def trigger(self):
         if not self.config.enabled or not self.config.every or self._closed or threading.current_thread() is self._worker:
             return
         with self._guard:
-            if self._worker and self._worker.is_alive():
+            if self._running:
+                self._pending = True
                 return
-            with self.db.connect() as conn:
-                count = conn.execute("SELECT count(*) FROM audit WHERE action!='AUDIT_ANCHORED'").fetchone()[0]
-                latest = conn.execute("SELECT entries FROM audit_anchors WHERE status='confirmed' ORDER BY id DESC LIMIT 1").fetchone()
-                baseline = conn.execute("SELECT count(*) FROM (SELECT action FROM audit ORDER BY id LIMIT ?) WHERE action!='AUDIT_ANCHORED'",
-                                        (latest[0],)).fetchone()[0] if latest else 0
-            if count <= self._last_attempt or count - baseline < self.config.every:
+            if self._closed or not self._needs_work():
                 return
-            self._last_attempt = count
+            self._running = True
+            self._pending = False
             def run():
                 try:
-                    self.anchor_once()
-                except AnchorError:
-                    pass
+                    while not self._closed:
+                        try:
+                            row = self.anchor_once()
+                        except AnchorError:
+                            row = {"status": "failed"}
+                        if row["status"] == "failed":
+                            with self._guard:
+                                if self._pending and not self._closed:
+                                    self._pending = False
+                                    continue
+                                self._running = False
+                                return
+                        if row["status"] == "sent":
+                            # Mining is independent of business traffic. Poll only
+                            # the durable hash; receipt retries never allocate a nonce.
+                            if self._stop.wait(self._receipt_retry_seconds):
+                                return
+                            continue
+                        with self._guard:
+                            self._pending = False
+                            if not self._closed and self._needs_work():
+                                continue
+                            self._running = False
+                            return
+                finally:
+                    with self._guard:
+                        if self._worker is threading.current_thread():
+                            self._running = False
             self._worker = threading.Thread(target=run, name="audit-anchor", daemon=True)
             self._worker.start()
 
     def close(self):
-        self._closed = True
+        with self._guard:
+            self._closed = True
+            self._stop.set()
         if self._worker:
             self._worker.join(timeout=15)
