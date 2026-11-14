@@ -22,6 +22,10 @@ from .runtime import ENVIRONMENT
 from .suppliers import reservation_key
 
 WARNING_TEXT = {
+    "QUANTITY_ANOMALY": "Quantity is outside the expected purchase-history band; review the proposed correction or split.",
+    "PRICE_ANOMALY": "Unit price exceeds the last paid price threshold; review a cheaper ranked alternative.",
+    "VELOCITY_ANOMALY": "Rolling-hour order count exceeds the expected band; review and pause or resume the agent.",
+    "NEW_CATEGORY": "This agent has not previously bought this product category for this customer.",
     "CLINICAL_REVIEW": "Clinical review by a buyer approver is required.",
     "SUBSTITUTION_PROFILE": "The substitute needs approval under the customer's substitution profile.",
     "PARTIAL_BASKET": "Some recipe ingredients are uncovered; review the partial basket.",

@@ -1,4 +1,10 @@
 # Fixed net EUR prices. Warnings require a human to acknowledge delivery risks.
+anomalies:
+  sensitivity: normal
+  sensitivity_k: {strict: 2, normal: 3, relaxed: 5}
+  history_days: 90
+  price_increase_pct: 20
+  velocity_min_upper: 5
 autonomy:
   default: approval_required
   promotion:
@@ -9,6 +15,10 @@ approval:
   max_auto_total_eur: 1500
   min_fit_probability: 0.80
   warnings_need_approval:
+    - QUANTITY_ANOMALY
+    - PRICE_ANOMALY
+    - VELOCITY_ANOMALY
+    - NEW_CATEGORY
     - PARTIAL_STOCK
     - DATE_SHIFT
     - CUTOFF_PASSED

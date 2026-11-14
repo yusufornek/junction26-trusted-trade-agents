@@ -131,15 +131,16 @@ def test_ac_7_bounded_global_supplier_concurrency(gateway, need, upstream, monke
             finally:
                 with lock:
                     active[0] -= 1
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    # Start the application before the guard's two-second queue clock begins.
+    # Schema/MCP startup must not release the queued slot before the request.
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client, ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(held)
         assert entered.wait(5)
         second = pool.submit(held, True)
         try:
             assert queued.wait(5)
             assert not second_entered.wait(0.1), "queued supplier call entered while active slot was occupied"
-            with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
-                refused = client.post("/v1/offers", json=need.model_dump(mode="json"))
+            refused = client.post("/v1/offers", json=need.model_dump(mode="json"))
             assert refused.status_code == 503
             assert refused.json()["code"] == "UPSTREAM_BUSY" and refused.json()["retryable"]
             assert refused.json()["next_action"] == "RETRY_SAME_COMMAND"

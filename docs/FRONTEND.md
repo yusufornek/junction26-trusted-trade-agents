@@ -95,3 +95,39 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 Needs the repo-root `.env.local` (VALIO_API_KEY, OPENAI_API_KEY — ask Gökalp). CORS allows `http://localhost:*`.
 Sample data: `backend/demo/run_buyer_agent.sh` (Claude as buyer agent) or quotes/orders via `/docs`.
 Need another field or endpoint? Ask the backend side — it is quick to add.
+## Anomalies (spec 45)
+
+Quotes and orders now include `anomalies[]`, also visible inside the existing
+approval inbox, buyer order surfaces and MCP results. Each check contains `code`
+(`QUANTITY_ANOMALY`, `PRICE_ANOMALY`, `VELOCITY_ANOMALY`, `NEW_CATEGORY`), `status`
+(`normal`, `anomaly`, `insufficient_history`), optional `product_id`, `observed`,
+`unit`, `expected_band`, `history_window`, `band_source` (`statistical` or
+`forecast`), optional `explanation_text`, and `fixes[]`. `history_window.points`
+is the actual sample count; start/end are evidence timestamps. Quantity may use a
+weekday bucket (reported as `history_window.weekday`); category checks list known
+categories in the window. No warning is raised with fewer than four observations.
+The four anomaly warnings route the order through the usual human-approval status,
+reason, polling and receipt journey. Anomalies are rechecked at placement, so the
+order can have additional warnings compared with the original quote.
+
+Fixes carry `id`, `kind`, `description`, and where relevant `product_id`,
+`quantity_sales_units`, `remainder_sales_units` or `action_url`.
+`POST /v1/quotes/{quote_id}/anomaly-fixes/{fix_id}` returns
+`{source_quote_id, fix_id, quotes: [...]}`. Agent owners and scoped buyer approvers
+can apply corrections, cheaper ranked alternatives and splits. Refresh the source
+order after a fix: its pending promise is superseded (CANCELLED), and the returned
+quotes need normal placement. Fresh prices and stock can change the offered fix;
+constraint or authority failures are ordinary recovery responses. The remainder
+of a split always requires human approval. Reapplying a consumed fix returns an
+expired-quote response. No fix approves an order.
+
+At twice the velocity upper band the pending order is retained and the agent is
+paused with an audited reason. Further mutations answer `423 AGENT_PAUSED` with
+`paused_by`, `paused_at`, `reason` and `next_action: CONTACT_ADMIN`. Reads remain
+available. Velocity fixes expose the buyer-admin suspend/resume `action_url`;
+send the normal `{reason}` body. The scoped `agent.anomaly_alert` event is queued
+in the outbox for buyer administration; tenant ownership/alert screens arrive with
+the later governance work. Current `policy.anomalies` fields are editable policy
+settings; business-profile presets are outside this change. Synthetic reset
+history is labelled `synthetic: true`; the normal hotel-chain milk demo stays
+confirmed without anomaly warnings.

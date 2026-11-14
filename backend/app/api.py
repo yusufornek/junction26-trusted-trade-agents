@@ -110,7 +110,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                   description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. supplier_id defaults to valio (gateway-simulated); nordfood is synthetic and supplier-acknowledged after submit. Sandbox deployments use isolated credentials, storage and fixture time; every response carries X-Environment.",
 
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
-                             for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
+                             for code in (401, 403, 404, 409, 422, 423, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
     from .connections import router as connections_router
@@ -136,6 +136,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.include_router(proposals_router)
     from .purchase_memory import router as memory_router
     app.include_router(memory_router)
+    from .anomaly_service import router as anomalies_router
+    app.include_router(anomalies_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

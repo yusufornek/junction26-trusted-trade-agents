@@ -21,6 +21,7 @@ from .discovery import NAME, TITLE, VERSION, DESCRIPTION, check_server
 from .agent_context import AgentContext, agent_context
 from .purchase_memory import MakeRecurring, SuggestionAction
 from .recurring import Deviations, RecurringRequest
+from .anomaly_service import FixResult
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
@@ -35,6 +36,7 @@ MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate pl
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
+    "Spec 45: quotes and orders include anomalies with status normal/anomaly/insufficient_history, expected_band, observed, history_window, band_source and fixes. QUANTITY_ANOMALY, PRICE_ANOMALY, VELOCITY_ANOMALY and NEW_CATEGORY require approval. Under four observations no warning is raised. Placement rechecks history; twice the velocity band pauses the agent (423 AGENT_PAUSED) and emits an alert. apply_anomaly_fix re-quotes corrected quantity, a cheaper ranked alternative or a split; the remainder requires approval. A pending original order is superseded, never approved by the fix. Buyer administrators use the fix action_url to pause/resume. "
     "NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. "
     "minimum_order_quantity is a lower bound; allowed_lot_size is the independent order multiple. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND and positive retry_after_seconds means repeat place_order with exactly the same idempotency key. Durable dispatch intents commit before supplier contact; recovery first reconciles the supplier key and rechecks current authority before any new submit. "
     "Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. "
@@ -254,6 +256,11 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
                                                            lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
+
+    @server.tool(description="Apply a server-proposed anomaly fix by quote_id and fix_id. Rechecks ownership and mandate, uses fresh price/stock, and returns replacement quotes only. Correct quantity, choose a cheaper ranked alternative, or split usual quantity and remainder (the remainder always requires human approval). Supersedes the original promise and any pending order. Pause/resume requires the buyer administrator at the proposed action_url; this tool cannot approve or resume an agent.")
+    def apply_anomaly_fix(quote_id: str, fix_id: str) -> FixResult:
+        return gateway.anomalies.apply_fix(quote_id, fix_id, current_agent(), mandate=PRESENTED_MANDATE.get(),
+                                          principal=PRINCIPAL.get())
 
     @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the saved first response, even after cancellation, after ownership and identity checks (PENDING_EXECUTION resumes ambiguous supplier execution per spec 25), even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision and use a new approval idempotency key before approving again. No upstream order endpoint exists." + MANDATE_HELP)
     def place_order(quote_id: str, idempotency_key: str) -> Order:

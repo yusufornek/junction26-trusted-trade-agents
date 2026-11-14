@@ -339,9 +339,14 @@ class Orders:
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": TASK.get()}
+            quote.anomalies = self.anomalies.checks(conn, quote)
+            quote.warnings.extend(self.anomalies.warnings(quote.anomalies))
             quote.signature = self.signing.sign_quote(quote)
             self.mandates.bind(conn, "quote", quote.id, mandate)
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
+            if any(c.status == "anomaly" for c in quote.anomalies):
+                audit.append(conn, actor, "ANOMALY_DETECTED", "Quote requires anomaly review.", quote_id=quote.id,
+                             data={"anomalies": [c.model_dump(mode="json") for c in quote.anomalies]})
             audit.append(conn, actor, "CREATE_QUOTE", f"Locked {len(lines)} fixed-price lines for {quote.total:.2f} EUR.",
                          quote_id=quote.id, data={"inputs": request.model_dump(mode="json"),
                          "live_calls": counter.live().model_dump(), **mandate_evidence(record), "fit_scores": {o.product_id: o.fit for o in lines},
@@ -414,9 +419,19 @@ class Orders:
             if mandate is not None:
                 policy, record, _ = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
                     products=[o.product_id for o in lines], policy=policy, supplier_id=quote.supplier_id)
+            from .anomaly_service import CODES
+            checks = self.anomalies.checks(conn, quote.model_copy(update={"lines": lines, "agent_id": agent_id}), placement=True)
+            if (quote.context or {}).get("anomaly_split_remainder"):
+                for held in quote.anomalies:
+                    if held.code != "QUANTITY_ANOMALY" or held.status != "anomaly":
+                        continue
+                    if not any(c.code == held.code and c.product_id == held.product_id and c.status == "anomaly" for c in checks):
+                        checks = [c for c in checks if not (c.code == held.code and c.product_id == held.product_id)]
+                        checks.append(held)
+            warnings = [w for w in quote.warnings if w.code not in CODES] + self.anomalies.warnings(checks)
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
                                                 agent_id=agent_id, customer_id=quote.customer_id,
-                                                policy=policy, warnings=quote.warnings)
+                                                policy=policy, warnings=warnings)
             if quote.basket_ref and any(not line.availability.enough for line in lines):
                 from .models import RuleHit
                 result.hits.append(RuleHit(rule="basket_stock_unavailable", detail="All basket lines must be available before confirmation."))
@@ -437,7 +452,7 @@ class Orders:
                           clinical_review=quote.clinical_review or (policy.customers[quote.customer_id].clinical_review if quote.customer_id in policy.customers else None),
 
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
-                          total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
+                          total=quote.total, currency=quote.currency, lines=lines, warnings=warnings, anomalies=checks,
                           policy=result, live_calls=counter.live())
             order.context = dict(quote.context) if quote.context else None
             if order.context and quote.need_ref:
@@ -466,6 +481,7 @@ class Orders:
                          order_id=order.id, quote_id=quote.id, data={"inputs": {"idempotency_key": key},
                          "outcome": order.status, **mandate_evidence(record),
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
+                          "anomalies": [c.model_dump(mode="json") for c in checks],
                          "live_calls": counter.live().model_dump()})
             if order.status == "REJECTED":
                 self._suggest_review(conn, order, "hard_constraint_refusal" if any(
@@ -823,7 +839,7 @@ class Orders:
                         products=[o.product_id for o in order.lines], bound=("order", order_id), supplier_id=order.supplier_id)
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, customer_id=quote.customer_id,
-                                                        warnings=quote.warnings, policy=policy)
+                                                        warnings=order.warnings, policy=policy)
                 if order.basket_ref and any(not line.availability.enough for line in order.lines):
                     from .models import RuleHit
                     evaluation.hits.append(RuleHit(rule="basket_stock_unavailable", detail="All basket lines must be available before confirmation."))
@@ -858,7 +874,9 @@ class Orders:
                     order.context["recurring_comparison"] = comparison
                 if quote.basket_ref or (self.lookup_need(conn, quote.need_ref).basket if quote.need_ref else None):
                     order.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
-                order.warnings = quote.warnings
+                # Placement-time anomaly evidence remains reviewable after stock refresh.
+                from .anomaly_service import CODES
+                order.warnings = [w for w in quote.warnings if w.code not in CODES] + self.anomalies.warnings(order.anomalies)
                 changes = evidence_changes(previous, order)
                 if not changes and order.basket_ref and any(not line.availability.enough for line in order.lines):
                     raise DomainError("BASKET_STOCK_UNAVAILABLE", "All basket lines must be available before approval", 409)

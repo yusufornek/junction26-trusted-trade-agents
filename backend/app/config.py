@@ -20,7 +20,7 @@ def load_env(path: Path = ROOT / ".env.local") -> None:
         if line.startswith("export "):
             line = line[7:]
         key, sep, value = line.partition("=")
-        if sep and key.strip() in {"DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES", "WEBHOOK_SANDBOX", "GATEWAY_ENVIRONMENT", "GATEWAY_PUBLIC_URL", "FRONTEND_CONSENT_URL", "MCP_AGENT_ID", "NORDFOOD_API_BASE", "SANDBOX_DB_PATH", "SANDBOX_AGENT_KEYS", "SANDBOX_ADMIN_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_CONSOLE"}:
+        if sep and key.strip() in {"FORECAST_ENABLED", "FORECAST_MODEL_PATH", "DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES", "WEBHOOK_SANDBOX", "GATEWAY_ENVIRONMENT", "GATEWAY_PUBLIC_URL", "FRONTEND_CONSENT_URL", "MCP_AGENT_ID", "NORDFOOD_API_BASE", "SANDBOX_DB_PATH", "SANDBOX_AGENT_KEYS", "SANDBOX_ADMIN_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_CONSOLE"}:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -31,6 +31,8 @@ def load_env(path: Path = ROOT / ".env.local") -> None:
 
 @dataclass
 class Settings:
+    forecast_enabled: bool = False
+    forecast_model_path: Path | None = None
     db_path: Path = BACKEND / "var/app.db"
     policy_path: Path = BACKEND / "policy.yaml"
     valio_api_base: str = "https://junction26.valioaimo.fi"
@@ -61,6 +63,8 @@ class Settings:
         environment = os.getenv("GATEWAY_ENVIRONMENT") or "live"
         sandbox = environment == "sandbox"
         return cls(
+            forecast_enabled=os.getenv("FORECAST_ENABLED", "").lower() == "true",
+            forecast_model_path=Path(os.environ["FORECAST_MODEL_PATH"]) if os.getenv("FORECAST_MODEL_PATH") else None,
             environment=environment,
             public_url=os.getenv("GATEWAY_PUBLIC_URL", ""),
             frontend_consent_url=os.getenv("FRONTEND_CONSENT_URL", ""),

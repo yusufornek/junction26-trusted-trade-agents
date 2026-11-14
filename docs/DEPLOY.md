@@ -219,3 +219,24 @@ assigned in the Webdock panel under *Shell Users*.
   "Permission denied", put the deploy key back.
 - **Freeze before judging:** pushes deploy immediately. Before the demo, stop merging to `main` or disable the
   workflow, so a late "live verification pending" commit cannot replace a working build on stage.
+## Optional anomaly forecasting (spec 45)
+
+Deterministic anomaly checks need no extra dependency and are always active.
+`FORECAST_ENABLED` defaults to false; `FORECAST_MODEL_PATH` defaults to unset.
+To provision the optional CPU layer in an environment with package access, run
+`backend/.venv/bin/pip install -r backend/requirements-forecast.txt`, then provision
+the official `mistralai/Timestral-28M` weights separately and mount their local
+directory. Set `FORECAST_ENABLED=true` and `FORECAST_MODEL_PATH` to that directory
+and restart the gateway. Never use an automatically downloaded checkpoint during
+a procurement request. The package is pinned to commit
+`a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff`; torch is an optional CPU dependency.
+
+The adapter imports Timestral lazily and loads local weights once at gateway
+construction. Missing packages/weights, load failures, prediction failures and
+invalid quantiles fall back to deterministic median/MAD bands. Each check records
+`band_source: statistical` or `forecast`, so the operator can see which ran.
+The gateway stays usable when forecasting is unavailable. Offline tests inject a
+stub forecaster; real package/checkpoint compatibility requires a separately
+provisioned integration run. Model licensing is a production prerequisite:
+Timestral's modified MIT terms have a revenue threshold; see the recorded
+decision in `docs/DECISIONS.md` before a Valio deployment.

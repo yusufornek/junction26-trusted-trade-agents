@@ -36,6 +36,7 @@ class Policy:
             data.setdefault("agents", {key: value.model_dump() for key, value in defaults.agents.items()})
             data.setdefault("customers", {})
             data.setdefault("autonomy", defaults.autonomy.model_dump())
+            data.setdefault("anomalies", defaults.anomalies.model_dump())
             # ignored_warnings was introduced with the evidence defaults. Its absence identifies
             # a legacy document; explicitly saved current policies must keep their operator choices.
             if "ignored_warnings" not in data["approval"]:
@@ -112,7 +113,7 @@ class Policy:
             after = self._editable(self._load(self.path) if reset else request.policy)
             if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                 after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
-            for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy", "proposal_quotas"):
+            for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy", "proposal_quotas", "anomalies"):
                 if not reset and section not in request.policy.model_fields_set:
                     after[section] = before[section]
             from .catalog import Catalog

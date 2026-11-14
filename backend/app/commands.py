@@ -270,6 +270,17 @@ KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.c
                           "proposals.submit", "proposals.action", "proposals.put_preferences", "memory.act", "memory.put_preferences"})
 
 
+def omit_anomaly_defaults(route, values):
+    # Preserve saved command hashes from before this additive policy section.
+    # Field-presence remains in v2 hashes; non-default thresholds stay bound.
+    if route == "policy.update":
+        from .models import AnomalyPolicy
+        policy = values.get("request", {}).get("policy", {})
+        if policy.get("anomalies") == AnomalyPolicy().model_dump():
+            policy.pop("anomalies")
+    return values
+
+
 def omit_policy_defaults(route, values):
     if route == "policy.update":
         # This field was added after command records existed. Omission and
@@ -290,6 +301,7 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     values = json_value({k: v for k, v in arguments.items() if k not in excluded})
     if route == "gateway.find_offers" and values.get("product_ids") is None:
         values.pop("product_ids", None)  # Preserve previously issued command fingerprints.
+    omit_anomaly_defaults(route, values)
     if not policy_defaults:
         omit_policy_defaults(route, values)
     payload = {"principal": scope, "route": route, "arguments": values}
@@ -316,7 +328,9 @@ def matches_command(previous, digest, name, route, arguments, saved):
                 if not include_defaults:
                     omit_policy_defaults(route, values)
                 payload = {"principal": previous["principal"], "route": route, "arguments": values}
-                if previous["digest"] == sha256(canonical_json(payload)).hexdigest():
+                older = json.loads(json.dumps(payload))
+                omit_anomaly_defaults(route, older["arguments"])
+                if previous["digest"] in {sha256(canonical_json(p)).hexdigest() for p in (payload, older)}:
                     return True
     if saved.get("fingerprint_version") is not None:
         return False
@@ -336,8 +350,14 @@ def matches_command(previous, digest, name, route, arguments, saved):
     compatible = {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
     compatible.add("v2:" + sha256(canonical_json(lane_versioned)).hexdigest())
     for value in (legacy, lane_legacy):
+        older = json.loads(json.dumps(value))
+        omit_anomaly_defaults(route, older["arguments"])
+        compatible.add(sha256(canonical_json(older)).hexdigest())
         omit_policy_defaults(route, value["arguments"])
         compatible.add(sha256(canonical_json(value)).hexdigest())
+        omit_anomaly_defaults(route, value["arguments"])
+        compatible.add(sha256(canonical_json(value)).hexdigest())
+    compatible.add("v2:" + sha256(canonical_json(lane_versioned)).hexdigest())
     return (previous["digest"] in compatible
             and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
 

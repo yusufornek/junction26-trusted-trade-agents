@@ -19,6 +19,10 @@ def check_suspension(db, agent_id):
     with db.connect() as conn:
         row = conn.execute("SELECT data FROM buyer_suspensions WHERE agent_id=?", (agent_id,)).fetchone()
     if row and json.loads(row[0])["suspended"]:
+        data = json.loads(row[0])
+        if data.get("source") == "anomaly":
+            raise DomainError("AGENT_PAUSED", data["reason"], 423,
+                              data={"paused_by": data["actor"], "paused_at": data["at"], "reason": data["reason"]})
         raise DomainError("AGENT_SUSPENDED", "Buyer suspended this agent; contact the buyer administrator", 403)
 
 

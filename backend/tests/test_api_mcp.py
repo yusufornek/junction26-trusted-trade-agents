@@ -16,7 +16,7 @@ EXPECTED_MCP_TOOLS = {"search_products", "find_offers", "create_quote", "place_o
     "get_order_status", "get_order_receipt", "cancel_order", "get_order_ubl", "get_order_evidence",
     "find_basket_offers", "get_agent_context", "list_proposals", "get_replenishment_suggestions", "prepare_suggestion",
     "create_recurring_from_suggestion", "list_recurring_orders", "create_recurring_order",
-    "run_recurring_order_now", "pause_recurring_order"}
+    "run_recurring_order_now", "pause_recurring_order", "apply_anomaly_fix"}
 
 
 @pytest.mark.parametrize("registered_agents", [("hotel-agent",)], indirect=True)
@@ -150,7 +150,7 @@ finally:
 
 def test_contract_all_routes_have_response_schema():
     schema = create_app(keys=TEST_KEYS).openapi()
-    assert set(schema["paths"]) == {"/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
+    assert set(schema["paths"]) == {"/v1/quotes/{quote_id}/anomaly-fixes/{fix_id}", "/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/approvals", "/v1/approvals/{order_id}/approve",
 
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
