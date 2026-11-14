@@ -10,7 +10,8 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect, named_case_sizes
+from .catalog import (allergen_evidence, constraint_failures, number, suspect_content, case_suspect,
+                      named_case_sizes, name_size_evidence, sizes_agree)
 from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
@@ -129,24 +130,22 @@ def reconcile_size(product, price, requested_unit):
     if multiplier is not None and multiplier > 0:
         if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
-        # Compute the name source too, even when structured catalog content exists.
-        # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
-        # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
-        # multiplier does not already carry it ("5 x Milk 1 L" with multiplier 5 stays 5 x 1 L).
-        pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
-        factors = {"l": 1, "dl": 0.1, "cl": 0.01, "ml": 0.001} if requested_unit == "L" else {"kg": 1, "g": 0.001}
-        for name in (product.name_en, product.name_fi):
-            for match in re.finditer(pattern, name, re.IGNORECASE):
-                count = int(match[1]) if match[1] else 1
-                value, unit = Decimal(match[2].replace(",", ".")), match[3].lower()
-                if unit in factors and value > 0:
-                    exact["name_parse"] = float(pack_quantity(value, factor=factors[unit],
-                        multiplier=count if multiplier == 1 and count > 0 else multiplier))
-                    break
-            if "name_parse" in exact:
-                break
-        if multiplier == 1 and named_cases:
-            exact["name_parse"] = named_cases[0]
+    evidence = name_size_evidence(names, requested_unit, multiplier)
+    candidates = [r for r in evidence if not r["check_only"]]
+    named = sorted({r["size"] for r in candidates})
+
+    # A name alone authorises conversion only with an unambiguous catalog count
+    # or one measure at multiplier 1. All other estimates are display-only.
+    def name_is_supported(size):
+        if "catalog" in exact and sizes_agree(size, exact["catalog"]):
+            return True
+        by_name = [[r for r in evidence if r["source_text"] == name] for name in set(names) if name]
+        by_name = [rows for rows in by_name if rows]
+        if not by_name or not all(sizes_agree(r["size"], size) for r in evidence):
+            return False
+        return all(len(rows) == 1 and (
+            (multiplier is not None and rows[0]["count"] == multiplier and not rows[0]["portion_count"])
+            or (multiplier == 1 and not rows[0]["count"])) for rows in by_name)
 
     def packaging_warnings(size):
         if named_cases and not any(abs(size / named - 1) <= .03 or
@@ -156,16 +155,21 @@ def reconcile_size(product, price, requested_unit):
                 f"name_case={named_cases} {requested_unit} per sales unit."))]
         return []
 
-    if exact:
+    if exact or named:
         if ratio is None:
-            source = next(iter(exact))
-            return exact[source], source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(exact[source])]
+            if "catalog" in exact:
+                source, size = "catalog", exact["catalog"]
+            else:
+                source = "name_parse"
+                size = next((s for s in named if name_is_supported(s)), min(named))
+            return size, source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(size)]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
-        for source, size in exact.items():
+        for source, size in [*exact.items(), *(("name_parse", s) for s in named)]:
             difference = abs(ratio / size - 1)
             if difference < 0.03 or isclose(difference, 0.03, rel_tol=1e-12):
                 return size, source, True, packaging_warnings(size)
-        values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
+        values = ", ".join(f"{key}={value:g} {requested_unit}"
+                           for key, value in [*exact.items(), *(("name_parse", s) for s in named)])
         mismatch = Warning(code="SIZE_MISMATCH", text=(
             f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; price_ratio={ratio:g} {requested_unit} per sales unit."
         ))
@@ -308,6 +312,11 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
         allowed_lot_size=float(sales_step(product)),
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
         size_confirmed_by_price=confirmed,
+        name_size_candidates=[{"size_per_sales_unit": r["size"], "source_text": r["source_text"],
+                               "expression": r["expression"]}
+            for r in name_size_evidence([product.name_en, product.name_fi], need.quantity.unit,
+                product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None))]
+            if need.quantity.unit != "SALES_UNIT" else [],
         unit_price=net, unit_price_with_tax=number(catalog.get("valueWithTax")),
         price_per_l_or_kg=net / size if net is not None and size and need.quantity.unit != "SALES_UNIT" else None,
         total=total, purchase_total=total,

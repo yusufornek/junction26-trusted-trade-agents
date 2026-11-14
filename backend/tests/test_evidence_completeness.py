@@ -77,16 +77,21 @@ def test_review_all_real_case_name_sizes(need, real_case_name_products, record_t
             # A valid mock case price, deliberately without comparisonPrice: no ratio can hide bad content.
             offer = offer_for(product, request,
                 {"catalogPrice": {"value": 13, "currency": "EUR", "validTo": "9999-12-31T00:00:00Z"}}, {})
-            if {w.code for w in offer.warnings} & {"SIZE_UNKNOWN", "SIZE_MISMATCH"}:
+            if "SIZE_UNKNOWN" in {w.code for w in offer.warnings}:
+                assert offer.size_per_sales_unit is None
                 continue
-            if not sizes:
-                # Count-only names provide no L/KG oracle; retained catalog evidence must support the conversion.
-                base = product.base_volume_l if unit == "L" else product.base_net_weight_kg
-                case = product.sales_volume_l if unit == "L" else product.sales_net_weight_kg
-                sizes = {Decimal(str(case))} if case else (
-                    {Decimal(str(base)) * Decimal(str(product.units.get(product.sales_unit, 1)))} if base else set())
+            assert "SIZE_UNCONFIRMED" in {w.code for w in offer.warnings}
+            # A warning must not waive the independent bound: a 2.5 kg case
+            # cannot become 62.5 kg just because SIZE_MISMATCH is also present.
+            base = product.base_volume_l if unit == "L" else product.base_net_weight_kg
+            case = product.sales_volume_l if unit == "L" else product.sales_net_weight_kg
+            sizes = set(sizes)
+            if base:
+                sizes.add(Decimal(str(base)) * Decimal(str(product.units.get(product.sales_unit, 1))))
+            if case:
+                sizes.add(Decimal(str(case)))
             used = Decimal(str(offer.size_per_sales_unit))
-            if not any(size > 0 and abs(used / size - 1) <= Decimal(".03") for size in sizes):
+            if not sizes or used > max(sizes) * Decimal("1.03"):
                 failures.append((product.id, product.name_en, unit, str(used), sorted(map(str, sizes))))
     assert not failures, f"{len(failures)} failures / {len(real_case_name_products)} products: {failures[:12]}"
 
@@ -449,6 +454,11 @@ def test_ac_7_unconfirmed_size_requires_plan_approval(gateway, need, upstream, r
     result = gateway.find_offers(need.model_copy(update={"quantity": Quantity(value=5, unit="L")}), actor="agent:web-console")
     assert "SIZE_UNCONFIRMED" in codes(next(o for o in result.offers if o.product_id == "1"))
     assert result.plans and all(p.policy_preview.outcome == "PENDING_APPROVAL" for p in result.plans)
+    offer = next(o for o in result.offers if o.product_id == "1")
+    assert offer.name_size_candidates and all(c.source_text for c in offer.name_size_candidates)
+    quote = gateway.orders.create_quote(quote_request(result.need, qty=offer.units_needed,
+        need_ref=result.lookup_id), "web-console")
+    assert gateway.orders.place_order(quote.id, "ac7-unconfirmed-size", "web-console").status == "PENDING_APPROVAL"
     mutate_response(respx_mock, upstream, "price", lambda b: None)
     gateway.valio.cache.clear()
     confirmed = next(o for o in gateway.find_offers(need).offers if o.product_id == "1")

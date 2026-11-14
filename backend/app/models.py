@@ -187,6 +187,12 @@ class Availability(Model):
         return data
 
 
+class NameSizeCandidate(Model):
+    size_per_sales_unit: float = Field(description="Plausible case content in the offer's size_unit; display evidence, not proof of conversion.")
+    source_text: str = Field(description="Original product name containing this measure.")
+    expression: str = Field(description="Local measure and count expression; repeated complete expressions remain independent.")
+
+
 class OfferCard(Model):
     supplier_id: str = "valio"
     synthetic: bool = False
@@ -196,10 +202,11 @@ class OfferCard(Model):
     name: str
     sales_unit: str
     allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
-    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.")
+    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
+    name_size_candidates: list[NameSizeCandidate] = Field(default_factory=list, description="All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.")
     units_needed: float | None = Field(default=None, description="Whole sales units rounded to the effective allowed lot step, including KG.")
     unit_price: float | None = Field(default=None, description="Net catalog price per sales unit, fixed on quote creation.")
     unit_price_with_tax: float | None = None
@@ -229,6 +236,8 @@ class OfferCard(Model):
         data = handler(self)
         if "allowed_lot_size" not in self.model_fields_set:
             data.pop("allowed_lot_size", None)
+        if "name_size_candidates" not in self.model_fields_set:
+            data.pop("name_size_candidates", None)
         for field in ("supplier_id", "synthetic"):
             if field not in self.model_fields_set:
                 data.pop(field, None)

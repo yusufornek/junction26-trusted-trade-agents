@@ -481,7 +481,7 @@
     }
   },
   "find_offers": {
-    "description": "Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content differs from the live price ratio or explicit name-count evidence by more than 3% and requires review; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason. Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content differs from the live price ratio or explicit name-count evidence by more than 3% and requires review; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; Name sizes require a confirming live ratio within 3%, matching explicit catalog content within 3%, one count expression matching the sales multiplier without contradictory measures, or a single measure at multiplier 1. Otherwise size_per_sales_unit and units_needed are display estimates from the smallest plausible candidate and SIZE_UNCONFIRMED prevents autonomous placement. Spec 15 also requires SIZE_UNCONFIRMED for catalog/name sizes without a confirming live ratio. name_size_candidates lists every candidate with original source_text and local expression. Explicit package totals are never multiplied by portion counts; repeated complete pack expressions stay independent, and slash portion counts are retained (100 pieces / 25 per 625g pack = 2.5kg). NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason. Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "NeedSpec": {
@@ -977,6 +977,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "NeedSpec": {
           "additionalProperties": false,
           "properties": {
@@ -1123,7 +1150,7 @@
                 }
               ],
               "default": null,
-              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.",
+              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.",
               "title": "Size Per Sales Unit"
             },
             "size_unit": {
@@ -1153,6 +1180,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -2195,6 +2230,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
@@ -2256,7 +2318,7 @@
                 }
               ],
               "default": null,
-              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.",
+              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.",
               "title": "Size Per Sales Unit"
             },
             "size_unit": {
@@ -2286,6 +2348,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -3131,6 +3201,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
@@ -3192,7 +3289,7 @@
                 }
               ],
               "default": null,
-              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.",
+              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.",
               "title": "Size Per Sales Unit"
             },
             "size_unit": {
@@ -3222,6 +3319,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -4226,6 +4331,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
@@ -4287,7 +4419,7 @@
                 }
               ],
               "default": null,
-              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.",
+              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.",
               "title": "Size Per Sales Unit"
             },
             "size_unit": {
@@ -4317,6 +4449,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -5376,6 +5516,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
@@ -5437,7 +5604,7 @@
                 }
               ],
               "default": null,
-              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.",
+              "description": "Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content includes its multiplier once. With SIZE_UNCONFIRMED this is a display estimate requiring approval, using the smallest plausible name candidate when unsupported. Null when conversion is unknown.",
               "title": "Size Per Sales Unit"
             },
             "size_unit": {
@@ -5467,6 +5634,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [

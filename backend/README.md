@@ -279,16 +279,29 @@ Old stored lookups without preferences/plans remain readable, including through 
   to `intent` with no recorded terms.
   Policy updates omitting `shortlist.live_max` retain its current value; older runtime files inherit
   the committed default.
-- Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
-  multiplier, and the live catalog/comparison price ratio. Among exact sources confirmed by price,
+- Conversion computes catalog base content times the sales-unit multiplier, local name/count candidates,
+  and the live catalog/comparison price ratio. Among exact sources confirmed by price,
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
+  Name-derived conversion is supported only by a live ratio within 3%, matching explicit catalog content
+  within 3%, one count expression matching the sales-unit multiplier with no contradictory measure,
+  or one measure with multiplier 1. Other name sizes are display estimates: the smallest plausible
+  candidate drives the displayed quantity, and `SIZE_UNCONFIRMED` prevents autonomous placement.
+  Spec 15 still requires approval for every catalog/name size lacking a confirming live ratio,
+  including otherwise unambiguous names. `name_size_candidates` exposes each candidate, its original
+  `source_text` and local `expression` in offers and quote/order lines. A portion/count can check a stated
+  package total but never multiply that total: `22g/2.77kg`, 126 pieces, gives 2.77 kg once.
+  Repeated complete expressions (`4x1kg ... 4x1kg`) remain independent; genuinely separated outer
+  counts (`8 x Brand 4x70g`) remain 32 portions. Inner portion counts are retained:
+  `4 x 625g/25pc` with 100 pieces per case gives (100/25) × 0.625 = 2.5 kg.
   CASE sales content needs no additional base-unit multiplier. It must agree within 3% with whole-case
   name evidence (including leading counts such as `24x Brooklyn ... 0.33 L`), or inner content times the
   sales-unit multiplier. An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
   measures case weight rather than counting packages, preserving valid whole-case weights.
   Legacy CASE suspicion flags are recalculated from retained content and names without a database rewrite.
+  Historical lookups, quotes and orders default missing name candidates to an empty list and preserve
+  the field's absence when serialized, retaining the original signed evidence shape.
   Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;

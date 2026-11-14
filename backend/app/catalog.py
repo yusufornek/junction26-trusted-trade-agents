@@ -49,33 +49,86 @@ def suspect_content(value, names, unit):
     if value is None:
         return False
     named = [size for name in names for size in name_sizes(name, unit) if size > 0]
+    named.extend(named_case_sizes(names, unit))
     # Names can contain both portion and package weights. A compatible package candidate
     # supports the structured content even if an earlier portion candidate disagrees.
     return (value <= 0 or value > 100 or (unit == "KG" and value < .001)
             or bool(named and all(max(value / size, size / value) >= 10 for size in named)))
 
 
-def named_case_sizes(names, unit):
-    """Independent whole-case evidence from explicit counts, never a bare inner size.
+def sizes_agree(left, right):
+    return bool(left and right and (abs(left / right - 1) <= .03 or
+                math.isclose(abs(left / right - 1), .03, rel_tol=1e-12)))
 
-    A leading count may precede the brand (24x Brooklyn ... 0.33 L). A count
-    immediately before a measure takes precedence. A /4pcs suffix describes
-    the contents of an already weighed package, rather than four such packages.
+
+def name_size_evidence(names, unit, multiplier=1):
+    """Retain each measure and its local counts; never borrow across a completed measure.
+
+    Counts separated by a brand may surround an inner count (8 x Brand 4x70g).
+    Slash piece counts describe the portions IN a weighed pack, not extra packs.
+    A portion times a count can validate a stated total, but never multiply that total.
     """
-    pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+    pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
     factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
     result = []
-    for name in names:
-        prefix = re.match(r"\s*(\d+)\s*[x×]", name, re.I)
-        pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
-        pack = next((m for m in re.finditer(pattern, name, re.I) if m[1]), None)
-        for match in re.finditer(pattern, name, re.I):
-            count = (match[1] or (prefix[1] if prefix else None) or
-                     (pack[1] if pack else None) or (pieces[1] if pieces else None))
-            if count and match[3].lower() in factors and int(count) > 0:
-                result.append(float(pack_quantity(match[2].replace(",", "."),
-                    multiplier=int(count), factor=factors[match[3].lower()])))
+    for name in dict.fromkeys(names):
+        records, end = [], 0
+        for match in re.finditer(pattern, name or "", re.I):
+            segment = name[end:match.start()]
+            end = match.end()
+            if match[2].lower() not in factors:
+                continue
+            # A count followed directly by another number without an x is a dimension.
+            counts = list(re.finditer(r"(?<![\d.,])(\d+)\s*[x×]\s*", segment, re.I))
+            invalid = [i for i, c in enumerate(counts) if re.match(r"\d",
+                segment[c.end():counts[i + 1].start() if i + 1 < len(counts) else len(segment)])]
+            # A dimension such as 450x310x80mm invalidates its entire count chain,
+            # including its first number, rather than leaving a fictitious 450 packs.
+            counts = counts[max(invalid) + 1:] if invalid else counts
+            count = math.prod(int(c[1]) for c in counts) if counts else None
+            portion = re.match(r"\s*/\s*(\d+)\s*(?:pcs?|kpl|st)\b", name[match.end():], re.I)
+            portion_count = int(portion[1]) if portion and int(portion[1]) > 0 else None
+            measure = float(pack_quantity(match[1].replace(",", "."), factor=factors[match[2].lower()]))
+            if measure <= 0:
+                continue
+            # A known sales multiplier carries the count; with an inner portion
+            # declaration it instead counts individual portions (100 / 25 packs).
+            factor = (multiplier / portion_count if multiplier and multiplier > 1 and portion_count and count
+                      and sizes_agree(multiplier, count * portion_count) else
+                      count if len(counts) > 1 and multiplier == int(counts[0][1]) else
+                      multiplier if multiplier and multiplier > 1 else count or 1)
+            pieces = re.search(r"(?<![\d.,/x×])(\d+)\s*(?:pcs?|kpl)\b", name, re.I)
+            stated_count = count or (int(pieces[1]) if pieces else None)
+            records.append({"measure": measure, "count": count, "portion_count": portion_count,
+                "size": float(pack_quantity(measure, multiplier=factor)),
+                "stated_size": float(pack_quantity(measure, multiplier=stated_count)) if stated_count else None,
+                "source_text": name, "expression": name[(counts[0].start() + match.start() - len(segment))
+                    if counts else match.start():match.end() + (portion.end() if portion else 0)],
+                "check_only": False})
+        for total in records:
+            if total["count"]:
+                continue
+            for portion in records:
+                if portion["measure"] >= total["measure"]:
+                    continue
+                # Either a stated count or the catalog piece multiplier checks a total.
+                checked = portion["stated_size"] or (portion["size"] if multiplier and multiplier > 1 else None)
+                if sizes_agree(checked, total["measure"]):
+                    total.update(size=total["measure"], stated_size=total["measure"])
+                    portion.update(size=total["measure"], check_only=True)
+        result.extend(records)
+        # Conflicting explicit counts stay separate candidates. Missing comparison
+        # prices cannot make the catalog multiplier proof of one interpretation.
+        result.extend({**r, "size": r["stated_size"]} for r in records
+                      if r["stated_size"] and not r["check_only"]
+                      and not sizes_agree(r["size"], r["stated_size"]))
     return result
+
+
+def named_case_sizes(names, unit):
+    """Independent explicit count × measure evidence, including separated outer counts."""
+    return list(dict.fromkeys(r["stated_size"] for r in name_size_evidence(names, unit)
+                if r["stated_size"] and not r["check_only"]))
 
 
 def case_suspect(value, multiplier, names, unit, base_unit=None, base_content=None):

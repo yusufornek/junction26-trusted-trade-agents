@@ -12006,6 +12006,29 @@ components:
       - limits
       - valid_until
       title: MandateRecord
+    NameSizeCandidate:
+      properties:
+        size_per_sales_unit:
+          type: number
+          title: Size Per Sales Unit
+          description: Plausible case content in the offer's size_unit; display evidence,
+            not proof of conversion.
+        source_text:
+          type: string
+          title: Source Text
+          description: Original product name containing this measure.
+        expression:
+          type: string
+          title: Expression
+          description: Local measure and count expression; repeated complete expressions
+            remain independent.
+      additionalProperties: false
+      type: object
+      required:
+      - size_per_sales_unit
+      - source_text
+      - expression
+      title: NameSizeCandidate
     NeedSpec:
       properties:
         customer_id:
@@ -12116,8 +12139,10 @@ components:
           - type: 'null'
           title: Size Per Sales Unit
           description: Quantity unit per sales unit, quantized to six decimal places
-            before pack arithmetic; CASE content already includes its multiplier.
-            Null when conversion is unknown.
+            before pack arithmetic; CASE content includes its multiplier once. With
+            SIZE_UNCONFIRMED this is a display estimate requiring approval, using
+            the smallest plausible name candidate when unsupported. Null when conversion
+            is unknown.
         size_unit:
           type: string
           enum:
@@ -12137,6 +12162,16 @@ components:
           description: True when the live price ratio agrees with the selected exact
             catalog or name size within 3%.
           default: false
+        name_size_candidates:
+          items:
+            $ref: '#/components/schemas/NameSizeCandidate'
+          type: array
+          title: Name Size Candidates
+          description: All parsed name candidates with original source text. A name
+            conversion requires a confirming price ratio, matching explicit catalog
+            content, one count expression matching the sales multiplier without contradiction,
+            or one measure at multiplier 1. Otherwise quantities are display estimates
+            and SIZE_UNCONFIRMED requires approval.
         units_needed:
           anyOf:
           - type: number

@@ -265,8 +265,29 @@ def real_case_name_products(actual_product_rows):
             prefix = re.search(prefix_pattern, name, re.I)
             pieces = re.search(pieces_pattern, name, re.I)
             direct = {m.start(2): m[1] for m in re.finditer(direct_pattern, name, re.I)}
+            prior_end = 0
             for match in re.finditer(size_pattern, name, re.I):
+                between = name[prior_end:match.start()]
+                prior_end = match.end()
+                # Independent upper bound for genuine nested counts; do not
+                # propagate counts from a previous completed size expression.
+                chain = re.findall(r"(\d+)\s*[x×]", between, re.I)
+                noncounts = re.sub(r"\d+\s*[x×]", "", between, flags=re.I)
+                if re.search(r"\d", noncounts):
+                    suffix = re.search(r"((?:\d+\s*[x×]\s*\(?\s*)+)$", between, re.I)
+                    chain = re.findall(r"(\d+)\s*[x×]", suffix[1]) if suffix else []
+                if chain:
+                    dimension, conversion = factors[match[2].lower()]
+                    from math import prod
+                    expected[dimension].add(Decimal(prod(map(int, chain))) *
+                        Decimal(match[1].replace(",", ".")) * Decimal(conversion))
                 count = direct.get(match.start()) or (prefix[1] if prefix else None) or next(iter(direct.values()), None)
+                # A separated outer count may surround the first complete pack
+                # expression; an earlier complete measure can never surround a repeat.
+                if prefix and match.start() in direct and prefix.end() < match.start():
+                    before = name[prefix.end():match.start()]
+                    if not re.search(size_pattern, before, re.I) and re.search(r"\D", before):
+                        count = str(int(prefix[1]) * int(direct[match.start()]))
                 if count is None and pieces:
                     # "200g/4pcs" weighs the whole bag; it is not four 200g bags.
                     if pieces.start() > 0 and name[pieces.start() - 1] == "/":
