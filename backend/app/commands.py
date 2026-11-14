@@ -83,6 +83,7 @@ def install(gateway, target, name, category):
                 raise error
             return result
         finally:
+            gateway.valio.flush_rate_limit_audits(gateway.db)
             TRACE.reset(trace_token)
             CORRELATION.reset(tokens[0])
             CAUSATION.reset(tokens[1])

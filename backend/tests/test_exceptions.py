@@ -382,7 +382,11 @@ def assert_full_plan_valid(plan, lookup, target):
     assert plan.coverage.value >= target and plan.uncovered.value == 0
     for line in plan.lines:
         offer = offers[line.product_id]
-        assert 0 < line.units <= offer.availability.available_amount
+        assert line.units > 0
+        if offer.availability.availability_known:
+            assert line.units <= offer.availability.available_amount
+        else:
+            assert offer.availability.available_amount is None and offer.availability.enough
         assert line.covers.value == pytest.approx(line.units * offer.size_per_sales_unit)
     assert plan.total == pytest.approx(sum(round(offers[line.product_id].unit_price * line.units, 2)
                                          for line in plan.lines))
@@ -482,25 +486,25 @@ def test_exceptions_ac_14_rejects_customer_outside_mandate_before_preview(gatewa
     assert refused_order.value.code == "CUSTOMER_NOT_IN_MANDATE" and refused_order.value.status == 403
 
 
-def test_exceptions_ac_15_kg_plans_follow_fractional_lots(gateway, need, upstream, tmp_path):
+def test_exceptions_ac_15_kg_plans_follow_whole_lots(gateway, need, upstream, tmp_path):
     replace_products(gateway, tmp_path, [dict(raw_product("1", "Milk bulk", sales="KG", base="KG", multiplier=1),
                                               allowedLotSize=0.5)])
     upstream.sales_units["1"] = "KG"
-    upstream.amounts, upstream.prices = {"1": 10.75}, {"1": 2.675}
+    upstream.amounts, upstream.prices = {"1": 11.75}, {"1": 2.675}
     result = find(gateway, need, quantity={"value": 10.25, "unit": "KG"})
     plan, = result.plans
     offer, = result.offers
-    assert plan.kind == "single" and plan.lines[0].units == offer.units_needed == 10.5
+    assert plan.kind == "single" and plan.lines[0].units == offer.units_needed == 11
     assert plan.total == offer.total
     assert_full_plan_valid(plan, result, 10.25)
     assert quote(gateway, result.need, result).total == plan.total
-    # Less than one kg of stock is eligible if it contains a complete allowed lot.
+    # Less than one kg cannot provide a whole sales unit.
     upstream.amounts["1"] = 0.75
     small = find(gateway, need, quantity={"value": 0.25, "unit": "KG"})
-    assert small.plans[0].lines[0].units == small.offers[0].units_needed == 0.5
-    assert small.plans[0].total == small.offers[0].total
-    partial = find(gateway, need, quantity={"value": 1, "unit": "KG"}).plans[0]
-    assert partial.kind == "partial" and partial.lines[0].units == 0.5
+    assert small.plans == [] and small.offers[0].units_needed == 1
+    upstream.amounts["1"] = 1.75
+    partial = find(gateway, need, quantity={"value": 2, "unit": "KG"}).plans[0]
+    assert partial.kind == "partial" and partial.lines[0].units == 1
 
 
 def test_exceptions_ac_16_planning_does_not_hold_writer_lock(gateway, need, upstream, monkeypatch):

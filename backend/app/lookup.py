@@ -11,7 +11,7 @@ from .auth import check_owner
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
 from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect
-from .quantities import pack_quantity
+from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
 from .valio import RequestCounter
@@ -19,9 +19,11 @@ from .valio import RequestCounter
 WARNING_TEXT = {
     "PARTIAL_STOCK": "On-time available stock covers only part of the requested quantity.",
     "DATE_SHIFT": "The upstream API returned a delivery date after the requested deadline.",
-    "CUTOFF_PASSED": "Upstream closingTime is before timeNow; the cutoff meaning needs human review.",
+    "CUTOFF_PASSED": "The order cut-off for this delivery has passed.",
     "SALES_BLOCK": "The product or a schedule line is blocked for sale.",
-    "UNKNOWN_PRODUCT": "No schedule lines were returned; the upstream API does not flag unknown IDs.",
+    "UNKNOWN_PRODUCT": "Legacy stored unknown-product warning; no longer emitted.",
+    "NOT_AVAILABLE": "Valio reports this product as not available",
+    "AVAILABILITY_UNCONFIRMED": "Valio does not know this product's stock; its ordering logic accepts any quantity",
     "PRICE_ERROR": "A valid net catalog price could not be obtained.",
     "SIZE_UNKNOWN": "Sales-unit content cannot be converted to the requested unit.",
     "SIZE_MISMATCH": "Exact pack content differs from the live price ratio by more than 3%.",
@@ -88,7 +90,7 @@ def day(value):
 
 
 def round_quantity(quantity, product):
-    return float(pack_quantity(1, requested=quantity, step=product.allowed_lot_size if product.sales_unit == "KG" else 1))
+    return float(pack_quantity(1, requested=quantity, step=sales_step(product)))
 
 
 def size_for(product, price, requested_unit):
@@ -184,33 +186,48 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
     if raw.get("error"):
         codes.append("AVAILABILITY_ERROR")
     elif not lines:
-        codes.append("UNKNOWN_PRODUCT")
+        codes.append("NOT_AVAILABLE")
     dates = [d for line in lines if not line.get("salesBlock") and (d := day(line.get("availableDate")))]
     if any(d > deliver_by for d in dates):
         codes.append("DATE_SHIFT")
     if cutoff and cutoff < now:
         codes.append("CUTOFF_PASSED")
+    usable = [line for line in lines if not line.get("salesBlock")
+              and (sales_unit is None or line.get("salesUnit") == sales_unit)]
+    unknown = not (raw.get("salesBlock") or raw.get("error")) and any(
+        (number(line.get("availableAmount")) or 0) >= 999999 for line in usable)
+    on_time = [line for line in usable if (d := day(line.get("availableDate"))) and d <= deliver_by]
+    unknown_on_time = unknown and any((number(line.get("availableAmount")) or 0) >= 999999 for line in on_time)
     amount = 0.0 if raw.get("salesBlock") or raw.get("error") else sum(
-        max(0, number(line.get("availableAmount")) or 0) for line in lines
-        if not line.get("salesBlock") and (sales_unit is None or line.get("salesUnit") == sales_unit)
-        and (d := day(line.get("availableDate"))) and d <= deliver_by)
-    if model != "Terminal":
+        max(0, number(line.get("availableAmount")) or 0) for line in on_time
+        if (number(line.get("availableAmount")) or 0) < 999999)
+    if unknown:
+        codes.append("AVAILABILITY_UNCONFIRMED")
+    if unknown_on_time:
+        amount = quantity or 0
+    else:
         amount = max(0, amount - reserved_amount)
-    if model == "Stock" and amount == 0 and not dates and not raw.get("error"):
+    if model == "Stock" and amount == 0 and not dates and lines and not raw.get("error"):
         codes.append("NO_STOCK")
     coverage = min(1.0, amount / quantity) if quantity and quantity > 0 else 0.0
     if quantity and amount < quantity:
         codes.append("PARTIAL_STOCK")
-    return Availability(available_amount=amount, logistic_model=raw.get("logisticModel"),
+    warnings = [warning(c) for c in codes]
+    if cutoff and cutoff < now:
+        delivery = ", ".join(sorted({d.isoformat() for d in dates})) or "unknown date"
+        warnings = [Warning(code=w.code, text=f"Order cut-off for delivery on {delivery} passed at {cutoff.isoformat()}")
+                    if w.code == "CUTOFF_PASSED" else w for w in warnings]
+    return Availability(available_amount=None if unknown else amount, availability_known=not unknown,
+                        logistic_model=raw.get("logisticModel"),
                         closing_time=cutoff, available_date=min(dates) if dates else None,
-                        enough=quantity is not None and amount >= quantity, coverage=coverage), [warning(c) for c in codes]
+                        enough=quantity is not None and amount >= quantity, coverage=coverage), warnings
 
 
 def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, reserved_amount=0, sources=None):
     size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
         float(pack_quantity(size, requested=need.quantity.value,
-                            step=product.allowed_lot_size if product.sales_unit == "KG" else 1)) if size else None)
+                            step=sales_step(product))) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount, product.sales_unit)
     warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}
@@ -267,6 +284,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
                    if total is not None and overbuy is not None else "Purchase total or overbuy: unknown.")
     return OfferCard(
         product_id=product.id, gtin=product.gtin, name=product.name_en, sales_unit=product.sales_unit,
+        allowed_lot_size=float(sales_step(product)),
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
         size_confirmed_by_price=confirmed,
         unit_price=net, unit_price_with_tax=number(catalog.get("valueWithTax")),
@@ -286,7 +304,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
 
 def rank(offers, weights, fit_floor=None, *, catalog_stats=None, reject_codes=()):
     catalog_stats = catalog_stats or {}
-    invalid = set(reject_codes) | {"SALES_BLOCK", "UNKNOWN_PRODUCT", "NO_STOCK", "SIZE_UNKNOWN",
+    invalid = set(reject_codes) | {"SALES_BLOCK", "UNKNOWN_PRODUCT", "NOT_AVAILABLE", "NO_STOCK", "SIZE_UNKNOWN",
                                    "PRICE_ERROR", "AVAILABILITY_ERROR", "UNIT_MISMATCH"}
     def unorderable(offer):
         return any(w.code in invalid for w in offer.warnings)
@@ -401,7 +419,7 @@ class Lookup:
             try:
                 target.update(self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError as error:
-                if error.code == "UPSTREAM_BUSY":
+                if error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED"}:
                     raise
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
         if candidates and (not fits or any(p.id not in fits for p in candidates)):

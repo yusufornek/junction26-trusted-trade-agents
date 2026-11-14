@@ -46,12 +46,12 @@ def test_name_parse_kg_and_lot_rounding(gateway, need):
     assert size_for(p, {}, "KG") == (5, "name_parse")
     need.quantity = Quantity(value=1.234, unit="KG")
     offer = offer_for(gateway.catalog.get("7"), need, {"catalogPrice": {"value": 3}}, {}, None)
-    assert offer.units_needed == 1.24
+    assert offer.units_needed == 2
 
 
 def test_unknown_size_and_price_flags(gateway, need):
     offer = offer_for(gateway.catalog.get("6"), need, {"error": True}, {"scheduleLines": []})
-    assert {"SIZE_UNKNOWN", "PRICE_ERROR", "UNKNOWN_PRODUCT", "NO_FIT_SCORE"} <= codes(offer)
+    assert {"SIZE_UNKNOWN", "PRICE_ERROR", "NOT_AVAILABLE", "NO_FIT_SCORE"} <= codes(offer)
     assert offer.units_needed is None and offer.total is None
     assert size_for(gateway.catalog.get("1"), {"catalogPrice": {"value": -13}, "comparisonPrice": {"value": 2.6}, "comparisonUnit": "L"}, "L") == (5, "name_parse")
 
@@ -66,7 +66,7 @@ def test_warning_flags(need):
     assert availability.coverage == 0.3
     assert {w.code for w in warnings} == {"DATE_SHIFT", "PARTIAL_STOCK", "CUTOFF_PASSED"}
     raw["scheduleLines"] = []
-    assert "UNKNOWN_PRODUCT" in {w.code for w in availability_for(raw, need.deliver_by, 10)[1]}
+    assert "NOT_AVAILABLE" in {w.code for w in availability_for(raw, need.deliver_by, 10)[1]}
     raw["salesBlock"] = True
     assert "SALES_BLOCK" in {w.code for w in availability_for(raw, need.deliver_by, 10)[1]}
 

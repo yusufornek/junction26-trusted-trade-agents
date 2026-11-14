@@ -23,7 +23,8 @@ def test_review_real_catalog_minimal_packs(need, real_pack_products, index, frac
     request = need.model_copy(update={"quantity": Quantity(value=float(requested), unit=unit)})
     offer = offer_for(product, request, {}, {})
     units = Decimal(str(offer.units_needed))
-    step = Decimal(str(product.allowed_lot_size)) if product.sales_unit == "KG" else Decimal(1)
+    from app.quantities import sales_step
+    step = sales_step(product)
     assert units * size >= requested
     assert (units - step) * size < requested
     if step == 1:
@@ -141,7 +142,7 @@ def test_size_ac5_ratio_only_unchanged(gateway, need, upstream):
     assert offer.size_per_sales_unit == 5.0
     assert offer.size_source == "price_ratio"
     assert offer.size_confirmed_by_price is False
-    assert offer.warnings == []
+    assert {w.code for w in offer.warnings} == {"AVAILABILITY_UNCONFIRMED"}
 
 
 def test_size_ac6_price_error_keeps_unconfirmed_name(gateway, need, upstream):
@@ -151,7 +152,7 @@ def test_size_ac6_price_error_keeps_unconfirmed_name(gateway, need, upstream):
     assert offer.size_per_sales_unit == 5.0
     assert offer.size_source == "name_parse"
     assert offer.size_confirmed_by_price is False
-    assert {w.code for w in offer.warnings} == {"PRICE_ERROR", "SIZE_UNCONFIRMED"}
+    assert {w.code for w in offer.warnings} == {"PRICE_ERROR", "SIZE_UNCONFIRMED", "AVAILABILITY_UNCONFIRMED"}
     assert offer.units_needed == 200
 
 

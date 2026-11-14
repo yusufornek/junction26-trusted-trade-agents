@@ -2,6 +2,11 @@
 from decimal import Decimal, ROUND_CEILING
 
 
+def sales_step(product):
+    """Organiser rule: every sales unit, including KG, is ordered whole."""
+    return max(Decimal(1), Decimal(str(product.allowed_lot_size))).to_integral_value(rounding=ROUND_CEILING)
+
+
 def pack_quantity(size, *, multiplier=1, factor=1, whole_case=False, requested=None, step=1):
     """Return six-decimal content, or the least sales quantity covering requested.
 

@@ -1,6 +1,7 @@
 import gzip
 import json
 import sys
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -24,6 +25,34 @@ TEST_AGENT_IDS = ("external", "hotel-chain-agent", "web-console", "hotel-agent",
 AGENT_TOKENS = {agent: f"test-secret-{agent}" for agent in TEST_AGENT_IDS}
 TEST_KEYS = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{token}" for agent, token in AGENT_TOKENS.items()))
 OPERATOR_HEADERS = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
+
+
+class PacerClock:
+    """Advance supplier pacing deterministically without wall-clock sleeps."""
+    def __init__(self):
+        self.now = 1000.0
+        self.start = audit.utcnow()
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            return self.now
+
+    def sleep(self, seconds):
+        with self.lock:
+            self.now += max(seconds, 1e-9)
+
+    def utcnow(self):
+        return self.start + timedelta(seconds=self() - 1000)
+
+
+@pytest.fixture(autouse=True)
+def upstream_pacer(monkeypatch):
+    from app import valio
+    clock = PacerClock()
+    pacer = valio.UpstreamPacer(clock=clock, sleep=clock.sleep, wall_clock=clock.utcnow)
+    monkeypatch.setattr(valio, "UPSTREAM_PACER", pacer)
+    return pacer
 
 
 def agent_headers(agent_id):

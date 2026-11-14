@@ -4206,10 +4206,18 @@ components:
     Availability:
       properties:
         available_amount:
-          type: number
+          anyOf:
+          - type: number
+          - type: 'null'
           title: Available Amount
-          description: Sales units deliverable by the deadline, after local Stock
-            reservations.
+          description: On-time sales units after local reservations; null when an
+            upstream amount >= 999999 means unknown but orderable.
+        availability_known:
+          type: boolean
+          title: Availability Known
+          description: False for upstream amounts >= 999999, independently of logistic
+            model; no local reservation is counted.
+          default: true
         logistic_model:
           anyOf:
           - type: string
@@ -4562,6 +4570,8 @@ components:
             type: object
           - type: 'null'
           title: Anchoring
+        upstream:
+          $ref: '#/components/schemas/UpstreamHealth'
       additionalProperties: false
       type: object
       required:
@@ -4855,6 +4865,13 @@ components:
         sales_unit:
           type: string
           title: Sales Unit
+        allowed_lot_size:
+          type: number
+          minimum: 1.0
+          title: Allowed Lot Size
+          description: Effective whole sales-unit step used by this offer and its
+            plans, including KG.
+          default: 1
         size_per_sales_unit:
           anyOf:
           - type: number
@@ -4887,8 +4904,8 @@ components:
           - type: number
           - type: 'null'
           title: Units Needed
-          description: Whole sales units; KG sales quantities are rounded to the allowed
-            lot step.
+          description: Whole sales units rounded to the effective allowed lot step,
+            including KG.
         unit_price:
           anyOf:
           - type: number
@@ -5318,8 +5335,8 @@ components:
           type: number
           exclusiveMinimum: 0.0
           title: Units
-          description: 'Sales quantity: allowed_lot_size multiples for KG-sold products,
-            whole units otherwise; never exceeds on-time stock.'
+          description: Whole sales quantity in allowed_lot_size steps, including KG;
+            limited by on-time stock when known.
         covers:
           $ref: '#/components/schemas/CoveredQuantity'
       additionalProperties: false
@@ -5529,6 +5546,8 @@ components:
         allowed_lot_size:
           type: number
           title: Allowed Lot Size
+          description: Whole sales-unit step; organiser lot sizes below one count
+            as one, including KG.
           default: 1
         vendor_name:
           anyOf:
@@ -5875,8 +5894,8 @@ components:
           maximum: 1000000.0
           exclusiveMinimum: 0.0
           title: Quantity Sales Units
-          description: Explicit sales quantity, at most 1,000,000; KG follows allowedLotSize,
-            others are whole sales units.
+          description: Explicit whole sales quantity, at most 1,000,000, in allowedLotSize
+            steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE.
       additionalProperties: false
       type: object
       required:
@@ -6073,6 +6092,12 @@ components:
           type: integer
           title: Throttles
           default: 0
+        upstream_rate_limits:
+          type: integer
+          title: Upstream Rate Limits
+          description: Valio HTTP 429 blocks started in the reporting window; one
+            audit event per block.
+          default: 0
         since:
           anyOf:
           - type: string
@@ -6215,6 +6240,25 @@ components:
       - summary
       - data
       title: TimelineStep
+    UpstreamHealth:
+      properties:
+        blocked_until:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Blocked Until
+          description: UTC end of the process-wide Valio 429 block, or null when unblocked.
+        calls_last_minute:
+          type: integer
+          minimum: 0.0
+          title: Calls Last Minute
+          description: Actual outbound Valio calls in the preceding 60 seconds, across
+            this process.
+          default: 0
+      additionalProperties: false
+      type: object
+      title: UpstreamHealth
     Warning:
       properties:
         code:

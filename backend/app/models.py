@@ -106,7 +106,13 @@ class Product(Model):
     category: str | None = None
     sales_unit: str
     base_unit: str
-    allowed_lot_size: float = 1
+    allowed_lot_size: float = Field(default=1, description="Whole sales-unit step; organiser lot sizes below one count as one, including KG.")
+
+    @field_validator("allowed_lot_size")
+    @classmethod
+    def whole_lot(cls, value):
+        from math import ceil
+        return float(max(1, ceil(value)))
     vendor_name: str | None = None
     brand: str | None = None
     country: str | None = None
@@ -138,7 +144,8 @@ class Provenance(Model):
 
 
 class Availability(Model):
-    available_amount: float = Field(description="Sales units deliverable by the deadline, after local Stock reservations.")
+    available_amount: float | None = Field(description="On-time sales units after local reservations; null when an upstream amount >= 999999 means unknown but orderable.")
+    availability_known: bool = Field(default=True, description="False for upstream amounts >= 999999, independently of logistic model; no local reservation is counted.")
     logistic_model: str | None = None
     closing_time: datetime | None = None
     available_date: date | None = Field(default=None, description="Earliest unblocked upstream delivery date.")
@@ -151,11 +158,12 @@ class OfferCard(Model):
     gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
     sales_unit: str
+    allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
     size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
-    units_needed: float | None = Field(default=None, description="Whole sales units; KG sales quantities are rounded to the allowed lot step.")
+    units_needed: float | None = Field(default=None, description="Whole sales units rounded to the effective allowed lot step, including KG.")
     unit_price: float | None = Field(default=None, description="Net catalog price per sales unit, fixed on quote creation.")
     unit_price_with_tax: float | None = None
     price_per_l_or_kg: float | None = None
@@ -192,7 +200,7 @@ class CoveredQuantity(Model):
 
 class PlanLine(Model):
     product_id: str
-    units: float = Field(gt=0, description="Sales quantity: allowed_lot_size multiples for KG-sold products, whole units otherwise; never exceeds on-time stock.")
+    units: float = Field(gt=0, description="Whole sales quantity in allowed_lot_size steps, including KG; limited by on-time stock when known.")
     covers: CoveredQuantity
 
 
@@ -246,7 +254,7 @@ class LookupResult(Model):
 
 class QuoteLineRequest(Model):
     product_id: str = Field(min_length=1)
-    quantity_sales_units: float = Field(gt=0, le=1_000_000, strict=True, description="Explicit sales quantity, at most 1,000,000; KG follows allowedLotSize, others are whole sales units.")
+    quantity_sales_units: float = Field(gt=0, le=1_000_000, strict=True, description="Explicit whole sales quantity, at most 1,000,000, in allowedLotSize steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE.")
 
 
 class PlanRef(Model):
@@ -474,11 +482,17 @@ class ErrorResponse(Model):
     data: dict | None = Field(default=None, description="Additional error evidence, including approval rule_hits when available.")
 
 
+class UpstreamHealth(Model):
+    blocked_until: datetime | None = Field(default=None, description="UTC end of the process-wide Valio 429 block, or null when unblocked.")
+    calls_last_minute: int = Field(default=0, ge=0, description="Actual outbound Valio calls in the preceding 60 seconds, across this process.")
+
+
 class Health(Model):
     status: str
     catalog_rows: int
     coverage: dict[str, dict[str, int]] = Field(default_factory=dict, description="Catalog build coverage: filled and empty counts per field.")
     anchoring: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    upstream: UpstreamHealth = Field(default_factory=UpstreamHealth)
 
 
 class ApprovalPolicy(Model):
@@ -656,6 +670,7 @@ class AgentStats(Model):
 
 class Stats(Model):
     throttles: int = 0
+    upstream_rate_limits: int = Field(default=0, description="Valio HTTP 429 blocks started in the reporting window; one audit event per block.")
     since: datetime | None = Field(description="Inclusive UTC lower bound; naive input is interpreted as UTC. Null means all history.")
     lookups: int = Field(description="LOOKUP audit events in the window.")
     orders_by_status: dict[str, int] = Field(description="Current statuses of orders created in the window, including zero counts.")

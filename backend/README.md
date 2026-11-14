@@ -197,14 +197,15 @@ including savings of a cent due only to rounding individual lines. Reservations 
 are read in one read snapshot; planning runs after that snapshot closes. The write transaction only stores
 the lookup and its audit row, so planning holds no writer lock against quotes, orders or approvals.
 Products must pass hard filters and have fit at or above the policy floor, valid EUR
-prices and verified availability. If full coverage is impossible, a `partial` plan provides the best
+prices and orderable availability (including unknown but orderable stock). If full coverage is impossible, a `partial` plan provides the best
 coverage possible within four lines and states the missing quantity with `PARTIAL_STOCK`.
 Offer-level `PARTIAL_STOCK` does not exclude a candidate before allocation, even when the policy rejects
 partial orders: the plan's actual uncovered quantity determines that warning and its policy preview.
 
-Plan lines contain `product_id`, numeric sales `units`, and `covers {value, unit}`. KG-sold products use
-`allowed_lot_size` multiples (e.g. 10.5 kg for a 10.25 kg need with a 0.5 kg lot); other products use whole
-sales units. A KG single plan's units and total match its offer. `coverage {value, unit}`
+Offers expose their effective `allowed_lot_size` so plans use the same step as the offer.
+Plan lines contain `product_id`, numeric sales `units`, and `covers {value, unit}`. Every product uses whole
+sales units, including KG. Organiser `allowedLotSize` values below one count as one (a 10.25 kg need
+with a 0.01 or 0.5 lot needs 11 kg). Larger lot steps are rounded up to whole units. A KG single plan's units and total match its offer. `coverage {value, unit}`
 is the sum of line covers (possibly above the need due to whole packs); `uncovered {value, unit}` is
 zero for full plans. `total` is the sum of rounded net EUR line totals. `warnings` combines line risks
 and any uncovered-need warning. The latter survives plan quotation and placement, so ordering only
@@ -289,33 +290,40 @@ Old stored lookups without preferences/plans remain readable, including through 
   Suspect content falls back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
   uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
-  reconciled size; quotes retain their explicitly requested sales quantities. KG sales use their lot-size step;
-  other sales quantities are whole units. Unknown content never silently becomes one litre/kg.
+  reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
+  count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.
+  Catalog reads normalize legacy lot sizes as well. Unknown content never silently becomes one litre/kg.
 - Prices are positive net `catalogPrice.value`; missing/zero/negative prices or missing upstream currency
   give `PRICE_ERROR` and prevent quoting. No EUR fallback is assumed. Tax-inclusive values are returned separately. Every quote rechecks
   both endpoints bypassing the 60-second per-product cache. Order placement rechecks availability only.
   Expiry is the earliest price `validTo`, future cutoff, or local UTC now + 30 minutes. A past cutoff
   warns instead of creating an instantly expired quote. EUR is the MVP policy currency.
 - Availability sums unblocked lines arriving on/before `deliver_by`. Future lines are flagged
-  `DATE_SHIFT`, never counted as on-time coverage. `CUTOFF_PASSED` compares cutoff with upstream `timeNow`;
-  its precise meaning is unconfirmed. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
+  `DATE_SHIFT`, never counted as on-time coverage. `closingTime` is the order cut-off for the accompanying
+  `availableDate`; a past cut-off gives `CUTOFF_PASSED`, naming the delivery date and cut-off timestamp,
+  and still requires approval. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
   are interpreted in Europe/Helsinki. Missing/different schedule `salesUnit` gives `UNIT_MISMATCH` and
-  that line contributes zero stock. Missing/unknown logistic models give `STOCK_MODEL_UNKNOWN`, are finite,
-  and subtract local reservations. Stock-model zero stock without a date gives rejecting `NO_STOCK`.
+  that line contributes zero stock. An individual usable schedule amount >=999999 means stock is unknown
+  but any quantity may be ordered, independently of `logisticModel`: `available_amount: null`,
+  `availability_known: false`, informational `AVAILABILITY_UNCONFIRMED`, full coverage when on time,
+  and no local reservation. Finite amounts subtract reservations even for Terminal products.
+  Missing/unknown logistic models still give `STOCK_MODEL_UNKNOWN`. Stock-model zero stock without a date gives rejecting `NO_STOCK`.
   Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
-- Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `UNKNOWN_PRODUCT`,
+- Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `NOT_AVAILABLE`, `AVAILABILITY_UNCONFIRMED`,
   `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_UNCONFIRMED`, `SIZE_MISMATCH`, `UNIT_MISMATCH`, `STOCK_MODEL_UNKNOWN`,
   `CUTOFF_UNKNOWN`, `NO_STOCK`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, `AVAILABILITY_ERROR`,
   `VARIABLE_WEIGHT`, `DEPOSIT`, `RETRIEVAL_BROADENED`, and `POOL_TRUNCATED`. Variable-weight goods state
   that final price follows delivered weight; deposits include catalog details. Empty schedule lines signal
-  `UNKNOWN_PRODUCT`. Lookup failures remain visible; a quote requires a valid price and successful
+  rejecting `NOT_AVAILABLE`. A product omitted from the response stays `AVAILABILITY_ERROR`.
+  `UNKNOWN_PRODUCT` remains a valid policy code for stored data but is no longer emitted.
+  Lookup failures remain visible; a quote requires a valid price and successful
   upstream checks. Human approval cannot override sales blocks, unknown products, hard constraints,
   or unverifiable availability.
 - `policy.yaml` defines ranking weights and all approval/rejection thresholds. Every matching rule is
   reported; rejection takes precedence. Every warning outside `reject.on` and `approval.ignored_warnings`
   requires approval even with empty `warnings_need_approval`. The ignored list defaults empty in the model;
-  committed defaults ignore only VARIABLE_WEIGHT, DEPOSIT, RETRIEVAL_BROADENED and POOL_TRUNCATED.
+  committed defaults ignore VARIABLE_WEIGHT, DEPOSIT, RETRIEVAL_BROADENED, POOL_TRUNCATED and AVAILABILITY_UNCONFIRMED.
   PRICE_ERROR, AVAILABILITY_ERROR, SIZE_UNKNOWN, SIZE_UNCONFIRMED, UNIT_MISMATCH, STOCK_MODEL_UNKNOWN,
   NO_FIT_SCORE and CUTOFF_UNKNOWN cannot be ignored (PUT returns 422). Disabling hard-violation rejection
   routes request violations to approval; customer standing violations always reject and cannot be approved.
@@ -359,7 +367,7 @@ Old stored lookups without preferences/plans remain readable, including through 
 - Stock reservations are local because mock stock never decreases. Both pending and confirmed orders
   reserve the **full requested** quantity, conservatively across all delivery dates. Availability
   subtracts reservations and clamps at zero; approval excludes its own reservation from rechecks.
-  Reject/expire/cancel releases reservations. Terminal products have no local reservation.
+  Reject/expire/cancel releases reservations. Unknown-availability products have no local reservation.
   A human can explicitly accept partial/date/cutoff risks; approving partial stock is a local commitment
   with those warnings, not proof the upstream can fulfill it. Fulfillment/replenishment is deferred.
 - SQLite `BEGIN IMMEDIATE` serializes placement/reservations/idempotency across REST and MCP processes.
@@ -846,6 +854,18 @@ within the process: 8 active calls, 16 waiting, a 5-second queue wait; overflow/
 `503 UPSTREAM_BUSY`. Unknown credentials have a separate source-address bucket before credential
 resolution (60 attempts, 60/minute; successful authentication refunds its attempt). Limits are
 **in-process, single instance**; SQLite commands/events remain shared across processes.
+
+Valio outbound requests share a process-wide one-token bucket refilling at 5/s, with a rolling-window
+ceiling of five calls in any second. Dispatch is serialized and refills from completion so delayed
+senders cannot accumulate a burst. HTTP 429 pauses uncached upstream work for `Retry-After` seconds
+(delta seconds or HTTP date; 30 seconds when absent/invalid). Affected REST/MCP calls return
+`503 UPSTREAM_RATE_LIMITED`, `retryable: true`, `next_action: RETRY_SAME_COMMAND`, and the remaining
+`retry_after_seconds` (REST also sends `Retry-After`). Cached results remain available; explicit fresh
+quote/order checks wait for recovery via the same error. One `UPSTREAM_RATE_LIMITED` audit event is
+written per block and counted in `/v1/stats.upstream_rate_limits`. Public `GET /health` includes
+`upstream {blocked_until, calls_last_minute}`: UTC end of the active block or null, and process-wide
+outbound calls during the preceding 60 seconds. The mock has no order API; gateway-simulated orders
+for human approval are sufficient and nothing is sent to a supplier.
 
 `GET /v1/me` returns the resolved principal and current limits/remaining tokens. Principals include
 kind, ID, organisation, customers, role and a digest credential reference. Policy `organisations`

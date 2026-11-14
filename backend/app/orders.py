@@ -13,6 +13,7 @@ from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
 from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
+from .quantities import sales_step
 from .signing import receipt_payload, signature_digest, verify_quote
 from .foundation import CORRELATION, procurement_context, trace_id
 
@@ -34,8 +35,10 @@ def evidence_changes(before, after):
             continue
         if old.units_needed != new.units_needed:
             changes.append(f"{product_id}: quantity {old.units_needed} → {new.units_needed} sales units")
-        old_covered = min(old.units_needed, old.availability.available_amount)
-        new_covered = min(new.units_needed, new.availability.available_amount)
+        old_covered = (min(old.units_needed, old.availability.available_amount) if old.availability.availability_known
+                       else old.units_needed * old.availability.coverage)
+        new_covered = (min(new.units_needed, new.availability.available_amount) if new.availability.availability_known
+                       else new.units_needed * new.availability.coverage)
         if old_covered != new_covered:
             changes.append(f"{product_id}: covered {old_covered:g} → {new_covered:g} of {new.units_needed:g}")
         if old.availability.available_date != new.availability.available_date:
@@ -200,7 +203,7 @@ class Orders:
             self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products)
         for line in requested_lines:
             p = products[line.product_id]
-            step = Decimal(str(p.allowed_lot_size if p.sales_unit == "KG" else 1))
+            step = sales_step(p)
             if Decimal(str(line.quantity_sales_units)) % step:
                 raise DomainError("INVALID_LOT_SIZE", f"{p.id}: sales quantity must be a multiple of {step}", 422)
         ids = list(products)
@@ -354,7 +357,7 @@ class Orders:
     def _refresh_stock(conn, lines, deliver_by, stock, exclude_order=None):
         refreshed = []
         stock_codes = {"PARTIAL_STOCK", "DATE_SHIFT", "CUTOFF_PASSED", "CUTOFF_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
-                       "AVAILABILITY_ERROR", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_STOCK"}
+                       "NOT_AVAILABLE", "AVAILABILITY_UNCONFIRMED", "AVAILABILITY_ERROR", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_STOCK"}
         for original in lines:
             line = original.model_copy(deep=True)
             raw = stock[line.product_id]
@@ -372,7 +375,7 @@ class Orders:
         conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
         if order.status in {"CONFIRMED", "PENDING_APPROVAL"}:
             for line in order.lines:
-                if line.availability.logistic_model != "Terminal":
+                if line.availability.availability_known:
                     conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, line.product_id, line.units_needed))
 
     def get_quote(self, quote_id, agent_id=None):

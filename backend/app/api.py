@@ -167,6 +167,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def health(request: Request):
         count = svc(request).catalog.count()
         return Health(status="ok" if count else "catalog_empty", catalog_rows=count,
+                      upstream=svc(request).valio.health(),
                       coverage=svc(request).catalog.metadata("coverage"), anchoring=svc(request).anchoring.health())
 
     @app.get("/.well-known/jwks.json", response_model=JWKSet,

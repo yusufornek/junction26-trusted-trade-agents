@@ -212,6 +212,7 @@ def test_stock_recheck_changes_policy_after_quote(gateway, need, upstream):
 def test_multiline_quote_sums_and_reserves_each_line(gateway, need, upstream):
     from app.models import QuoteLineRequest
     upstream.model = "Stock"
+    upstream.amount = 2000  # A finite amount, not the unknown-availability sentinel.
     result = gateway.find_offers(need)
     request = quote_request(need, qty=2, need_ref=result.lookup_id)
     request.lines.append(QuoteLineRequest(product_id="4", quantity_sales_units=3))

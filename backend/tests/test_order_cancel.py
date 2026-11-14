@@ -93,6 +93,7 @@ def test_cancel_ac2_stock_reservation_released(client, gateway, need, upstream):
 @pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac3_cutoff_passed(client, gateway, need, upstream, respx_mock, monkeypatch, seconds_after):
     # Only the second line has reached its cutoff; checking just the first is insufficient.
+    upstream.amount = 2000  # Finite stock is reserved; sentinel availability is not.
     first_cutoff = upstream.cutoff + timedelta(hours=1)
 
     def availability_response(request):

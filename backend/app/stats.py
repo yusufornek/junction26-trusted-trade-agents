@@ -66,6 +66,7 @@ def read_stats(db, since=None, *, registered_agents=(), mandates=None):
                  if order.status == "CONFIRMED" and order.currency == "EUR"), Decimal(0))
     return Stats(
         throttles=sum(e.action == "RATE_LIMITED" for e in events),
+        upstream_rate_limits=sum(e.action == "UPSTREAM_RATE_LIMITED" for e in events),
         since=since, lookups=count,
         orders_by_status={status: statuses[status] for status in ORDER_STATUSES},
         placement_outcomes={status: placements[status] for status in PLACEMENT_STATUSES},

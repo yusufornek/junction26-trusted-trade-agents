@@ -2,7 +2,7 @@
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Warning
-from .quantities import pack_quantity
+from .quantities import pack_quantity, sales_step
 
 
 def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
@@ -10,17 +10,18 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
     target = Decimal(str(need.quantity.value))
     # Hard filters already ran before pricing. Exclude unverifiable/unsuitable offers as well.
     # Stock warnings on offer cards refer to the whole need, not the eventual split allocation.
-    invalid = (set(policy.reject.on) - {"PARTIAL_STOCK"}) | {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
+    invalid = (set(policy.reject.on) - {"PARTIAL_STOCK"}) | {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT", "NOT_AVAILABLE",
                                       "AVAILABILITY_ERROR", "UNIT_MISMATCH", "NO_STOCK"}
     eligible = [o for o in offers if o.fit is not None and o.fit >= policy.approval.min_fit_probability
                 and o.currency == "EUR" and o.unit_price is not None and o.size_per_sales_unit
                 and not any(w.code in invalid for w in o.warnings)
-                and o.availability.available_amount > 0]
-    steps = [Decimal(str(catalog.get(o.product_id).allowed_lot_size)) if o.sales_unit == "KG" else Decimal(1)
-             for o in eligible]
+                and (o.availability.coverage > 0 if not o.availability.availability_known
+                     else o.availability.available_amount > 0)]
+    steps = [sales_step(o) for o in eligible]
     # Search in integer lot counts; convert back to sales quantities only at the boundary.
     sizes = [pack_quantity(o.size_per_sales_unit) * step for o, step in zip(eligible, steps)]
-    limits = [int((Decimal(str(o.availability.available_amount)) / step).to_integral_value(rounding=ROUND_FLOOR))
+    limits = [int((Decimal(str(o.availability.available_amount if o.availability.availability_known
+                             else o.units_needed * o.availability.coverage)) / step).to_integral_value(rounding=ROUND_FLOOR))
               for o, step in zip(eligible, steps)]
     prices = [Decimal(str(o.unit_price)) * step for o, step in zip(eligible, steps)]
 
