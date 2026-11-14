@@ -26,6 +26,8 @@ import {
   eur,
   num,
   pct,
+  RejectionReason,
+  splitRejection,
   useAsync,
   when,
 } from "../ui";
@@ -58,6 +60,8 @@ export default function OrderDetail() {
   const { id = "" } = useParams();
   const order = useAsync(() => api.order(id), [id], 5000);
   const timeline = useAsync(() => api.timeline(id), [id], 5000);
+  // Which codes reject outright, so a rejection by policy can lead with the rule that decided it.
+  const policy = useAsync(() => api.policy(), []);
   const quoteId = order.data?.quote_id;
   // What else the agent considered: the lookup behind this order's quote still holds the ranked offers.
   const alternatives = useAsync(async () => {
@@ -70,6 +74,7 @@ export default function OrderDetail() {
   if (order.error) return <ErrorNote error={order.error} />;
   if (order.loading || !order.data) return <Spinner />;
   const o = order.data;
+  const [decisive, flagged] = splitRejection(o.policy?.hits ?? [], o.policy?.outcome === "REJECTED" ? policy.data : null);
   const orderedIds = new Set(o.lines.map((l) => l.product_id));
   const rejected = (alternatives.data?.offers ?? []).filter((x) => !orderedIds.has(x.product_id));
 
@@ -282,14 +287,25 @@ export default function OrderDetail() {
               </p>
             ) : null}
             {o.policy?.hits.length ? (
-              <ul className="flex flex-col gap-2 text-[13px]">
-                {o.policy.hits.map((h) => (
-                  <li key={h.rule + h.detail} className="rounded-[var(--radius-tile)] bg-warn-soft p-2.5">
-                    <strong className="text-warn">{h.rule}</strong>
-                    <div className="text-ink-muted">{h.detail}</div>
-                  </li>
+              <>
+                {/* A rejection leads with the rule that decided it; the other rules would only have asked for a human. */}
+                {decisive.map((h) => (
+                  <RejectionReason key={h.rule + h.detail} hit={h} />
                 ))}
-              </ul>
+                {flagged.length ? (
+                  <div className="flex flex-col gap-2">
+                    {decisive.length ? <span className="label">Also flagged</span> : null}
+                    <ul className="flex flex-col gap-2 text-[13px]">
+                      {flagged.map((h) => (
+                        <li key={h.rule + h.detail} className="rounded-[var(--radius-tile)] bg-warn-soft p-2.5">
+                          <strong className="text-warn">{h.rule}</strong>
+                          <div className="text-ink-muted">{h.detail}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </>
             ) : (
               <p className="label">No rule matched — inside the agent's own authority.</p>
             )}

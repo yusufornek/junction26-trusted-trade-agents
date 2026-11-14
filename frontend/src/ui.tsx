@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
-import { ApiError, type OrderStatus, type Warning } from "./api";
+import { ApiError, type OrderStatus, type PolicyResource, type RuleHit, type Warning } from "./api";
 
 export const eur = (n: number | null | undefined, currency = "EUR") =>
   n == null ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(n);
@@ -65,6 +65,31 @@ export function StatusChip({ status }: { status: OrderStatus | string }) {
     <span className={`chip ${STATUS_STYLE[status] ?? "bg-chip text-ink-muted"}`}>
       {status.replaceAll("_", " ").toLowerCase()}
     </span>
+  );
+}
+
+/** A rejected order lists every rule that fired, but only reject-listed codes and binding hard-constraint violations
+ *  decided it (same test as the gateway's policy.py); the rest would only have asked for a human. Unknown policy: none. */
+export function splitRejection(hits: RuleHit[], policy: PolicyResource | null): [RuleHit[], RuleHit[]] {
+  const decided = (h: RuleHit) =>
+    !!policy &&
+    (policy.reject.on.includes(h.rule) ||
+      (h.rule === "hard_constraint_violation" &&
+        (policy.reject.on_hard_constraint_violation || h.detail.endsWith("(customer_policy)"))));
+  return [hits.filter(decided), hits.filter((h) => !decided(h))];
+}
+
+/** A deciding rule as a sentence: "474971: Valio reports …" leads with the reason; the code and product go below. */
+export function RejectionReason({ hit }: { hit: RuleHit }) {
+  const line = /^(\d+): (.*)$/.exec(hit.detail);
+  return (
+    <p className="rounded-[var(--radius-tile)] bg-negative-soft p-3 text-[13px] text-negative">
+      <strong>Rejected:</strong> {line ? line[2] : hit.detail}
+      <span className="mt-0.5 block text-[12px]">
+        {hit.rule}
+        {line ? ` · product ${line[1]}` : ""}
+      </span>
+    </p>
   );
 }
 

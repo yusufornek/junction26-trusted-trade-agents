@@ -32,6 +32,7 @@ const W = {
   PARTIAL_STOCK: { code: "PARTIAL_STOCK", text: "Only part of the requested quantity is available by the delivery date." },
   DATE_SHIFT: { code: "DATE_SHIFT", text: "The earliest available date is after the requested delivery date." },
   OUTSIDE_PREFERENCE: { code: "OUTSIDE_PREFERENCE", text: "brand Arla, preferred Valio; 10 L pack, preferred <= 1 L" },
+  NOT_AVAILABLE: { code: "NOT_AVAILABLE", text: "Valio reports this product as not available" },
 } satisfies Record<string, Warning>;
 
 type Row = [
@@ -51,6 +52,8 @@ const ROWS: Row[] = [
   ["464768", "12 x Arla Whole milk drink 1 L UHT lactose free", "KI", 12, 84, 30.42, "Stock", 300, 0.89, 1.3, [W.OUTSIDE_PREFERENCE], null, 0.8],
   ["466279", "Arla 10 L Novobox Suomi semi skimmed lactose free milk drink ESL", "ST", 10, 100, 27.22, "Stock", 400, 0.86, 1.1, [W.DATE_SHIFT, W.OUTSIDE_PREFERENCE], null, 0.84],
   ["462775", "Arla Milkdrink 1L lactose free fat free UHT Suomesta", "ST", 1, 1000, 2.57, "Stock", 51, 0.9, 1.1, [W.PARTIAL_STOCK, W.OUTSIDE_PREFERENCE], null, 0.83],
+  // Empty availability from Valio: listed, but the policy rejects it, so the console offers no Add to quote.
+  ["466104", "Valio Eila® semi skimmed milk drink 1,5 l lactose free", "ST", 1.5, 667, 1.62, "Stock", 0, null, 1.1, [W.NOT_AVAILABLE, W.PARTIAL_STOCK], null, 0.78],
 ];
 
 const NEED = 1000;
@@ -206,6 +209,8 @@ const line = (id: string, units: number): QuoteLine => {
 type Seed = {
   id: string; status: OrderStatus; agent: string; minutesAgo: number; lines: [string, number][];
   hits?: { rule: string; detail: string }[]; approver?: string; comment?: string; cancelReason?: string;
+  /** Rejected by the policy at placement rather than by a person. */
+  outcome?: "REJECTED";
 };
 
 const AUTONOMY_HIT = { rule: "autonomy_level", detail: "This agent's orders need sign-off until autonomy is granted." };
@@ -219,6 +224,11 @@ const SEEDS: Seed[] = [
   { id: "5b9d4e2a-8c3f-4a1b-b6d7-0e9f8a7c6b52", status: "REJECTED", agent: "hotel-chain-agent", minutesAgo: 60 * 14, lines: [["466279", 100]],
     hits: [{ rule: "DATE_SHIFT", detail: "466279: earliest delivery is two days after the requested date" }, { rule: "max_auto_total_eur", detail: "Net total 2722.00 exceeds 1500.00 EUR" }],
     approver: "Ada", comment: "Too late for the Monday booking" },
+  { id: "9e3b7c1d-4f2a-4d8e-b5c6-1a2b3c4d5e6f", status: "REJECTED", agent: "hotel-chain-agent", minutesAgo: 60 * 8, lines: [["466104", 667]],
+    outcome: "REJECTED",
+    hits: [{ rule: "min_fit_probability", detail: "466104: 0.780 < 0.800" },
+      { rule: "NOT_AVAILABLE", detail: "466104: Valio reports this product as not available" },
+      { rule: "PARTIAL_STOCK", detail: "466104: On-time available stock covers only part of the requested quantity." }] },
   { id: "57077558-efd5-4e3e-a07d-258fb3af57c5", status: "CONFIRMED", agent: "web-console", minutesAgo: 190, lines: [["464308", 1000], ["464407", 1000]],
     hits: [{ rule: "max_auto_total_eur", detail: "Net total 2110.00 exceeds 1500.00 EUR" }], approver: "Ada", comment: "approved in console" },
   { id: "d7333e82-3a71-4204-b89c-9a65240f6ece", status: "CONFIRMED", agent: "web-console", minutesAgo: 120, lines: [["464308", 1000]] },
@@ -251,12 +261,12 @@ const ORDERS: Order[] = SEEDS.map((s, i) => {
     created_at: ago(s.minutesAgo),
     expires_at: s.status === "PENDING_APPROVAL" ? ahead(30 - s.minutesAgo) : ago(s.minutesAgo - 30),
     decided_at: decided ? ago(Math.max(0, s.minutesAgo - 4)) : null,
-    decided_by_kind: !decided ? null : byHuman ? "operator" : s.status === "CANCELLED" ? "operator" : "agent",
+    decided_by_kind: !decided ? null : byHuman || s.status === "CANCELLED" ? "operator" : s.outcome ? "system" : "agent",
     total,
     currency: "EUR",
     lines,
     warnings: lines.flatMap((l) => l.warnings),
-    policy: { outcome: s.hits?.length ? "PENDING_APPROVAL" : "CONFIRMED", hits: s.hits ?? [] },
+    policy: { outcome: s.outcome ?? (s.hits?.length ? "PENDING_APPROVAL" : "CONFIRMED"), hits: s.hits ?? [] },
     live_calls: { price: 1, availability: 1 },
     evidence_revision: 1,
     approver: s.approver ?? null,

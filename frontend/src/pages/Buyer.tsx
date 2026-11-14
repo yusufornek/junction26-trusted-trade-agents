@@ -9,9 +9,24 @@ import {
   type OfferCard,
   type Order,
   type Quote,
+  type Warning,
 } from "../api";
 import { Progress } from "../charts";
-import { Card, Countdown, ErrorNote, Spinner, StatusChip, WarningChips, eur, num, pct, dateOnly } from "../ui";
+import {
+  Card,
+  Countdown,
+  ErrorNote,
+  Spinner,
+  StatusChip,
+  WarningChips,
+  eur,
+  num,
+  pct,
+  dateOnly,
+  RejectionReason,
+  splitRejection,
+  useAsync,
+} from "../ui";
 
 const DEFAULT_NEED: NeedSpec = {
   customer_id: "1",
@@ -24,16 +39,19 @@ const DEFAULT_NEED: NeedSpec = {
   max_candidates: 10,
 };
 
-/** The gateway searches the catalog by the search terms when there are any, not by the intent. The example's terms
- *  and claim describe its milk, so they go when the intent changes, or every request keeps finding lactose-free
- *  milk; values the buyer typed stay. */
+/** The gateway searches the catalog by the search terms when there are any, not by the intent. The example's terms,
+ *  claim and quantity describe its milk, so they go when the intent changes: kept, every request found lactose-free
+ *  milk, and chocolate was asked for in litres. Values the buyer typed stay; a cleared quantity must be given again. */
 function withIntent(need: NeedSpec, intent: string): NeedSpec {
   const isExample = (value: string[], example: string[]) => value.join() === example.join();
+  const exampleQuantity =
+    need.quantity.value === DEFAULT_NEED.quantity.value && need.quantity.unit === DEFAULT_NEED.quantity.unit;
   return {
     ...need,
     intent,
     search_terms: isExample(need.search_terms, DEFAULT_NEED.search_terms) ? [] : need.search_terms,
     required_claims: isExample(need.required_claims, DEFAULT_NEED.required_claims) ? [] : need.required_claims,
+    quantity: exampleQuantity ? { value: 0, unit: "" } : need.quantity,
   };
 }
 
@@ -149,6 +167,17 @@ export default function Buyer() {
       setOrder(await api.placeOrder(quote!.id, crypto.randomUUID()));
     });
 
+  // The policy names the codes that reject outright: such offers get no Add to quote, and a rejection leads with them.
+  const policy = useAsync(() => api.policy(), []);
+  const rejectOn = policy.data?.reject.on ?? [];
+  const [decisive, flagged] = splitRejection(
+    order?.policy?.hits ?? [],
+    order?.policy?.outcome === "REJECTED" ? policy.data : null,
+  );
+  const needsQuantity = !(need.quantity.value > 0) || !need.quantity.unit;
+  // The cart belongs to the lookup it came from, not to a form edited since.
+  const asked = lookup?.need.quantity ?? need.quantity;
+
   const offersById = new Map((lookup?.offers ?? []).map((o) => [o.product_id, o]));
   const cartOffers = (lookup?.offers ?? []).filter((o) => cart[o.product_id] != null);
   const cartTotal = cartOffers.reduce((sum, o) => sum + (o.unit_price ?? 0) * (cart[o.product_id] ?? 0), 0);
@@ -177,7 +206,7 @@ export default function Buyer() {
               <input
                 className="field"
                 type="number"
-                value={need.quantity.value}
+                value={need.quantity.value || ""}
                 onChange={(e) => setNeed({ ...need, quantity: { ...need.quantity, value: Number(e.target.value) } })}
               />
               <select
@@ -185,6 +214,9 @@ export default function Buyer() {
                 value={need.quantity.unit}
                 onChange={(e) => setNeed({ ...need, quantity: { ...need.quantity, unit: e.target.value } })}
               >
+                <option value="" disabled>
+                  Unit
+                </option>
                 <option value="L">L</option>
                 <option value="KG">KG</option>
               </select>
@@ -246,7 +278,7 @@ export default function Buyer() {
                 />
               </label>
               <label className="flex flex-col gap-1.5">
-                <span className="label">Pack size ({need.quantity.unit}) min – max</span>
+                <span className="label">Pack size{need.quantity.unit ? ` (${need.quantity.unit})` : ""} min – max</span>
                 <div className="flex gap-2">
                   <input
                     className="field"
@@ -273,9 +305,10 @@ export default function Buyer() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <button className="btn-dark" onClick={search} disabled={busy === "search"}>
+          <button className="btn-dark" onClick={search} disabled={busy === "search" || needsQuantity}>
             {busy === "search" ? "Searching…" : "Find offers"}
           </button>
+          {needsQuantity ? <span className="label">Enter how much is needed, in litres or kilograms.</span> : null}
           {lookup ? <LookupSummary lookup={lookup} /> : null}
         </div>
       </Card>
@@ -328,7 +361,8 @@ export default function Buyer() {
                   <OfferView
                     key={o.product_id}
                     o={o}
-                    need={need}
+                    need={lookup.need}
+                    blocking={o.warnings.find((w) => rejectOn.includes(w.code))}
                     units={cart[o.product_id]}
                     onToggle={() => toggleLine(o)}
                     onUnits={(u) => setUnits(o.product_id, u)}
@@ -349,9 +383,9 @@ export default function Buyer() {
                 {cartOffers.length} line{cartOffers.length > 1 ? "s" : ""} selected
               </div>
               <div className="label">
-                covers {num(cartCovered)} of {num(need.quantity.value)} {need.quantity.unit}
-                {cartCovered < need.quantity.value ? (
-                  <span className="text-warn"> · {num(need.quantity.value - cartCovered)} short</span>
+                covers {num(cartCovered)} of {num(asked.value)} {asked.unit}
+                {cartCovered < asked.value ? (
+                  <span className="text-warn"> · {num(asked.value - cartCovered)} short</span>
                 ) : (
                   <span className="text-positive"> · need met</span>
                 )}
@@ -435,18 +469,25 @@ export default function Buyer() {
                   : "Order " + order.status.toLowerCase()}
             </h2>
           </div>
-          {order.policy?.hits.length ? (
-            <ul className="flex flex-col gap-1.5 text-[13px]">
-              {order.policy.hits.map((h) => (
-                <li key={h.rule + h.detail} className="flex gap-2">
-                  <Zap size={14} className="mt-0.5 shrink-0 text-warn" />
-                  <span>
-                    <strong>{h.rule}</strong> — <span className="text-ink-muted">{h.detail}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
+          {/* A rejection leads with the rule that decided it; the other rules would only have asked for a human. */}
+          {decisive.map((h) => (
+            <RejectionReason key={h.rule + h.detail} hit={h} />
+          ))}
+          {flagged.length ? (
+            <div className="flex flex-col gap-1.5">
+              {decisive.length ? <span className="label">Also flagged</span> : null}
+              <ul className="flex flex-col gap-1.5 text-[13px]">
+                {flagged.map((h) => (
+                  <li key={h.rule + h.detail} className="flex gap-2">
+                    <Zap size={14} className="mt-0.5 shrink-0 text-warn" />
+                    <span>
+                      <strong>{h.rule}</strong> — <span className="text-ink-muted">{h.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : decisive.length ? null : (
             <p className="label">No policy rule matched; the order cleared automatically.</p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -612,9 +653,13 @@ function PlanCard({
         ) : (
           <p className="mb-auto text-[12px] text-ink-muted">Inside the agent's own authority — no rule would fire.</p>
         )}
-        <button className="btn-dark mt-1" onClick={onQuote} disabled={busy}>
-          {busy ? "Locking…" : "Quote this plan"}
-        </button>
+        {plan.policy_preview.outcome === "REJECTED" ? (
+          <p className="mt-1 text-[12px] text-negative">The policy would reject this plan, so it cannot be quoted.</p>
+        ) : (
+          <button className="btn-dark mt-1" onClick={onQuote} disabled={busy}>
+            {busy ? "Locking…" : "Quote this plan"}
+          </button>
+        )}
       </div>
     </Card>
   );
@@ -623,12 +668,15 @@ function PlanCard({
 function OfferView({
   o,
   need,
+  blocking,
   units,
   onToggle,
   onUnits,
 }: {
   o: OfferCard;
   need: NeedSpec;
+  /** A warning the policy rejects outright: quoting the offer could only end in a rejected order. */
+  blocking?: Warning;
   units: number | undefined;
   onToggle: () => void;
   onUnits: (u: number) => void;
@@ -749,6 +797,8 @@ function OfferView({
               Remove
             </button>
           </div>
+        ) : blocking ? (
+          <span className="ml-auto text-[13px] text-negative">Can't be ordered: {blocking.text}</span>
         ) : (
           <button className="btn-dark ml-auto" onClick={onToggle}>
             Add to quote
