@@ -353,7 +353,7 @@ export default function Shell() {
                   Anyone who opens the site can then act as the operator; an empty variable leaves the button out. */}
               {DEMO_TOKEN ? (
                 <button type="button" className="btn-ghost" disabled={signingIn} onClick={() => signInWith(DEMO_TOKEN)}>
-                  Sign in with the admin account
+                  Sign in with Junction 2026 Special Account
                 </button>
               ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
