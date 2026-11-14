@@ -103,6 +103,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.state.mcp_served = serve_mcp
     from .accounts import router as accounts_router
     app.include_router(accounts_router)
+    from .guardrail_profiles import router as profiles_router
+    app.include_router(profiles_router)
     from .connect_catalog import router as connect_router
     app.include_router(connect_router)
     from .tenant_api import router as tenant_router, install_aliases
@@ -441,11 +443,14 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id) if principal.kind in {"tenant_user", "platform_admin"} else f"agent:{principal.agent_id}", reason=body.reason,
                 stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key), force="/operator/" in request.url.path)
 
-    @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
+    @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits",
+        description="Profiled tenants also return approval_requirements: amount threshold, required role, four-eyes and eligible independent approver user IDs. An empty list means another eligible human must join or governance must be reviewed.")
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
         service = svc(request)
         from .autonomy import buyer_scope
-        return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id)) for o in service.orders.list_orders(True)
+        from .guardrail_profiles import approval_requirements
+        with service.db.connect() as conn:
+            return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id), approval_requirements=approval_requirements(conn, o)) for o in service.orders.list_orders(True)
                 if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order | DecisionPreview,
@@ -455,7 +460,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
                           "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope. "
-                          "Refused replay checks record APPROVE_FAILED without repeating approval.")
+                          "Refused replay checks record APPROVE_FAILED without repeating approval. "
+                          "Tenant profile gates apply before the REST preview and on confirmation/replay: "
+                          "403 APPROVAL_LIMIT gives threshold_eur and who_can_approve; 403 FOUR_EYES requires an independent reviewer. "
+                          "With four-eyes off, self-approval records self_approved=true and an audit warning.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         service = svc(request)

@@ -553,6 +553,7 @@ class Order(Model):
     live_calls: LiveCalls
     approver: str | None = None
     approver_user_id: str | None = None
+    self_approved: bool = Field(default=False, description="Authenticated reviewer is an agent owner, connection creator or last autonomy/policy loosening approver; allowed only with four-eyes off and audited with a warning.")
     approver_role: str | None = None
     approval_side: Literal["buyer", "valio_operator"] | None = Field(default=None, description="Organisation side that signed the human decision; null before review or on legacy orders.")
     comment: str | None = None
@@ -616,6 +617,7 @@ class ApprovalRequest(Model):
 class ApprovalItem(Model):
     order: Order
     quote: Quote
+    approval_requirements: dict | None = Field(default=None, description="Tenant threshold, four-eyes rule and eligible independent approver user IDs; null for legacy tenants without a profile.")
 
 
 class AuditEntry(Model):
@@ -975,6 +977,7 @@ class PolicyDocument(Model):
 
 
 class PolicyResource(PolicyDocument):
+    tenant_anomaly_settings: dict[str, dict] = Field(default_factory=dict, description="Tenant-keyed preset sensitivity (quantity_k, velocity_k, price_increase_pct), for the spec 45 anomaly lane.")
     _tenant_daily_ceiling: float | None = PrivateAttr(default=None)
     updated_at: datetime | None = Field(default=None, description="Last runtime update in UTC; null for committed defaults.")
     updated_by: str | None = Field(default=None, description="Human responsible for the last runtime update.")

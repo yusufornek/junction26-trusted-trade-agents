@@ -30,11 +30,11 @@ def confirm_rest(service, p, operation, target, payload, token, apply, *, force=
     try:
         return _confirm_rest(service, p, operation, target, payload, token, apply, force=force)
     except DomainError as error:
-        if operation in {"approve", "reject", "cancel"} and error.code == "ORDER_NOT_FOUND" and not getattr(error, "audited", False):
+        if operation in {"approve", "reject", "cancel"} and error.code in {"ORDER_NOT_FOUND", "FOUR_EYES", "APPROVAL_LIMIT", "CONSTRAINTS_REQUIRED"} and not getattr(error, "audited", False):
             actor = "human:operator" if p.user_id == "legacy-operator" else "human:" + (p.user_id or p.id)
             with service.db.connect(write=True) as conn:
                 audit.append(conn, actor, operation.upper()+"_FAILED", error.message, order_id=target,
-                    data={"error": error.code, "inputs": {"order_id": target, **payload}, "live_calls": {"price": 0, "availability": 0}})
+                    data={"error": error.code, **error.data, "user_id": p.user_id, "inputs": {"order_id": target, **payload}, "live_calls": {"price": 0, "availability": 0}})
             error.audited = True
         raise
 
@@ -51,6 +51,10 @@ def _confirm_rest(service, p, operation, target, payload, token, apply, *, force
         if operation in {"approve", "reject", "cancel"}:
             order = service.orders._order(conn, target)
             authorize_review(service.policy.get(), p, order)
+            if operation == "approve":
+                from .guardrail_profiles import authorize_approval, require_constraints
+                authorize_approval(conn, p, order)
+                require_constraints(conn, order.customer_id)
         revision = order.evidence_revision if order else None
         if token is None:
             secret = token_urlsafe(32)
@@ -112,6 +116,8 @@ def create_agent(body: AgentCreate, request: Request, p: Principal = Depends(res
         if conn.execute("SELECT 1 FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone():
             raise DomainError("AGENT_EXISTS", "Agent identifier is already registered", 409)
         conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, p.tenant_id, body.name))
+        from .guardrail_profiles import register_owner
+        register_owner(conn, body.agent_id, p.tenant_id, p.user_id)
         audit.append(conn, p.user_id or p.id, "AGENT_CREATED", "Created a tenant agent.", data={"agent_id": body.agent_id, "tenant_id": p.tenant_id})
     return {"agent_id": body.agent_id, "tenant_id": p.tenant_id, "name": body.name, "autonomy": "approval_required"}
 
@@ -221,6 +227,9 @@ def tenant_policy(service, p):
     policy["agents"] = {k: v for k, v in policy["agents"].items() if set(v["customer_ids"]) <= customers}
     policy["customers"] = {k: v for k, v in policy["customers"].items() if k in customers}
     policy["identities"], policy["organisations"] = {}, {}
+    from .guardrail_profiles import read_profile
+    with service.db.connect() as conn:
+        policy["guardrail_profile"] = read_profile(conn, p.tenant_id)
     return policy
 
 

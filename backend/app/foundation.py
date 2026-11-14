@@ -27,10 +27,18 @@ def trace_id():
 def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio", snapshot=None):
     from .runtime import ENVIRONMENT
     document = policy._editable(snapshot if snapshot is not None else policy.get())
-    return {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
+    context = {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
             "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": ENVIRONMENT.get()}
+    if policy.db:
+        from .guardrail_profiles import read_profile
+        with policy.db.connect() as conn:
+            row = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer_id,)).fetchone()
+            profile = read_profile(conn, row[0]) if row else None
+        if profile:
+            context["guardrail_profile"] = profile
+    return context
 
 
 def forward_links(conn, *, request_id=None, quote_id=None, agent_id=None):
@@ -71,6 +79,7 @@ EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
+EVENT_ACTIONS.update(TENANT_PROFILE_CREATED="tenant.profile_created", TENANT_PROFILE_UPDATED="tenant.profile_updated")
 EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
@@ -79,6 +88,10 @@ EVENT_ACTIONS.update({"SUGGESTION_" + action.upper(): "suggestion." + action
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
+    if action in {"TENANT_PROFILE_CREATED", "TENANT_PROFILE_UPDATED"} and not data.get("customer_id"):
+        for row in conn.execute("SELECT customer_id FROM tenant_customers WHERE tenant_id=?", (data["tenant_id"],)).fetchall():
+            emit(conn, action, actor, ts, audit_id, {**data, "customer_id": row[0]})
+        return
     if action == "MANDATE_REVOKED" and data.get("customer_ids") and not data.get("customer_id"):
         scoped_data = {key: value for key, value in data.items() if key != "customer_ids"}
         for customer in data["customer_ids"]:
@@ -102,12 +115,17 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
+    if kind == "tenant":
+        aggregate_id = data["tenant_id"]
     if aggregate_id is None:
         return  # Historical/imported audit notes do not themselves change an aggregate.
     table = {"order": "orders", "quote": "quotes", "request": "lookups"}.get(kind)
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
+    if kind == "tenant":
+        context = {"tenant_id": data["tenant_id"], "guardrail_profile": data["guardrail_profile"],
+                   "environment": data.get("environment", "live")}
     if kind in {"proposal", "recurring", "suggestion"}:
         context = {"customer_id": data["customer_id"], "environment": data.get("environment", "live")}
     if kind in {"autonomy", "agent", "mandate"}:

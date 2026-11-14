@@ -174,7 +174,7 @@ class Autonomy:
             body["agents"][agent_id] = row.model_dump(mode="json")
             result = AutonomyChangeResult(agent_id=agent_id, level=request.level, reason=request.reason, track_record=record)
             data = {
-                "agent_id": agent_id, "before": before, "level": request.level, "reason": request.reason,
+                "agent_id": agent_id, "before": before, "level": request.level, "reason": request.reason, "user_id": principal.user_id or principal.id,
                 "track_record": record.model_dump(mode="json"), "customer_ids": row.customer_ids,
                 "customer_id": row.customer_ids[0] if len(row.customer_ids) == 1 else None}
             if agent_id not in policy.agents:

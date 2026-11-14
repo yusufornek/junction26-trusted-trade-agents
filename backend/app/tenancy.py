@@ -44,6 +44,13 @@ def migrate(conn):
     CREATE TABLE IF NOT EXISTS decision_confirmations(digest TEXT PRIMARY KEY,user_id TEXT NOT NULL,tenant_id TEXT,
         operation TEXT NOT NULL,target TEXT NOT NULL,payload TEXT NOT NULL,revision INTEGER,expires_at TEXT NOT NULL,used_at TEXT);
     CREATE TABLE IF NOT EXISTS tenant_policy_overlays(id TEXT PRIMARY KEY,data TEXT NOT NULL,tenant_id TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tenant_guardrail_profiles(tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tenant_profile_versions(tenant_id TEXT NOT NULL REFERENCES tenants(id),version INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(tenant_id,version));
+    CREATE TABLE IF NOT EXISTS profile_agent_owners(agent_id TEXT PRIMARY KEY,owner_user_id TEXT NOT NULL,tenant_id TEXT NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS tenant_profile_versions_no_update BEFORE UPDATE ON tenant_profile_versions
+        BEGIN SELECT RAISE(ABORT, 'profile versions are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS tenant_profile_versions_no_delete BEFORE DELETE ON tenant_profile_versions
+        BEGIN SELECT RAISE(ABORT, 'profile versions are immutable'); END;
     """)
     from .audit import utcnow
     for tid, name, customer in [(HOTEL, "Hotel Aurora chain", "1"), (HOSPITAL, "Kaari Hospital Kitchen", "2")]:

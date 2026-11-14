@@ -88,6 +88,7 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
             if path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
                         "/.well-known/jwks-history.json", "/v1/meta",
                         "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connect/catalog", "/v1/auth/login",
+                        "/v1/auth/signup", "/v1/auth/signup/options",
                         "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept"}:
                 continue
             assert {"BearerAuth": []} in operation["security"]

@@ -109,6 +109,9 @@ class Accounts:
                 conn.execute("INSERT OR IGNORE INTO tenant_agents VALUES(?,?,?,NULL)",
                              (agent, tid, agent))
             conn.execute("INSERT OR IGNORE INTO tenant_agents VALUES(?,?,?,NULL)", ("hospital-kitchen-agent", HOSPITAL, "Hospital kitchen"))
+            from .guardrail_profiles import register_owner
+            for agent in conn.execute("SELECT agent_id,tenant_id FROM tenant_agents").fetchall():
+                register_owner(conn, agent["agent_id"], agent["tenant_id"])
 
     def customers(self, tid):
         with self.db.connect() as conn:
@@ -409,7 +412,9 @@ def tenant_data(a, tid):
         return None
     with a.db.connect() as conn:
         row = conn.execute("SELECT * FROM tenants WHERE id=?", (tid,)).fetchone()
-    return dict(row) if row else None
+        from .guardrail_profiles import read_profile
+        profile = read_profile(conn, tid)
+    return {**dict(row), "guardrail_profile": profile} if row else None
 
 
 def accounts(request):
@@ -528,7 +533,7 @@ def tenants(request: Request, p: Principal = Depends(resolve_principal)):
     a = accounts(request)
     a.manage(p, platform=True)
     with a.db.connect() as conn:
-        return [{**dict(r), "customer_ids": a.customers(r["id"])} for r in conn.execute("SELECT * FROM tenants ORDER BY name")]
+        return [{**tenant_data(a, r["id"]), "customer_ids": a.customers(r["id"])} for r in conn.execute("SELECT * FROM tenants ORDER BY name")]
 
 
 @router.post("/v1/operator/tenants", status_code=201, response_model=dict)

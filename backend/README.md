@@ -1754,3 +1754,81 @@ The frontend data contract is docs/FRONTEND.md, Accounts and connections (spec 4
 
 Verify offline from backend/: .venv/bin/python -m pytest tests -q, then
 .venv/bin/python scripts/export_openapi.py. No startup/schema-generation command needs demo state.
+
+## Guardrail profiles and anomalies (spec 45, profile slice)
+
+The profile lane implements R-1–R-4 and the available R-9 surfaces. Anomaly checks,
+forecasting and synthetic demo history (R-5–R-8) belong to the separate anomaly lane.
+There is no forecast dependency, model loading or network access in this slice.
+
+Public GET /v1/auth/signup/options returns labelled business, volume and meals/day
+choices. POST /v1/auth/signup takes name, email, password and profile (business_type,
+sites, buyers_and_approvers, monthly_purchase_volume_band, meals_per_day_band,
+required_claims?, exclude_allergens?). It atomically creates the tenant, its first
+active tenant_admin, a new customer identity and its issuer, plus an initial sourced
+guardrail snapshot. It does not assign an existing tenant's customer or sign in;
+use /v1/auth/login next. Passwords use the existing scrypt implementation; sign-up
+uses the authentication source limiter. No password or credential enters audit.
+
+Presets live only in guardrail_presets.yaml; app/guardrail_presets.py loads them.
+The snapshot uses these spec 44 tenant-layer fields: per_order_ceiling_eur,
+daily_budget_eur, monthly_budget_eur, approver_amount_threshold_eur, four_eyes,
+substitutes_policy, anomaly_sensitivity and starting_autonomy. Every field is
+{value, source: "preset:<business_type>"}. Groups/chains with multiple sites also
+get per_site_budgets (equal allocations, rounded down). The volume bands seed
+monthly budgets of 5k/25k/100k/200k EUR; catering multiplies these by 1.5. Daily
+budget is monthly/30, rounded to cents. The final open band uses an explicit 200k
+starting assumption, not an inferred spending entitlement. All new connections
+retain approval_required; the established hotel demo mandate is unchanged.
+
+Tenant storage is tenant_guardrail_profiles, keyed by tenant_id, and append-only
+tenant_profile_versions, including profile_revision, guardrail_version and author.
+GET /v1/tenant/profile reads it (null for a legacy unprofiled tenant). PUT accepts
+the profile fields and the existing REST confirmation handshake; only tenant_admin
+can edit. Profile edits preserve the initial active guardrails. Applying another
+preset, arbitrary guardrail changes and constraint removal go through spec 44;
+this lane refuses constraint removal with 409 GUARDRAIL_CHANGE_REQUIRED. No edit
+silently reapplies a preset or widens limits. Hospital/school orders require both
+nonempty required_claims and exclude_allergens (409 CONSTRAINTS_REQUIRED, including
+missing_fields and profile_url); these standing constraints bind every customer
+of the tenant and cannot be dropped by a request or a business-type edit.
+
+Approval gates run before the REST preview, inside the shared approval transaction
+and on keyed command replay. Above the threshold (strictly >), only tenant_admin
+may approve: 403 APPROVAL_LIMIT includes threshold_eur, required_role and
+who_can_approve. With four-eyes on, connection creators (including revoked keys),
+the owner and the last autonomy/policy-loosening approvers receive 403 FOUR_EYES.
+The pending inbox adds approval_requirements, including eligible approver user IDs;
+an empty list means no currently active eligible human exists. Rejection is still
+available. Four-eyes-off self-approval sets order.self_approved=true and the APPROVE
+audit entry records self_approved plus approval_warnings=[SELF_APPROVAL_ALLOWED].
+Both refusal codes are audited without supplier calls. Display names never supply
+authority. The amount gate also applies to platform staff on profiled tenants.
+
+Merge hooks for spec 44: load_preset returns the initial tenant-layer values;
+read_profile reads that snapshot; register_owner records ownership on creation;
+conflicted_users prefers the spec 44 tenant_agents.owner_user_id column when present.
+record_policy_loosening(conn, agent_id, user_id, tenant_id) must be called within the
+spec 44 successful change-approval transaction. Current autonomy grants already
+record the authenticated user ID. The governance layer should update the active
+tenant snapshot when its guardrail values change; it owns policy change control,
+version resolution and budget/substitute enforcement. This profile lane directly
+enforces the constraints gate, amount threshold and four-eyes rule.
+
+The anomaly lane reads Policy.get().tenant_anomaly_settings[tenant_id]:
+{quantity_k, velocity_k, price_increase_pct}. Hospital quantity/velocity k=2;
+catering velocity k=2; other k=3. The price threshold is 20 percent.
+The settings are derived from tenant snapshots and never saved as global YAML.
+
+Profiles appear in session.tenant.guardrail_profile, /v1/me (and MCP
+get_agent_context), /v1/tenant/policy, the operator tenant list and transaction
+context.guardrail_profile. Transaction context also travels through A2A and signed
+order webhooks. Customer-scoped tenant.profile_created/tenant.profile_updated
+events carry guardrail_profile and are supported subscription event_types. Approval
+webhook payloads include approval_requirements. Dedicated tenant MCP/A2A management
+audiences remain spec 43 part 2, as advertised by the connect catalog.
+
+Offline acceptance checks from backend/: .venv/bin/python -m pytest -q
+tests/test_spec45_guardrail_profiles_anomalies.py. AC-1–4 and AC-10 are in that file;
+AC-5–9 remain the anomaly lane's acceptance checks. Finish contract updates with
+.venv/bin/python scripts/export_openapi.py; it does not start a gateway or touch var/.
