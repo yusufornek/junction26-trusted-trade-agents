@@ -78,9 +78,11 @@ def test_review_malformed_json_authentication(client, gateway, method, path, ope
 
 
 def test_ac_1_credentials_and_startup(client, need, monkeypatch):
+    # This exhaustive authorization matrix isolates auth from spec 24's separately tested source throttle.
+    client.app.state.gateway.source_limiter.capacity = 10000
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
-            if path in {"/health", "/.well-known/jwks.json"}:
+            if path in {"/health", "/.well-known/jwks.json", "/v1/meta"}:
                 continue
             assert operation["security"] == [{"BearerAuth": []}]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
@@ -306,8 +308,9 @@ def test_ac_11_mcp_transports(gateway, need, upstream):
         assert result.structured_content["agent_id"] == "agent-b"
         lookup, quote, order = objects(gateway, need, "agent-a")
         from mcp.server.mcpserver.exceptions import ToolError
-        with pytest.raises(ToolError, match="ORDER_NOT_FOUND"):
-            await local.call_tool("get_order_status", {"order_id": order.id})
+        tool_failure = await local.call_tool("get_order_status", {"order_id": order.id})
+        assert tool_failure.is_error
+        assert tool_failure.structured_content["code"] == "ORDER_NOT_FOUND"
     asyncio.run(tools())
     _, _, owned = objects(gateway, need, "agent-b")
     _, _, other = objects(gateway, need, "agent-a")

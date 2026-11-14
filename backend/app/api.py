@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
 
 from . import audit as audit_log
 from .auth import Credentials, Principal, bearer, require_operator, resolve_principal
@@ -20,6 +21,8 @@ from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Sta
 from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
 from .service import Gateway
 from .stats import read_stats
+from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
+from .recovery import problem, validation_problem
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +44,45 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
                   description="MVP fixed-price gateway. REST and MCP share one core. Bearer credentials establish agent ownership and operator authority. Commitments are gateway-simulated.",
-                  responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 422, 502, 503)})
+                  responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+                             for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
+    @app.middleware("http")
+    async def correlation(request, call_next):
+        token = CORRELATION.set(request.headers.get("X-Correlation-Id") or correlation_id())
+        request.state.correlation_id = CORRELATION.get()
+        principal_token = PRINCIPAL.set(None)
+        try:
+            response = await call_next(request)
+            response.headers["X-Correlation-Id"] = CORRELATION.get()
+            return response
+        finally:
+            PRINCIPAL.reset(principal_token)
+            CORRELATION.reset(token)
+
     @app.exception_handler(DomainError)
     async def domain_error(request, error):
-        content = {"code": error.code, "message": error.message}
-        if error.data:
-            content["data"] = error.data
-        return JSONResponse(status_code=error.status, content=content,
-                            headers={"WWW-Authenticate": "Bearer"} if error.status == 401 else None)
+        content = problem(error, request.url.path)
+        headers = {"WWW-Authenticate": "Bearer"} if error.status == 401 else {}
+        if content["retry_after_seconds"] is not None:
+            headers["Retry-After"] = str(content["retry_after_seconds"])
+        return JSONResponse(status_code=error.status, content=content, media_type="application/problem+json", headers=headers)
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request, error):
+        return await domain_error(request, DomainError("HTTP_ERROR", "Request could not be completed", error.status_code))
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request, error):
+        token = CORRELATION.set(getattr(request.state, "correlation_id", None) or correlation_id())
+        try:
+            response = await domain_error(request, DomainError("INTERNAL_ERROR", "The request could not be completed", 500))
+            response.headers["X-Correlation-Id"] = CORRELATION.get()
+            return response
+        finally:
+            CORRELATION.reset(token)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
@@ -70,7 +101,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
             try:
                 principal = getattr(request.state, "principal", None)
                 if principal is None:
-                    principal = resolve_principal(request, await bearer(request))
+                    principal = await resolve_principal(request, await bearer(request))
                 if require_operator in guards:
                     require_operator(principal)
             except DomainError as auth_error:
@@ -83,11 +114,21 @@ def create_app(gateway=None, *, settings=None, keys=None):
                 await run_in_threadpool(audit_cancel_validation, request, error.body, message)
             except sqlite3.Error:
                 logger.exception("Could not audit a refused cancellation")
-        code = "UNKNOWN_CODE" if any(e["type"] == "UNKNOWN_CODE" for e in error.errors()) else "VALIDATION_ERROR"
-        return JSONResponse(status_code=422, content={"code": code, "message": message})
+        return await domain_error(request, validation_problem(error))
 
     def svc(request):
         return request.app.state.gateway
+
+    @app.get("/v1/meta", response_model=dict, summary="Public pinned standards and installed packages; limiter scope")
+    def meta():
+        return manifest()
+
+    @app.get("/v1/me", response_model=dict, summary="Authenticated principal, customer scope and current token buckets")
+    def me(request: Request, principal: Principal = Depends(resolve_principal)):
+        service = svc(request)
+        service.limiter.consume(principal.id, "read")
+        return {"principal": principal.public(), "customer_ids": principal.customer_ids, "environment": "live",
+                "rate_limits": service.limiter.snapshot(principal.id)}
 
     def audit_cancel_validation(request, raw_body, message):
         """Audit a cancel request refused by validation, with a normalised actor (never raw input)."""
@@ -126,8 +167,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return agent_mandate
 
     @app.post("/v1/mandates/revocations", response_model=dict[str, str | list[str]], summary="Record a buyer-signed mandate revocation")
-    def revoke_mandate(body: RevocationRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).mandates.revoke(body.jwt, "human:operator" if principal.operator else f"agent:{principal.agent_id}")
+    def revoke_mandate(body: RevocationRequest, request: Request, principal: Principal = Depends(resolve_principal),
+                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).mandates.revoke(body.jwt, "human:operator" if principal.operator else f"agent:{principal.agent_id}", command_key=idempotency_key)
 
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
@@ -143,12 +185,14 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return svc(request).policy.get()
 
     @app.put("/v1/policy", response_model=PolicyResource, summary="Persist policy for subsequent operations and audit changed fields")
-    def put_policy(body: PolicyUpdateRequest, request: Request, principal: Principal = Depends(require_operator)):
-        return svc(request).policy.update(body, actor="human:operator")
+    def put_policy(body: PolicyUpdateRequest, request: Request, principal: Principal = Depends(require_operator),
+                   idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).policy.update(body, actor="human:operator", command_key=idempotency_key)
 
     @app.post("/v1/policy/reset", response_model=PolicyResource, summary="Restore committed policy defaults with a human audit event")
-    def reset_policy(body: PolicyResetRequest, request: Request, principal: Principal = Depends(require_operator)):
-        return svc(request).policy.update(body, reset=True, actor="human:operator")
+    def reset_policy(body: PolicyResetRequest, request: Request, principal: Principal = Depends(require_operator),
+                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).policy.update(body, reset=True, actor="human:operator", command_key=idempotency_key)
 
     @app.get("/v1/stats", response_model=Stats, summary="Operator metrics from persisted evidence; no upstream calls")
     def stats(request: Request, since: datetime | None = None, principal: Principal = Depends(require_operator)):
@@ -162,8 +206,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
               description="Lookup, quote and order require a customer mandate and enforce agent ownership.")
-    def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
-        return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate)
+    def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
+                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/quotes/{id}", response_model=Quote)
     def get_quote(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -202,10 +247,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
-    def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal)):
+    def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
+                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
         return svc(request).orders.cancel(order_id,
             actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
-            stated_name=body.cancelled_by if principal.operator else None)
+            stated_name=body.cancelled_by if principal.operator else None, command_key=idempotency_key)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
     def approvals(request: Request, principal: Principal = Depends(require_operator)):
@@ -219,12 +265,14 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
                           "with rule hits in data; the order remains pending and can be rejected.")
-    def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator)):
-        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision, actor="human:operator")
+    def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator),
+                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision, actor="human:operator", command_key=idempotency_key)
 
     @app.post("/v1/approvals/{order_id}/reject", response_model=Order)
-    def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator)):
-        return svc(request).orders.reject(order_id, body.approver, body.comment, actor="human:operator")
+    def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator),
+               idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+        return svc(request).orders.reject(order_id, body.approver, body.comment, actor="human:operator", command_key=idempotency_key)
 
     @app.get("/v1/audit", response_model=list[AuditEntry])
     def audit(request: Request, order_id: str | None = None, quote_id: str | None = None, principal: Principal = Depends(require_operator)):
@@ -252,6 +300,21 @@ def create_app(gateway=None, *, settings=None, keys=None):
             result.update(svc(request).anchoring.verify(anchor))
         return result
 
+    original_openapi = app.openapi
+    def problem_openapi():
+        schema = original_openapi()
+        for path in schema["paths"].values():
+            for operation in path.values():
+                if not isinstance(operation, dict):
+                    continue
+                for status, response in operation.get("responses", {}).items():
+                    response.setdefault("headers", {})["X-Correlation-Id"] = {"schema": {"type": "string"}, "description": "Accepted or generated request correlation identifier."}
+                    if status.isdigit() and int(status) >= 400:
+                        response.get("content", {}).pop("application/json", None)
+                    if status in {"429", "502", "503"}:
+                        response.setdefault("headers", {})["Retry-After"] = {"schema": {"type": "integer", "minimum": 1}, "description": "Seconds before retrying the same command, when retryable."}
+        return schema
+    app.openapi = problem_openapi
     return app
 
 

@@ -60,7 +60,7 @@ def test_lookup_fetch_and_not_found(gateway, need, upstream):
         assert client.get(f"/v1/lookups/{result['lookup_id']}").json() == result
         missing = client.get("/v1/lookups/missing")
         assert missing.status_code == 404
-        assert missing.json() == {"code": "LOOKUP_NOT_FOUND", "message": "Lookup was not found"}
+        assert {k: missing.json()[k] for k in ("code", "message")} == {"code": "LOOKUP_NOT_FOUND", "message": "Lookup was not found"}
         assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
 
 
@@ -90,7 +90,8 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
             assert gateway.orders.place_order(second_quote.id, "after").status == "PENDING_APPROVAL"
             event = [e for e in gateway.audit() if e.action == "POLICY_UPDATED"][-1]
             assert event.actor == "human:operator"
-            assert event.data == {"diff": {"approval.max_auto_total_eur": {"before": 1500, "after": 10}},
+            assert len(event.data["trace_id"]) == 32
+            assert {k: v for k, v in event.data.items() if k not in {"correlation_id", "trace_id"}} == {"diff": {"approval.max_auto_total_eur": {"before": 1500, "after": 10}},
                                   "comment": "Lower budget", "reset": False, "stated_name": "Ada"}
             assert gateway.policy.runtime_path == gateway.settings.db_path.parent / "policy.yaml"
             assert gateway.policy.runtime_path.is_file()

@@ -2,6 +2,10 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **Follow the organiser's mock-API answers** (spec 39): whole sales units everywhere; availability
+  ≥ 999999 = unknown but orderable (informational `AVAILABILITY_UNCONFIRMED`); empty availability = `NOT_AVAILABLE`
+  (reject); `closingTime` = order cut-off for its delivery date; Valio calls paced at ≤ 5/s and a 429 pauses
+  upstream calls for its block time while cached answers keep flowing.
 - 2026-11-14 — **The gateway is built out as a product in this submission** (specs 22–38): one procurement state
   machine behind REST, MCP and A2A (shared principals, command idempotency, domain events, durable outbox);
   RFC 9457 recovery contract; per-agent rate limits; supplier adapters with a second (synthetic) supplier;

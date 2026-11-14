@@ -1,5 +1,5 @@
 """Credential resolution shared by REST and remote MCP. Only digests are retained."""
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from hashlib import sha256
 from secrets import compare_digest
 
@@ -14,6 +14,18 @@ from .db import DomainError
 class Principal:
     agent_id: str
     operator: bool = False
+    kind: str = "agent"
+    organisation_id: str | None = None
+    customer_ids: tuple[str, ...] = ()
+    role: str = "agent"
+    credential_ref: str | None = None
+
+    @property
+    def id(self):
+        return self.agent_id
+
+    def public(self):
+        return {"id": self.id, **{k: v for k, v in asdict(self).items() if k not in {"agent_id", "operator"}}}
 
     @property
     def owner(self):
@@ -45,28 +57,54 @@ class Credentials:
     def has_agent(self, agent_id):
         return any(identity == agent_id for identity, _ in self._agents)
 
-    def resolve(self, secret):
+    def resolve(self, secret, policy=None):
         digest = sha256(secret.encode()).digest()
         principal = None
         if self._operator is not None and compare_digest(digest, self._operator):
-            principal = Principal(self.operator_agent_id, operator=True)
+            principal = Principal(self.operator_agent_id, operator=True, kind="operator", role="valio_operator")
         # Do every comparison, including after a match.
         for agent_id, expected in self._agents:
             if compare_digest(digest, expected):
                 principal = Principal(agent_id)
         if principal is None:
             raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-        return principal
+        identity = policy.identities.get(principal.id) if policy else None
+        organisation = identity.organisation_id if identity else None
+        customers = policy.organisations[organisation].customer_ids if policy and organisation in policy.organisations else (
+            policy.agents[principal.id].customer_ids if policy and principal.id in policy.agents else [])
+        return Principal(principal.id, principal.operator, identity.kind if identity and not principal.operator else principal.kind,
+                         organisation, tuple(customers), identity.role if identity and not principal.operator else principal.role,
+                         "sha256:" + digest.hex())
 
 
 bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")
 
 
-def resolve_principal(request: Request, credential: HTTPAuthorizationCredentials | None = Depends(bearer)):
+def check_source(service, source):
+    try:
+        service.source_limiter.check(source)
+    except DomainError as error:
+        from . import audit
+        with service.db.connect(write=True) as conn:
+            audit.append(conn, "unauthenticated", "RATE_LIMITED", "Authentication source bucket exhausted.",
+                         data={"category": "authentication", **error.data})
+        raise
+
+
+async def resolve_principal(request: Request, credential: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    from .foundation import PRINCIPAL
+    service = request.app.state.gateway
+    source = request.client.host if request.client else "unknown"
+    check_source(service, source)
     if credential is None:
         raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-    principal = request.app.state.keys.resolve(credential.credentials)
+    principal = request.app.state.keys.resolve(credential.credentials, service.policy.get())
+    service.source_limiter.refund(source)
     request.state.principal = principal
+    PRINCIPAL.set(principal)
+    path = request.url.path
+    if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes")) or path in {"/v1/me", "/v1/approvals"}):
+        service.limiter.consume(principal.id, "read")
     return principal
 
 
@@ -85,22 +123,44 @@ def check_owner(obj, agent_id, code):
 
 class MCPBearerMiddleware:
     """Guard every HTTP request, including initialization, GET and DELETE."""
-    def __init__(self, app, keys, agent_id):
-        self.app, self.keys, self.agent_id = app, keys, agent_id
+    def __init__(self, app, keys, agent_id, gateway):
+        self.app, self.keys, self.agent_id, self.gateway = app, keys, agent_id, gateway
 
     async def __call__(self, scope, receive, send):
+        from .foundation import CORRELATION, PRINCIPAL, correlation_id
+        from .recovery import problem
+        correlation_token = principal_token = None
         if scope["type"] == "http":
+            headers = dict(scope.get("headers", []))
+            correlation = headers.get(b"x-correlation-id", b"").decode("latin-1") or correlation_id()
+            correlation_token = CORRELATION.set(correlation)
             try:
-                headers = dict(scope.get("headers", []))
+                source = (scope.get("client") or ("unknown",))[0]
+                check_source(self.gateway, source)
                 value = headers.get(b"authorization", b"").decode("latin-1")
                 scheme, _, token = value.partition(" ")
                 if scheme.lower() != "bearer" or not token:
                     raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-                principal = self.keys.resolve(token)
+                principal = self.keys.resolve(token, self.gateway.policy.get())
                 if principal.operator or principal.agent_id != self.agent_id:
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
+                self.gateway.source_limiter.refund(source)
+                principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
-                await JSONResponse({"code": error.code, "message": error.message}, status_code=401,
-                                   headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
+                response_headers = {"X-Correlation-Id": correlation}
+                response_headers.update({"WWW-Authenticate": "Bearer"} if error.status == 401 else {"Retry-After": str(error.data["retry_after_seconds"])})
+                await JSONResponse(problem(error, scope.get("path")), status_code=error.status,
+                                   media_type="application/problem+json", headers=response_headers)(scope, receive, send)
+                CORRELATION.reset(correlation_token)
                 return
-        await self.app(scope, receive, send)
+        async def correlated_send(message):
+            if message["type"] == "http.response.start" and correlation_token is not None:
+                message["headers"] = [*message.get("headers", []), (b"x-correlation-id", CORRELATION.get().encode("latin-1"))]
+            await send(message)
+        try:
+            await self.app(scope, receive, correlated_send)
+        finally:
+            if principal_token is not None:
+                PRINCIPAL.reset(principal_token)
+            if correlation_token is not None:
+                CORRELATION.reset(correlation_token)

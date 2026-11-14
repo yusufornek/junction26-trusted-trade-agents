@@ -74,12 +74,8 @@ try:
         async def run():
             server = create_server(g, 'external')
             for i in range(20):
-                try:
-                    await server.call_tool('place_order', {'quote_id':'missing','idempotency_key':str(i)})
-                except ToolError as error:
-                    assert 'QUOTE_NOT_FOUND' in str(error)
-                else:
-                    raise AssertionError('Missing quote should be refused')
+                result = await server.call_tool('place_order', {'quote_id':'missing','idempotency_key':str(i)})
+                assert result.is_error and result.structured_content['code'] == 'QUOTE_NOT_FOUND'
         asyncio.run(run())
 finally:
     g.close()

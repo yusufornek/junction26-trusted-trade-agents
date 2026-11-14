@@ -109,8 +109,9 @@ def test_ac_2_invalid_checks_are_named_audited_on_every_step(gateway, need, upst
             event = gateway.audit()[-1]
             assert event.data["error"] == "MANDATE_INVALID" and event.data["check"] == check
     assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
-    with pytest.raises(ToolError, match="MANDATE_INVALID"):
-        asyncio.run(create_server(gateway, AGENT, mandate=bad).call_tool("search_products", {"query": "milk"}))
+    tool_failure = asyncio.run(create_server(gateway, AGENT, mandate=bad).call_tool("search_products", {"query": "milk"}))
+    assert tool_failure.is_error
+    assert tool_failure.structured_content["code"] == "MANDATE_INVALID"
     assert gateway.audit()[-1].data["check"] == check
     if check == "exp":
         # Expiry also binds human approval; it cannot disappear when the header is omitted.

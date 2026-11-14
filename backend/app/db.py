@@ -1,9 +1,28 @@
 import sqlite3
 import threading
+from contextvars import ContextVar
 from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS commands (
+ principal TEXT NOT NULL, key TEXT NOT NULL, command TEXT NOT NULL, digest TEXT NOT NULL,
+ result TEXT NOT NULL, PRIMARY KEY(principal,key)
+);
+CREATE TABLE IF NOT EXISTS event_consumers (name TEXT PRIMARY KEY, enabled INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS trace_links (id TEXT PRIMARY KEY, correlation_id TEXT NOT NULL, links TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS events (
+ id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, type TEXT NOT NULL, customer_id TEXT,
+ environment TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL,
+ aggregate_revision INTEGER NOT NULL, actor TEXT NOT NULL, ts TEXT NOT NULL,
+ correlation_id TEXT NOT NULL, causation_id TEXT, payload TEXT NOT NULL, audit_id INTEGER NOT NULL,
+ UNIQUE(aggregate_type,aggregate_id,aggregate_revision)
+);
+CREATE TABLE IF NOT EXISTS outbox (
+ event_id TEXT NOT NULL REFERENCES events(id), consumer TEXT NOT NULL REFERENCES event_consumers(name),
+ status TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL,
+ PRIMARY KEY(event_id,consumer)
+);
 CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY, name_en TEXT, name_fi TEXT, category TEXT, sales_unit TEXT,
     base_unit TEXT, allowed_lot_size REAL, vendor_name TEXT, brand TEXT, country TEXT,
@@ -59,6 +78,7 @@ CREATE TABLE IF NOT EXISTS audit_anchors (
 class Database:
     def __init__(self, path: Path):
         self.on_commit = None
+        self._connection = ContextVar("sqlite_connection", default=None)
         self.audit_verify_lock = threading.Lock()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,10 +112,29 @@ class Database:
 
     @contextmanager
     def connect(self, write=False):
+        active = self._connection.get()
+        if active is not None:
+            # Nested business writes use savepoints: a refusal rolls its partial state
+            # back while the enclosing command can retain the refusal's audit entry.
+            from uuid import uuid4
+            savepoint = "nested_" + uuid4().hex
+            if write:
+                active.execute(f"SAVEPOINT {savepoint}")
+            try:
+                yield active
+            except BaseException:
+                if write:
+                    active.execute(f"ROLLBACK TO {savepoint}")
+                raise
+            finally:
+                if write:
+                    active.execute(f"RELEASE {savepoint}")
+            return
         conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         committed = False
+        token = self._connection.set(conn) if write else None
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
@@ -106,6 +145,8 @@ class Database:
             conn.rollback()
             raise
         finally:
+            if token is not None:
+                self._connection.reset(token)
             conn.close()
         if committed and write and self.on_commit is not None:
             try:

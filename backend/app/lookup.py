@@ -396,7 +396,9 @@ class Lookup:
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
                 target.update(self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
-            except DomainError:
+            except DomainError as error:
+                if error.code == "UPSTREAM_BUSY":
+                    raise
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
         if candidates and (not fits or any(p.id not in fits for p in candidates)):
             global_warnings.append(warning("NO_FIT_SCORE"))
@@ -436,6 +438,11 @@ class Lookup:
                               live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
             _, result.mandate, _ = self.mandates.authorize(conn, mandate, agent_id, need.customer_id, products=[o.product_id for o in offers])
+            from .foundation import CORRELATION, procurement_context, trace_id
+            result.context = procurement_context(self.policy, need.customer_id, result.lookup_id, effective, result.mandate)
+            result.correlation_id = CORRELATION.get()
+            result.links = {"request_id": result.lookup_id, "trace_id": trace_id(),
+                            "event_id": str(uuid4()), "task_id": None}
             self.mandates.bind(conn, "lookup", result.lookup_id, mandate)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             conn.execute("INSERT INTO lookup_offers VALUES(?,?)", (result.lookup_id, json.dumps([o.model_dump(mode="json") for o in offers])))

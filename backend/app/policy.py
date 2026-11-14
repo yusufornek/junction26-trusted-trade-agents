@@ -101,10 +101,9 @@ class Policy:
                 after = self._editable(self._load(self.path) if reset else request.policy)
                 if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                     after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
-                if not reset and "agents" not in request.policy.model_fields_set:
-                    after["agents"] = before["agents"]
-                if not reset and "customers" not in request.policy.model_fields_set:
-                    after["customers"] = before["customers"]
+                for section in ("agents", "customers", "organisations", "identities", "rate_limits"):
+                    if not reset and section not in request.policy.model_fields_set:
+                        after[section] = before[section]
                 from .catalog import Catalog
                 catalog = Catalog(self.db)
                 for customer_id, customer in after["customers"].items():

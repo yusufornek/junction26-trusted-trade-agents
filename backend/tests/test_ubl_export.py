@@ -169,6 +169,7 @@ def test_ac_5_mcp_exports_identical_owned_document(gateway, trade):
             result = await owner.call_tool("get_order_ubl", {"order_id": order.id, "document": doc})
             assert not result.is_error
             assert result.content[0].text == xml
-        with pytest.raises(ToolError, match="ORDER_NOT_FOUND"):
-            await other.call_tool("get_order_ubl", {"order_id": order.id})
+        tool_failure = await other.call_tool("get_order_ubl", {"order_id": order.id})
+        assert tool_failure.is_error
+        assert tool_failure.structured_content["code"] == "ORDER_NOT_FOUND"
     asyncio.run(run())

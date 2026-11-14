@@ -164,9 +164,10 @@ def test_exceptions_ac_1_single_preview_identity_no_side_effects_and_legacy(gate
             assert not result.is_error
             assert result.structured_content["plans"][0]["policy_preview"]["outcome"] == "CONFIRMED"
             calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
-            with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
-                await create_server(gateway, "unknown-mcp").call_tool(
-                    "find_offers", {"need": need.model_dump(mode="json")})
+            tool_failure = await create_server(gateway, "unknown-mcp").call_tool(
+                "find_offers", {"need": need.model_dump(mode="json")})
+            assert tool_failure.is_error
+            assert tool_failure.structured_content["code"] == "AGENT_NOT_REGISTERED"
             assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
         asyncio.run(check_mcp())
         with gateway.db.connect() as conn:

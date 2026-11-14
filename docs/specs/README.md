@@ -46,5 +46,7 @@ change or extend.
 | 36 | [Proactive supplier proposals](36-supplier-proposals.md) | Proactive supplier proposals | in progress |
 | 37 | [MCP server card and discovery](37-mcp-server-card.md) | MCP server card and discovery | in progress |
 | 38 | [Connect your agent](38-connect-kit.md) | Connect your agent | in progress |
+| 39 | [Organiser answers](39-organiser-answers.md) | Whole units, unknown availability, not available, cut-off text, honour 429 | in progress |
+| 40 | [Graduated autonomy](40-graduated-autonomy.md) | Approval first, autonomy earned from a measured track record | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

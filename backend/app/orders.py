@@ -14,6 +14,7 @@ from .lookup import availability_for, offer_for, reserved
 from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
 from .signing import quote_payload, receipt_payload, signature_digest, verify_jws
+from .foundation import CORRELATION, procurement_context, trace_id
 
 
 def evidence_changes(before, after):
@@ -57,6 +58,9 @@ class Orders:
         order.decided_at = audit.utcnow()
         order.decided_by_kind = kind
         order.receipt = self.signing.sign(receipt_payload(order))
+        order.links.update(receipt_id=order.id, quote_id=quote.id, request_id=quote.need_ref,
+                           order_id=order.id, trace_id=trace_id(),
+                           audit_checkpoint=f"/v1/orders/{order.id}/timeline", task_id=None)
 
     def _verified_quote(self, conn, quote_id, agent_id):
         row = conn.execute("SELECT data FROM quotes WHERE id=?", (quote_id,)).fetchone()
@@ -236,6 +240,10 @@ class Orders:
                           hard_constraint_violations=violations, live_calls=counter.live())
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
+            quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record)
+            quote.correlation_id = CORRELATION.get()
+            quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
+                           "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
             quote.signature = self.signing.sign(quote_payload(quote))
             self.mandates.bind(conn, "quote", quote.id, mandate)
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
@@ -254,10 +262,14 @@ class Orders:
                          lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator, mandate))
 
     def _place_order(self, quote_id, key, agent_id, counter, operator=False, mandate=None):
+        from hashlib import sha256
+        storage_key = sha256((agent_id + "\x00" + key).encode()).hexdigest()
         # Serializes idempotency, reservation reads and writes across REST/MCP processes.
         with self.db.connect(write=True) as conn:
             policy = self.policy.get()
-            existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=?", (key,)).fetchone()
+            existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=? OR "
+                                    "(idempotency_key=? AND json_extract(data,'$.agent_id')=?)",
+                                    (storage_key, key, agent_id)).fetchone()
             if existing:
                 order = Order.model_validate_json(existing["data"])
                 quote = check_owner(self._quote(conn, quote_id), None if operator else agent_id, "QUOTE_NOT_FOUND")
@@ -304,9 +316,14 @@ class Orders:
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
                           policy=result, live_calls=counter.live())
+            order.context = dict(quote.context) if quote.context else None
+            if order.context and quote.need_ref:
+                _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need)
+                order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record)
+            order.correlation_id = CORRELATION.get() or quote.correlation_id
             self._sign_receipt(order, quote, "operator" if operator else "agent")
             self.mandates.bind(conn, "order", order.id, mandate)
-            conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, key, order.status, order.model_dump_json()))
+            conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, storage_key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
             self._reserve(conn, order)
@@ -365,7 +382,12 @@ class Orders:
     def get_order(self, order_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
-            return check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
+            order = check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
+            events = conn.execute("SELECT id,audit_id,json_extract(payload,'$.links.trace_id') AS trace_id FROM events WHERE aggregate_type='order' AND aggregate_id=? ORDER BY aggregate_revision", (order.id,)).fetchall()
+            order.links.update(event_ids=[r["id"] for r in events],
+                               audit_checkpoints=[r["audit_id"] for r in events],
+                               trace_ids=list(dict.fromkeys(r["trace_id"] for r in events)))
+            return order
 
     def get_order_ubl(self, order_id, document="order", agent_id=None):
         from .ubl import export

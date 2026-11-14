@@ -290,16 +290,18 @@ def test_ac_9_mcp_uses_fixed_server_identity_for_mandate(gateway, need, upstream
                 "need_ref": offers.structured_content["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": 1}]}),
             ("place_order", "PLACE_ORDER_FAILED", {"quote_id": quote.structured_content["id"], "idempotency_key": "outsider"}),
         ):
-            with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
-                await unregistered.call_tool(tool, args)
+            tool_failure = await unregistered.call_tool(tool, args)
+            assert tool_failure.is_error
+            assert tool_failure.structured_content["code"] == "AGENT_NOT_REGISTERED"
             event = gateway.audit()[-1]
             assert event.action == action and event.actor == "agent:outsider"
             assert event.data["error"] == "AGENT_NOT_REGISTERED"
         assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
-        with pytest.raises(ToolError, match="CUSTOMER_NOT_IN_MANDATE"):
-            await registered.call_tool("create_quote", {"customer_id": "2", "deliver_by": str(need.deliver_by),
-                "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
+        tool_failure = await registered.call_tool("create_quote", {"customer_id": "2", "deliver_by": str(need.deliver_by),
+            "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
 
+        assert tool_failure.is_error
+        assert tool_failure.structured_content["code"] == "CUSTOMER_NOT_IN_MANDATE"
     asyncio.run(run())
 
 

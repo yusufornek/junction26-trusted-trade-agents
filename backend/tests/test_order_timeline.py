@@ -152,7 +152,7 @@ def test_timeline_ac5_unknown_order_and_generated_contract(client, upstream):
     before = calls(upstream)
     response = client.get("/v1/orders/missing/timeline")
     assert response.status_code == 404
-    assert response.json() == {"code": "ORDER_NOT_FOUND", "message": "Order was not found"}
+    assert {k: response.json()[k] for k in ("code", "message")} == {"code": "ORDER_NOT_FOUND", "message": "Order was not found"}
     assert calls(upstream) == before
     contract = Path(__file__).resolve().parents[2] / "contracts/openapi.yaml"
     schema = yaml.safe_load(contract.read_text())

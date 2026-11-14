@@ -156,3 +156,18 @@ Structured attributes inside `synkkaData` (better than matching on names):
   `closingTime` and the same `availableDate` 2026-11-16 for both 463038 (Terminal) and 462775 (Stock) —
   schedule lines do not follow the requested date. Until a mentor confirms otherwise we treat
   `closingTime < timeNow` as "cut-off missed for this delivery" and flag it, never silently order.
+
+## Organiser answers (Junction Discord, 2026-11-14)
+- No order API; orders produced for human approval are enough — nothing has to be sent anywhere. A web shop
+  account is available at the booth (production, orders cannot be placed).
+- `closingTime` is the order cut-off for the related `availableDate`. Mock data stays the same all weekend.
+- Availability ≥ 999999 = availability unknown; Valio's logic allows ordering any quantity (Terminal products
+  Valio does not stock). Empty availability = not available.
+- `allowedLotSize` 0.01 = 1 (fractional crates do not exist).
+- Rate limit: 429 blocks for 30 s; a few hundred calls per minute is fine, more than 10 per second is not.
+How the gateway follows them: spec 39.
+- Approval today: Valio enforces no approval gates; customers handle spending limits with internal
+  instructions or by letting only the manager place orders. In an agentic scenario human approval would be
+  required at first, possibly dropped later when reliability is good enough. How the gateway follows this:
+  spec 40 (approval first, autonomy earned per agent from a measured track record).
+

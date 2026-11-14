@@ -26,6 +26,24 @@ class Gateway:
         self.mandates = Mandates(self.db, self.policy, self.catalog)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy, self.mandates)
         self.orders = Orders(self.db, self.catalog, self.valio, self.policy, self.signing, self.mandates)
+        from .foundation import Outbox
+        from .limits import Limiter, SourceLimiter
+        from .commands import install
+        self.outbox = Outbox(self.db)
+        self.limiter = Limiter(self.policy, self.db)
+        self.source_limiter = SourceLimiter()
+        for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
+            install(self, self.orders, name, "mutation")
+        for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl"):
+            install(self, self.orders, name, "read")
+        install(self, self, "find_offers", "lookup")
+        install(self, self.policy, "update", "mutation")
+        install(self, self.mandates, "revoke", "mutation")
+
+        def after_commit():
+            self.anchoring.trigger()
+            self.outbox.dispatch()
+        self.db.on_commit = after_commit
 
     def find_offers(self, need, actor="agent:external", *, mandate=None):
         self.orders.expire()

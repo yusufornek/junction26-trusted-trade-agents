@@ -42,10 +42,10 @@ def test_review_strict_preference_numbers(gateway, need, upstream, field, value,
         assert field in response.json()["message"]
     else:
         async def check():
-            with pytest.raises(ToolError) as error:
-                await create_server(gateway, "external").call_tool("find_offers", {"need": body})
-            assert json.loads(str(error.value))["code"] == "VALIDATION_ERROR"
-            assert field in json.loads(str(error.value))["message"]
+            error = await create_server(gateway, "external").call_tool("find_offers", {"need": body})
+            assert error.is_error
+            assert error.structured_content["code"] == "VALIDATION_ERROR"
+            assert field in error.structured_content["message"]
         asyncio.run(check())
     assert not upstream.price_calls and not upstream.decision_calls
 
@@ -209,9 +209,9 @@ def test_ac_4_codes_normalize_and_unknowns_have_valid_values_rest_and_mcp(gatewa
             assert field in refused.json()["message"] and valid in refused.json()["message"]
 
             async def check():
-                with pytest.raises(ToolError) as error:
-                    await create_server(gateway, "external").call_tool("find_offers", {"need": invalid})
-                assert json.loads(str(error.value))["code"] == "UNKNOWN_CODE"
+                error = await create_server(gateway, "external").call_tool("find_offers", {"need": invalid})
+                assert error.is_error
+                assert error.structured_content["code"] == "UNKNOWN_CODE"
             asyncio.run(check())
 
 
@@ -236,9 +236,9 @@ def test_ac_5_request_bounds_rest_and_mcp_match(gateway, need, upstream):
 
             # MCP adds the outer argument name, while preserving the same code and field details.
             async def matching():
-                with pytest.raises(ToolError) as error:
-                    await server.call_tool("find_offers", {"need": body})
-                data = json.loads(str(error.value))
+                error = await server.call_tool("find_offers", {"need": body})
+                assert error.is_error
+                data = error.structured_content
                 assert data["code"] == response.json()["code"] == "VALIDATION_ERROR"
                 assert field in data["message"]
             asyncio.run(matching())

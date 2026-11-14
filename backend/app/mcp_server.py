@@ -7,9 +7,12 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
+from mcp.types import CallToolResult, TextContent
 
 from .db import DomainError
-from .auth import Credentials, MCPBearerMiddleware
+from .auth import Credentials, MCPBearerMiddleware, Principal
+from .foundation import CORRELATION, PRINCIPAL, correlation_id
+from .recovery import problem, validation_problem
 from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
 
@@ -42,18 +45,39 @@ class GatewayMCPServer(MCPServer):
         if not self.keys.has_agent(self.agent_id):
             raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
         app = super().streamable_http_app(**kwargs)
-        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id)
+        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway)
         return app
 
     async def call_tool(self, name, arguments, context=None):
         mandate = self.mandate
+        correlation = CORRELATION.get()
         if context is not None:
             try:
                 if context.headers is not None:
                     mandate = context.headers.get("agent-mandate")
+                    correlation = context.headers.get("x-correlation-id") or correlation
             except ValueError:
                 pass
+            metadata = getattr(context, "meta", None)
+            if metadata is None:
+                try:
+                    metadata = context.request_context.meta
+                except (ValueError, AttributeError):
+                    pass
+            if hasattr(metadata, "model_dump"):
+                metadata = metadata.model_dump()
+            if isinstance(metadata, dict):
+                correlation = metadata.get("correlation_id") or metadata.get("correlationId") or correlation
         token = PRESENTED_MANDATE.set(mandate)
+        correlation_token = CORRELATION.set(correlation or correlation_id())
+        policy = self.gateway.policy.get()
+        identity = policy.identities.get(self.agent_id)
+        org = identity.organisation_id if identity else None
+        customers = policy.organisations[org].customer_ids if org in policy.organisations else (
+            policy.agents[self.agent_id].customer_ids if self.agent_id in policy.agents else [])
+        principal_token = PRINCIPAL.set(PRINCIPAL.get() or Principal(self.agent_id, kind=identity.kind if identity else "agent",
+            organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
+            credential_ref="stdio:" + self.agent_id))
         try:
             return await super().call_tool(name, arguments, context)
         except (ToolError, DomainError, ValidationError) as error:
@@ -61,14 +85,18 @@ class GatewayMCPServer(MCPServer):
             cause = error
             while cause is not None:
                 if isinstance(cause, DomainError):
-                    raise ToolError(json.dumps({"code": cause.code, "message": cause.message})) from error
+                    payload = problem(cause)
+                    return CallToolResult(is_error=True, structured_content=payload,
+                                          content=[TextContent(type="text", text=json.dumps(payload))])
                 if isinstance(cause, ValidationError):
-                    message = "; ".join(f"{'.'.join(str(v) for v in e['loc'])}: {e['msg']}" for e in cause.errors())
-                    code = "UNKNOWN_CODE" if any(e["type"] == "UNKNOWN_CODE" for e in cause.errors()) else "VALIDATION_ERROR"
-                    raise ToolError(json.dumps({"code": code, "message": message})) from error
+                    payload = problem(validation_problem(cause))
+                    return CallToolResult(is_error=True, structured_content=payload,
+                                          content=[TextContent(type="text", text=json.dumps(payload))])
                 cause = cause.__cause__
             raise
         finally:
+            PRINCIPAL.reset(principal_token)
+            CORRELATION.reset(correlation_token)
             PRESENTED_MANDATE.reset(token)
 
 
@@ -77,6 +105,8 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     server = GatewayMCPServer("Valio Aimo Trusted Trade Agents", instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
+        "Domain failures return isError=true and RFC 9457 structured content with code/message, recovery_version=1, retryable, next_action, retry_after_seconds and violations. Follow next_action, not prose. Pending orders return WAIT_FOR_APPROVAL and poll_after_seconds. "
+        "Per-principal lookup/mutation/read buckets are shared with REST. RATE_LIMITED and UPSTREAM_BUSY require RETRY_SAME_COMMAND after the supplied interval. Exact idempotent replays use read tokens. Quote and cancel accept optional idempotency_key; same principal/key and changed payload returns IDEMPOTENCY_CONFLICT. Correlation metadata: _meta.correlation_id or HTTP X-Correlation-Id. "
         "Buyer VC-JWT: present --mandate FILE on stdio or Agent-Mandate on each HTTP request, with the agent Bearer credential. EdDSA, issuer, validity, revocation, sub/customer/category are verified at every step; errors are MANDATE_INVALID with the check. Policy can only tighten buyer limits. Orders and audit show mandate metadata; revoke via signed REST POST /v1/mandates/revocations. "
         "Lookup, quote and order require a mandate; unregistered agents receive AGENT_NOT_REGISTERED. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
@@ -90,12 +120,14 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         "RFC 8785 quote_payload uses decimal-string money/quantities, provenance, price_commitment=gateway-locked and integrity over all immutable quote fields (excluding signature, status, live_calls), including owner, currency, need binding and policy/export evidence. "
         "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS))
     server.keys = gateway.settings.keys or Credentials()
+    server.gateway = gateway
     server.agent_id = agent_id
     server.mandate = mandate
 
     @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; mandate categories filter before the result limit; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path." + MANDATE_HELP)
     def search_products(query: str, required_claims: list[str] | None = None,
                         exclude_allergens: list[str] | None = None, limit: int = 10) -> list[Product]:
+        gateway.limiter.consume(agent_id, "lookup")
         return gateway.mandates.search(query, required_claims, exclude_allergens, limit,
                                        token=PRESENTED_MANDATE.get(), agent_id=agent_id)
 
@@ -105,10 +137,11 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
 
     @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over RFC 8785 quote_payload, decimal-string quantities/money, provenance and integrity covering every immutable quote field (excluding signature, status, live_calls); kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation." + MANDATE_HELP)
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
-                     need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
+                     need_ref: str | None = None, plan_ref: PlanRef | None = None,
+                     idempotency_key: str | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id, mandate=PRESENTED_MANDATE.get())
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id, mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
@@ -128,9 +161,9 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         return gateway.orders.get_order_ubl(order_id, document, agent_id)
 
     @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
-    def cancel_order(order_id: str, reason: str = "") -> Order:
+    def cancel_order(order_id: str, reason: str = "", idempotency_key: str | None = None) -> Order:
         try:
-            return gateway.orders.cancel(order_id, actor=f"agent:{agent_id}", reason=reason)
+            return gateway.orders.cancel(order_id, actor=f"agent:{agent_id}", reason=reason, command_key=idempotency_key)
         except DomainError as error:
             # Expected refusals must retain their public code instead of becoming SDK crash errors.
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error

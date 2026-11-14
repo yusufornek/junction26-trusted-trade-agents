@@ -205,15 +205,16 @@ def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
     async def run():
         tools = await owner.list_tools()
         cancel_tool = next(t for t in tools if t.name == "cancel_order")
-        assert set(cancel_tool.input_schema["properties"]) == {"order_id", "reason"}
+        assert set(cancel_tool.input_schema["properties"]) == {"order_id", "reason", "idempotency_key"}
         placed = await owner.call_tool("place_order", {"quote_id": quote.id, "idempotency_key": "mcp-cancel"})
         assert not placed.is_error
         order_id = placed.structured_content["id"]
         before = gateway.orders.get_order(order_id)
         assert before.agent_id == "buyer" and before.status == "CONFIRMED"
         before_calls = call_counts(upstream)
-        with pytest.raises(ToolError, match="ORDER_NOT_FOUND"):
-            await other.call_tool("cancel_order", {"order_id": order_id, "reason": "Not mine"})
+        tool_failure = await other.call_tool("cancel_order", {"order_id": order_id, "reason": "Not mine"})
+        assert tool_failure.is_error
+        assert tool_failure.structured_content["code"] == "ORDER_NOT_FOUND"
         assert gateway.orders.get_order(order_id) == before
         failed = gateway.audit(order_id=order_id)[-1]
         assert failed.action == "CANCEL_FAILED" and failed.actor == "agent:other"

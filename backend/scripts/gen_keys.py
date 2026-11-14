@@ -69,7 +69,7 @@ def main():
     args = parser.parse_args()
     policy = Policy(BACKEND / "policy.yaml", BACKEND / "var/policy.yaml").get()
     try:
-        added = provision(args.env_file, policy.agents)
+        added = provision(args.env_file, set(policy.agents) | set(policy.identities))
     except ValueError as error:
         parser.error(str(error))
     print("Added: " + ", ".join(added) if added else "No names added.")

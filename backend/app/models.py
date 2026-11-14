@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -222,6 +222,9 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
+    context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     lookup_id: str = Field(description="Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.")
@@ -271,6 +274,9 @@ class QuoteRequest(RequestScope):
 
 
 class Quote(Model):
+    links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
+    context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     signature: str | None = Field(default=None, description="Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload: decimal-string units/money, provenance, price_commitment, plus integrity containing every immutable resource field (all except signature, status, live_calls; numeric values normalized to decimal strings). Authenticates ownership, currency, need binding and decision/export evidence. kid is in the protected header; public keys at /.well-known/jwks.json. Legacy unsigned or narrower-payload quotes remain readable but require re-quoting for new placement; existing orders remain replayable.")
@@ -296,6 +302,9 @@ class OrderRequest(Model):
 
 
 class Order(Model):
+    context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    links: dict = Field(default_factory=dict)
     mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     customer_id: str | None = None
@@ -321,6 +330,25 @@ class Order(Model):
     comment: str | None = None
     cancelled_by: str | None = Field(default=None, description="Human name or placing agent ID responsible for cancellation.")
     cancel_reason: str | None = Field(default=None, description="Reason supplied when the order was cancelled.")
+
+    @computed_field
+    @property
+    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP"] | None:
+        if self.status == "PENDING_APPROVAL":
+            return "WAIT_FOR_APPROVAL"
+        return "STOP" if self.status in {"REJECTED", "EXPIRED", "CANCELLED"} else None
+
+    @computed_field
+    @property
+    def poll_after_seconds(self) -> int | None:
+        return 5 if self.status == "PENDING_APPROVAL" else None
+
+    @model_validator(mode="before")
+    @classmethod
+    def stored_guidance(cls, value):
+        if isinstance(value, dict):
+            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds"}}
+        return value
 
 
 class CancelRequest(Model):
@@ -428,6 +456,19 @@ class RevocationRequest(Model):
 
 
 class ErrorResponse(Model):
+    type: str
+    title: str
+    status: int
+    detail: str
+    instance: str
+    recovery_version: Literal[1] = 1
+    retryable: bool
+    next_action: Literal["RETRY_SAME_COMMAND", "REFRESH_QUOTE", "LOOKUP_REQUIRED", "WAIT_FOR_APPROVAL",
+                         "REVIEW_UPDATED_EVIDENCE", "FIX_REQUEST", "CONTACT_ADMIN", "STOP"]
+    retry_after_seconds: int | None = None
+    resource_ref: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    correlation_id: str
+    violations: list[dict] = Field(default_factory=list)
     code: str = Field(description="Stable domain error code, e.g. EXPIRED_QUOTE.")
     message: str
     data: dict | None = Field(default=None, description="Additional error evidence, including approval rule_hits when available.")
@@ -471,7 +512,29 @@ class ShortlistPolicy(Model):
     live_max: int = Field(default=25, ge=10, le=40, description="Maximum suitable candidates priced before returning the top offers.")
 
 
+class BucketPolicy(Model):
+    capacity: int = Field(gt=0)
+    refill_per_minute: float = Field(gt=0)
+
+
+class RateLimits(Model):
+    lookup: BucketPolicy = Field(default_factory=lambda: BucketPolicy(capacity=60, refill_per_minute=60))
+    mutation: BucketPolicy = Field(default_factory=lambda: BucketPolicy(capacity=120, refill_per_minute=120))
+    read: BucketPolicy = Field(default_factory=lambda: BucketPolicy(capacity=600, refill_per_minute=600))
+
+
+class Organisation(Model):
+    customer_ids: list[str] = Field(default_factory=list)
+
+
+class IdentityPolicy(Model):
+    kind: Literal["agent", "operator", "buyer_user", "supplier_agent"] = "agent"
+    organisation_id: str | None = None
+    role: Literal["agent", "valio_operator", "buyer_admin", "buyer_approver", "buyer_viewer", "supplier_agent"] = "agent"
+
+
 class AgentMandate(Model):
+    rate_limits: RateLimits | None = None
     customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
     max_auto_total_eur: float | None = Field(default=None, ge=0, description="Optional per-order ceiling; the lower of this and the global ceiling applies.")
     max_auto_daily_total_eur: float = Field(ge=0, description="Rolling 24-hour autonomous EUR ceiling; cancelled and human-approved orders are excluded.")
@@ -515,6 +578,9 @@ PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE
 
 
 class PolicyDocument(Model):
+    organisations: dict[str, Organisation] = Field(default_factory=dict)
+    identities: dict[str, IdentityPolicy] = Field(default_factory=dict)
+    rate_limits: RateLimits = Field(default_factory=RateLimits)
     approval: ApprovalPolicy
     reject: RejectPolicy
     ranking_weights: RankingWeights
@@ -589,6 +655,7 @@ class AgentStats(Model):
 
 
 class Stats(Model):
+    throttles: int = 0
     since: datetime | None = Field(description="Inclusive UTC lower bound; naive input is interpreted as UTC. Null means all history.")
     lookups: int = Field(description="LOOKUP audit events in the window.")
     orders_by_status: dict[str, int] = Field(description="Current statuses of orders created in the window, including zero counts.")

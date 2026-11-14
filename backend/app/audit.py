@@ -46,6 +46,12 @@ def utcnow():
 
 
 def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=None):
+    from .foundation import CORRELATION, TRACE, emit
+    data = dict(data or {})
+    if CORRELATION.get():
+        data["correlation_id"] = CORRELATION.get()
+    if TRACE.get():
+        data["trace_id"] = TRACE.get()
     if not conn.in_transaction:
         # Support direct SQLite callers too, without a deferred read/write race.
         # The caller still owns commit/rollback of the transaction we open.
@@ -63,6 +69,7 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
         "INSERT INTO audit(id,ts,actor,action,order_id,quote_id,summary,data,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (seq, ts, actor, action, order_id, quote_id, summary, encoded, previous, digest),
     )
+    emit(conn, action, actor, ts, seq, data, order_id, quote_id)
 
 
 def head(db, signing):

@@ -225,7 +225,8 @@ class Catalog:
         for value in values:
             code = canonical.get(value.strip().casefold())
             if code is None:
-                raise DomainError("UNKNOWN_CODE", f"{location or field}: unknown code {value!r}; valid values: {', '.join(vocabulary)}", 422)
+                raise DomainError("UNKNOWN_CODE", f"{location or field}: unknown code {value!r}; valid values: {', '.join(vocabulary)}", 422,
+                                  {"violations": [{"field": location or field, "problem": "Unknown code", "valid_values": vocabulary}]})
             if code not in result:
                 result.append(code)
         return result

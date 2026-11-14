@@ -92,7 +92,7 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
    headers `Idempotency-Key` and `Authorization: Bearer <agent secret>` for a registered agent such as
    `hotel-chain-agent`. Lookup, quote and order require a mandate (`403 AGENT_NOT_REGISTERED`). Fixed prices remain the quoted prices. Repeated keys return the existing order;
-   reuse with another quote/agent is a conflict.
+   reuse with a changed command payload by that principal is a conflict. Another principal may use the same key string.
 4. If `PENDING_APPROVAL`, inspect `GET /v1/approvals`. A human calls
    `POST /v1/approvals/{order_id}/approve` or `/reject`, body
    `{"approver":"Ada","comment":"Reviewed delivery and budget","evidence_revision":1}`.
@@ -756,3 +756,80 @@ remains separate. A fresh live demo check is still required to establish current
 the offline replay does not establish that result. Historical lookup statistics bypass request date-window
 validation, while new requests still enforce it. Malformed cancellation JSON returns 401 without a valid
 credential, or structured 422 after authentication.
+
+## Shared commands, recovery and limits (specs 22–24)
+
+REST and MCP use `app.commands` for principal-scoped idempotency and token costs. Order placement
+requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
+(optional for compatibility). Policy update/reset and signed mandate revocation accept it too.
+MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
+same command and payload. Exact successful replays use read tokens and return the stored result;
+order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
+audit. Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
+domain events commit atomically. Refusals do not cache a successful command result.
+
+Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
+effective constraints, mandate reference, SHA-256 of canonical effective policy, and environment
+(`live`; the sandbox is a later spec). `links` connect request, quote, order, receipt, event, audit
+checkpoint and trace identifiers; task references remain null until task transports are installed.
+Order detail exposes all event IDs, audit checkpoints and trace IDs. Trace links are stored locally;
+when an OpenTelemetry span exists its trace ID is used. Span export is provided by spec 27.
+
+`X-Correlation-Id` is accepted/generated and returned on success and failure. MCP accepts the HTTP
+header or `_meta.correlation_id` (`correlationId` also accepted). Audit data, events and recovery
+payloads retain it. Events have schema version 1 and per-aggregate revisions, including quote
+acceptance. `events.audit_id` links the audit hash chain. `outbox` has one durable row per registered
+consumer. Register `gateway.outbox.register("webhooks", handler)` (or `"a2a-push"`, `"activity"`);
+registration without a handler reserves the durable consumer name. `replay=True` backfills existing
+events. Post-commit dispatch never runs callbacks inside the procurement transaction. Failures remain
+pending with exponential retry intervals, and `dispatch()` can be called by a worker independently
+of new traffic. Callbacks must deduplicate by event ID: delivery is at least once. Named registrations
+survive restart; callbacks are attached again by their owning feature. No webhook or A2A delivery is
+claimed before those features are installed.
+
+REST errors use `application/problem+json` with RFC 9457 fields and legacy `code`, `message`, `data`.
+Recovery version 1 adds `retryable`, `next_action`, `retry_after_seconds`, `correlation_id`, and
+`violations` (field, problem, valid_values). Resource references are omitted unless read access has
+been verified; current errors conservatively omit them. Authentication errors disclose no resource
+details. MCP domain failures return `isError: true` with the same structured payload; malformed
+protocol use remains a protocol error. The explicit inventory is `app/recovery.py`.
+
+| next_action | Client transition |
+|---|---|
+| RETRY_SAME_COMMAND | Wait retry_after_seconds; preserve payload and key |
+| REFRESH_QUOTE | Obtain a new quote, then place it |
+| LOOKUP_REQUIRED | Find offers before quoting |
+| WAIT_FOR_APPROVAL | Poll status after poll_after_seconds |
+| REVIEW_UPDATED_EVIDENCE | Have an authorised approver review the new evidence revision |
+| FIX_REQUEST | Repair violations using valid_values |
+| CONTACT_ADMIN | Resolve credential or authority configuration |
+| STOP | End automatic recovery |
+
+Confirmed orders return `next_action: null`; rejected, expired and cancelled orders return `STOP`.
+`clients/python/reference_buyer.py` is the deterministic
+MCP recovery loop reused by the later connect kit: inject `call_tool`, then call
+`await ReferenceBuyer(call_tool).purchase(need_json)`. Lost responses retry the unchanged command/key;
+expiry, throttles and approval waiting are driven by `next_action`, never prose or domain codes.
+
+Policy `rate_limits` has `lookup`, `mutation`, `read`, each with `capacity` and `refill_per_minute`.
+Defaults are 60/60, 120/120, 600/600 respectively. An agent's `agents.<id>.rate_limits` overrides all
+three buckets. Limits take effect on the next request without resetting consumed tokens. Exhaustion
+returns `429 RATE_LIMITED`, `Retry-After`, and retry guidance before Decisions or supplier work.
+Throttles are audited and counted in `/v1/stats.throttles`. Supplier admission is globally bounded
+within the process: 8 active calls, 16 waiting, a 5-second queue wait; overflow/timeouts yield retryable
+`503 UPSTREAM_BUSY`. Unknown credentials have a separate source-address bucket before credential
+resolution (60 attempts, 60/minute; successful authentication refunds its attempt). Limits are
+**in-process, single instance**; SQLite commands/events remain shared across processes.
+
+`GET /v1/me` returns the resolved principal and current limits/remaining tokens. Principals include
+kind, ID, organisation, customers, role and a digest credential reference. Policy `organisations`
+maps IDs to `{customer_ids: [...]}`; `identities` maps credential IDs to `{kind, role, organisation_id}`.
+Buyer roles are `buyer_admin`, `buyer_approver`, `buyer_viewer`; suppliers use `supplier_agent`.
+`scripts/gen_keys.py --write` provisions every ID in `agents` and `identities`, with the same secret
+format and without printing secrets. These identity labels grant no new operations by themselves.
+The existing operator-only guards remain in force until the buyer/supplier feature specs add scope.
+
+Public `GET /v1/meta` separates specification versions from installed packages and states limiter
+scope. A2A, Standard Webhooks and the MCP server card are explicitly planned, not implemented.
+The server-card draft is pinned to vendored commit `526201bbc80231daa40ffcdecfc9da4e54e5dc93`;
+Standard Webhooks is pinned to vendored commit `36afae792227eae8a182a7a1a5711dbdc08a4334`.

@@ -32,6 +32,11 @@ class ValioClient:
         self.client.close()
 
     def fetch(self, endpoint, customer, deliver_by, ids, counter, *, fresh=False):
+        from .limits import SUPPLIER_GUARD
+        with SUPPLIER_GUARD.slot():
+            return self._fetch(endpoint, customer, deliver_by, ids, counter, fresh=fresh)
+
+    def _fetch(self, endpoint, customer, deliver_by, ids, counter, *, fresh=False):
         ids = list(dict.fromkeys(str(i) for i in ids))
         result, missing = {}, []
         day = deliver_by.isoformat()
