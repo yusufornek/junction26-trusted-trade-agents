@@ -179,9 +179,13 @@ export default function Shell() {
   const range = RANGES[rangeIndex];
   const since = range.days ? new Date(loadedAt - range.days * 86400000).toISOString() : undefined;
   const waiting = approvals.data?.length ?? 0;
+  // Signed out, the page is only the sign-in card (or the public sign-up form): no rail, no bars to click into.
+  const bare = !signedIn || signingIn;
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row md:gap-4 md:p-4">
+    <div className={`flex min-h-screen flex-col ${bare ? "" : "md:flex-row md:gap-4 md:p-4"}`}>
+      {bare ? null : (
+        <>
       {/* Desktop rail: 72px of icons that widens to 236px with names on hover or keyboard focus. The column itself
           widens, so the page beside it moves over and narrows instead of being covered. The short delay on hover
           keeps a pointer that only passes over the rail from shifting the page. */}
@@ -313,9 +317,15 @@ export default function Shell() {
           </nav>
         ) : null}
       </div>
+        </>
+      )}
 
-      <main className="min-w-0 flex-1 px-4 pb-10 pt-4 md:px-0 md:pt-0">
-        <div className="mb-5 hidden items-center justify-end gap-2 md:flex">
+      <main
+        className={
+          bare ? "flex min-h-screen w-full flex-col items-center justify-center px-4 py-10" : "min-w-0 flex-1 px-4 pb-10 pt-4 md:px-0 md:pt-0"
+        }
+      >
+        <div className={`mb-5 hidden items-center justify-end gap-2 ${bare ? "" : "md:flex"}`}>
           <span className="chip h-9 border border-line bg-surface px-3.5 text-ink-muted">
             <span className={`size-1.5 rounded-full ${health.data ? "bg-positive" : "bg-negative"}`} />
             {health.data ? `${health.data.catalog_rows.toLocaleString("en-GB")} products indexed` : "gateway offline"}
@@ -340,7 +350,11 @@ export default function Shell() {
           <Avatar name={who} size={36} />
         </div>
 
-        <header className="mb-6 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+        <header
+          className={`mb-6 flex-wrap items-end justify-between gap-x-4 gap-y-3 ${
+            !bare ? "flex" : pathname === "/signup" ? "flex w-full max-w-2xl" : "hidden"
+          }`}
+        >
           <div className="min-w-0">
             <h1 className="text-[28px] font-semibold leading-tight tracking-tight">{head.title}</h1>
             <p className="label mt-1">{head.sub}</p>
@@ -387,10 +401,20 @@ export default function Shell() {
         </header>
 
         {/* Sign-up is public: a new kitchen has no operator token. */}
-        {(signedIn && !signingIn) || pathname === "/signup" ? (
-          <Outlet context={{ since, rangeLabel: range.label } satisfies ShellContext} />
+        {!bare || pathname === "/signup" ? (
+          <>
+            <Outlet context={{ since, rangeLabel: range.label } satisfies ShellContext} />
+            {bare ? (
+              <p className="mt-5 text-center text-[13px] text-ink-muted">
+                Already have an account?{" "}
+                <NavLink to="/" className="font-medium text-brand hover:underline">
+                  Sign in
+                </NavLink>
+              </p>
+            ) : null}
+          </>
         ) : (
-          <Card className="mx-auto mt-10 w-full max-w-md">
+          <Card className="mx-auto w-full max-w-md">
             <form className="flex flex-col gap-4" onSubmit={signIn}>
               <div className="flex flex-col gap-4">
                 <LuotsiWordmark className="block h-8 w-auto self-center text-brand" />
