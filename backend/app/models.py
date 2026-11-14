@@ -708,6 +708,7 @@ class IdentityPolicy(Model):
 
 
 class AgentMandate(Model):
+    recurring: bool = False
     autonomy: AutonomyLevel | None = Field(default=None, description="Omission uses policy.autonomy.default; new agents require sign-off by default.")
     rate_limits: RateLimits | None = None
     customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
@@ -817,7 +818,13 @@ PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE
                       "CLINICAL_REVIEW", "SUBSTITUTION_PROFILE", "PARTIAL_BASKET"}
 
 
+class ProposalQuotas(Model):
+    per_supplier_per_week: int = Field(default=100, ge=0)
+    per_customer_per_week: int = Field(default=10, ge=0)
+
+
 class PolicyDocument(Model):
+    proposal_quotas: ProposalQuotas = Field(default_factory=ProposalQuotas)
     autonomy: AutonomyPolicy = Field(default_factory=AutonomyPolicy)
     organisations: dict[str, Organisation] = Field(default_factory=dict)
     identities: dict[str, IdentityPolicy] = Field(default_factory=dict)

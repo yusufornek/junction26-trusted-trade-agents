@@ -1,0 +1,358 @@
+"""Durable recurring purchases, wall-clock scheduling and signed drift review evidence."""
+import json
+import logging
+import threading
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import Literal
+from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from dateutil.rrule import rrulestr
+from fastapi import APIRouter, Depends, Request
+from pydantic import Field, model_validator
+
+from . import audit
+from .auth import Principal, resolve_principal
+from .db import DomainError
+from .foundation import PRINCIPAL
+from .mandates import decode
+from .models import BasketLookupRequest, Model, NeedSpec, QuoteRequest
+
+
+class Cadence(Model):
+    rrule: str = "FREQ=WEEKLY"
+    timezone: str = "Europe/Helsinki"
+    start_at: datetime
+    catch_up: Literal["once"] = "once"
+
+    @model_validator(mode="after")
+    def supported(self):
+        try:
+            zone = ZoneInfo(self.timezone)
+            parts = dict(p.split("=", 1) for p in self.rrule.upper().split(";"))
+            if (set(parts) - {"FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY"} or
+                    parts.get("FREQ") not in {"DAILY", "WEEKLY", "MONTHLY"} or
+                    ("BYDAY" in parts and parts["FREQ"] != "WEEKLY") or
+                    ("BYMONTHDAY" in parts and parts["FREQ"] != "MONTHLY")):
+                raise ValueError("Use daily, weekly weekdays, or monthly RRULEs")
+            if not 1 <= int(parts.get("INTERVAL", "1")) <= 366:
+                raise ValueError("Interval must be 1 through 366")
+            if "BYDAY" in parts and any(d not in {"MO", "TU", "WE", "TH", "FR", "SA", "SU"} for d in parts["BYDAY"].split(",")):
+                raise ValueError("Use weekday names without ordinal prefixes")
+            if "BYMONTHDAY" in parts and any(not 1 <= int(d) <= 31 for d in parts["BYMONTHDAY"].split(",")):
+                raise ValueError("Month days must be 1 through 31")
+            if self.start_at.tzinfo is None:
+                self.start_at = self.start_at.replace(tzinfo=zone)
+            else:
+                self.start_at = self.start_at.astimezone(zone)
+            rule = rrulestr(self.rrule.upper(), dtstart=self.start_at)
+            if rule.after(self.start_at, inc=True) is None:
+                raise ValueError("Cadence has no occurrence")
+        except (ValueError, TypeError, ZoneInfoNotFoundError) as error:
+            raise ValueError("Invalid recurrence rule or timezone") from error
+        return self
+
+
+class Deviations(Model):
+    price_pct: float = Field(default=0, ge=0)
+    cumulative_price_pct: float = Field(default=0, ge=0)
+    quantity_pct: float = Field(default=0, ge=0)
+    cumulative_quantity_pct: float = Field(default=0, ge=0)
+    brand_change: bool = False
+    pack_change: bool = False
+
+
+class RecurringRequest(Model):
+    approved_order_id: str
+    cadence: Cadence
+    permitted_deviations: Deviations = Field(default_factory=Deviations)
+
+
+class BaselineRequest(Model):
+    approved_order_id: str
+
+
+class RunRequest(Model):
+    occurrence_at: datetime | None = None
+
+
+def rule_for(row):
+    cadence = row["cadence"]
+    start = datetime.fromisoformat(cadence["start_at"]).astimezone(ZoneInfo(cadence["timezone"]))
+    return rrulestr(cadence["rrule"].upper(), dtstart=start)
+
+
+def reviewer(principal, customer):
+    return (principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}
+            and customer in principal.customer_ids)
+
+
+def snapshot(gateway, quote):
+    lines = []
+    for line in quote.lines:
+        facts = (quote.context or {}).get("product_evidence", {}).get(line.product_id, {})
+        lines.append({"product": line.product_id, "brand": facts.get("brand"), "pack": line.size_per_sales_unit,
+            "unit": line.size_unit, "sales_unit": line.sales_unit, "quantity": line.units_needed,
+            "unit_cost": float(Decimal(str(line.unit_price)) / Decimal(str(line.size_per_sales_unit)))
+                if line.unit_price is not None and line.size_per_sales_unit else None,
+            "claims": facts.get("claims"), "allergens": facts.get("allergens"),
+            "evidence": {"allergen_declaration": facts.get("allergen_declaration", False), "size_source": line.size_source,
+                         "fit": line.fit is not None, "provenance": sorted(line.provenance),
+                         "warnings": sorted(w.code for w in line.warnings)},
+            "delivery_offset": (line.availability.available_date - quote.deliver_by).days
+                if line.availability.available_date else None})
+    return {"lines": lines, "basket_cost": quote.total}
+
+
+def compare(current, previous, baseline, deviations):
+    """Compare every dimension twice; gradual changes cannot reset the approved baseline."""
+    diffs = []
+    def number(label, new, old, base, per_run, cumulative):
+        if new is None or old is None or base is None or old == 0 or base == 0:
+            diffs.append(f"{label}: comparison evidence missing")
+            return
+        step = (Decimal(str(new)) / Decimal(str(old)) - 1) * 100
+        total = (Decimal(str(new)) / Decimal(str(base)) - 1) * 100
+        if abs(step) > Decimal(str(per_run)) or abs(total) > Decimal(str(cumulative)):
+            diffs.append(f"{label} {old:g} → {new:g} ({step:+.1f} %, cumulative {total:+.1f} % since baseline)")
+    number("basket cost €", current.get("basket_cost"), previous.get("basket_cost"), baseline.get("basket_cost"),
+           deviations.price_pct, deviations.cumulative_price_pct)
+    groups = [entry.get("lines") for entry in (current, previous, baseline)]
+    if any(not isinstance(group, list) for group in groups):
+        return diffs + ["product lines: comparison evidence missing"]
+    if len(groups[0]) != len(groups[1]) or len(groups[0]) != len(groups[2]):
+        diffs.append("product lines changed; comparison evidence missing")
+    for index, line in enumerate(groups[0]):
+        if index >= min(len(groups[1]), len(groups[2])):
+            continue
+        old, base = groups[1][index], groups[2][index]
+        if not all(isinstance(item, dict) for item in (line, old, base)):
+            diffs.append(f"line {index + 1}: comparison evidence missing")
+            continue
+        for name, permitted in (("product", False), ("brand", deviations.brand_change),
+                ("pack", deviations.pack_change), ("unit", False), ("sales_unit", deviations.pack_change),
+                ("claims", False), ("allergens", False), ("delivery_offset", False), ("evidence", False)):
+            if line.get(name) is None or old.get(name) is None or base.get(name) is None:
+                diffs.append(f"line {index + 1} {name}: comparison evidence missing")
+            elif not permitted and (line[name] != old[name] or line[name] != base[name]):
+                diffs.append(f"line {index + 1} {name}: {old[name]} → {line[name]} (baseline {base[name]})")
+        evidence = line.get("evidence") or {}
+        if not all(evidence.get(field) for field in ("allergen_declaration", "provenance", "size_source", "fit")):
+            diffs.append(f"line {index + 1}: comparison evidence missing")
+        number(f"line {index + 1} unit cost €", line.get("unit_cost"), old.get("unit_cost"), base.get("unit_cost"),
+               deviations.price_pct, deviations.cumulative_price_pct)
+        number(f"line {index + 1} quantity", line.get("quantity"), old.get("quantity"), base.get("quantity"),
+               deviations.quantity_pct, deviations.cumulative_quantity_pct)
+    return list(dict.fromkeys(diffs))
+
+
+class Recurring:
+    def __init__(self, gateway):
+        self.g = gateway
+        self.stop = threading.Event()
+        self.thread = None
+
+    def rows(self):
+        with self.g.db.connect() as conn:
+            return [json.loads(r[0]) for r in conn.execute("SELECT data FROM recurring_orders ORDER BY rowid")]
+
+    def get(self, id, principal=None):
+        row = next((r for r in self.rows() if r["id"] == id), None)
+        if row is None or (principal and not (principal.id == row["agent_id"] and principal.kind == "agent"
+                or principal.kind == "buyer_user" and row["customer_id"] in principal.customer_ids)):
+            raise DomainError("RECURRING_NOT_FOUND", "Recurring order was not found", 404)
+        return row
+
+    def save(self, conn, row):
+        conn.execute("INSERT INTO recurring_orders VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                     (row["id"], json.dumps(row)))
+
+    def authority(self, conn, row):
+        policy, _, token = self.g.mandates.authorize(conn, None, row["agent_id"], row["customer_id"],
+                                                    bound=("recurring", row["id"]))
+        grant = policy.agents.get(row["agent_id"])
+        allowed = decode(token)[1]["vc"]["credentialSubject"].get("recurring") is True if token else bool(grant and grant.recurring)
+        if not allowed:
+            raise DomainError("RECURRING_NOT_AUTHORIZED", "Mandate must explicitly allow recurring execution", 403)
+        return token
+
+    def approved(self, order_id):
+        order = self.g.orders.get_order(order_id)
+        if order.status != "CONFIRMED":
+            raise DomainError("APPROVED_TEMPLATE_REQUIRED", "Use a confirmed order as the approved template", 422)
+        quote = self.g.orders.get_quote(order.quote_id)
+        with self.g.db.connect() as conn:
+            lookup = self.g.orders.lookup_need(conn, quote.need_ref)
+            basket = conn.execute("SELECT data FROM basket_lookups WHERE id=?", (quote.need_ref,)).fetchone()
+        if basket:
+            data = json.loads(basket[0])
+            template = {"customer_id": quote.customer_id, "deliver_by": quote.deliver_by.isoformat(),
+                        "manifest": data["scaled_manifest"]}
+        else:
+            template = lookup.need.model_dump(mode="json")
+        return order, quote, template, bool(basket)
+
+    def create(self, body, principal):
+        self.g.limiter.consume(principal.id, "mutation")
+        order, quote, template, basket = self.approved(body.approved_order_id)
+        if not reviewer(principal, quote.customer_id) and not (principal.kind == "agent" and principal.id == order.agent_id):
+            raise DomainError("RECURRING_FORBIDDEN", "The template must belong to this buyer or agent", 403)
+        row = {"id": str(uuid4()), "agent_id": order.agent_id, "customer_id": quote.customer_id,
+               "template": template, "basket": basket, "approved_order_id": order.id, "baseline_revision": 1,
+               "baseline": snapshot(self.g, quote), "cadence": body.cadence.model_dump(mode="json"),
+               "permitted_deviations": body.permitted_deviations.model_dump(), "status": "ACTIVE",
+               "delivery_offset_days": max(0, (quote.deliver_by - audit.utcnow().astimezone(ZoneInfo(body.cadence.timezone)).date()).days)}
+        row["next_run_at"] = rule_for(row).after(body.cadence.start_at, inc=True).isoformat()
+        with self.g.db.connect(write=True) as conn:
+            token = self.g.mandates.stored(conn, "order", order.id)
+            self.g.mandates.bind(conn, "recurring", row["id"], token)
+            self.authority(conn, row)
+            self.save(conn, row)
+        return row
+
+    def runs(self, id, principal=None):
+        self.get(id, principal)
+        with self.g.db.connect() as conn:
+            return [json.loads(r[0]) for r in conn.execute("SELECT data FROM recurring_runs WHERE recurring_id=? ORDER BY rowid", (id,))]
+
+    def baseline(self, id, body, principal):
+        row = self.get(id, principal)
+        if not reviewer(principal, row["customer_id"]):
+            raise DomainError("BUYER_APPROVER_REQUIRED", "Only a buyer admin or approver may change the baseline", 403)
+        self.g.limiter.consume(principal.id, "mutation")
+        order, quote, template, basket = self.approved(body.approved_order_id)
+        if order.agent_id != row["agent_id"] or quote.customer_id != row["customer_id"]:
+            raise DomainError("RECURRING_FORBIDDEN", "Baseline must belong to the same buyer and agent", 403)
+        with self.g.db.connect(write=True) as conn:
+            row = self.get(id, principal)
+            row.update(baseline=snapshot(self.g, quote), template=template, basket=basket,
+                       approved_order_id=order.id, baseline_revision=row["baseline_revision"] + 1)
+            self.save(conn, row)
+            audit.append(conn, f"human:{principal.role}:{principal.credential_ref}", "RECURRING_BASELINE",
+                         "Buyer explicitly updated the approved recurring baseline.", data={"id": id, "customer_id": row["customer_id"], "revision": row["baseline_revision"]})
+        return row
+
+    def run(self, id, occurrence_at=None, principal=None):
+        initial = self.get(id, principal)
+        if principal and principal.kind == "buyer_user" and not reviewer(principal, initial["customer_id"]):
+            raise DomainError("BUYER_APPROVER_REQUIRED", "Only a buyer approver may trigger a purchase", 403)
+        when = occurrence_at or audit.utcnow()
+        if when.tzinfo is None:
+            raise DomainError("INVALID_OCCURRENCE", "Occurrence needs a timezone", 422)
+        local = when.astimezone(ZoneInfo(initial["cadence"]["timezone"]))
+        key = f"{id}:{local.date().isoformat()}"
+        # One transaction includes the command, fresh lookup, quote, comparison and order.
+        with self.g.db.connect(write=True) as conn:
+            row = self.get(id, principal)
+            existing = conn.execute("SELECT data FROM recurring_runs WHERE occurrence_key=?", (key,)).fetchone()
+            if existing:
+                self.g.limiter.consume(row["agent_id"], "read")
+                return json.loads(existing[0])
+            self.g.limiter.consume(row["agent_id"], "mutation")
+            result = {"occurrence_key": key, "occurrence_at": local.isoformat(), "baseline_revision": row["baseline_revision"]}
+            try:
+                token = self.authority(conn, row)
+            except DomainError as error:
+                result.update(status="SKIPPED", reason=error.code)
+                audit.append(conn, "system:recurring", "RECURRING_STOPPED", error.message,
+                             data={"id": id, "customer_id": row["customer_id"], **result})
+            else:
+                # Scheduler authority is the original agent; the caller cannot lend its privileges.
+                context = PRINCIPAL.set(Principal(row["agent_id"], customer_ids=(row["customer_id"],)))
+                try:
+                    data = dict(row["template"])
+                    data["deliver_by"] = (local.date() + timedelta(days=row["delivery_offset_days"])).isoformat()
+                    self.g.valio.cache.clear()
+                    if row["basket"]:
+                        lookup = self.g.baskets.find_basket_offers(BasketLookupRequest.model_validate(data), f"agent:{row['agent_id']}", mandate=token)
+                        request = QuoteRequest(customer_id=row["customer_id"], deliver_by=data["deliver_by"], basket_ref={"basket_lookup_id": lookup.basket_lookup_id})
+                    else:
+                        lookup = self.g.find_offers(NeedSpec.model_validate(data), f"agent:{row['agent_id']}", mandate=token)
+                        offer = next((o for o in lookup.offers if o.units_needed and o.unit_price is not None), None)
+                        if offer is None:
+                            raise DomainError("NO_RECURRING_OFFER", "No current purchasable offer for this template", 422)
+                        request = QuoteRequest(customer_id=row["customer_id"], deliver_by=data["deliver_by"], need_ref=lookup.lookup_id,
+                            lines=[{"product_id": offer.product_id, "quantity_sales_units": offer.units_needed}])
+                    quote = self.g.orders.create_quote(request, row["agent_id"], mandate=token)
+                    current = snapshot(self.g, quote)
+                    prior_runs = self.runs(id)
+                    previous = next((r["comparison"]["current"] for r in reversed(prior_runs)
+                                     if "comparison" in r and r["baseline_revision"] == row["baseline_revision"]), row["baseline"])
+                    diff = compare(current, previous, row["baseline"], Deviations.model_validate(row["permitted_deviations"]))
+                    quote.context["recurring_drift"] = diff
+                    quote.context["recurring_occurrence"] = key
+                    quote.signature = self.g.signing.sign_quote(quote)
+                    self.g.orders._save_quote(conn, quote)
+                    order = self.g.orders.place_order(quote.id, key, row["agent_id"], mandate=token)
+                    result.update(status=order.status, request_id=quote.need_ref, quote_id=quote.id, order_id=order.id,
+                                  comparison={"previous": previous, "baseline": row["baseline"], "current": current, "diff": diff})
+                    audit.append(conn, "system:recurring", "RECURRING_RUN", f"Recurring occurrence {order.status}.",
+                                 data={"id": id, "customer_id": row["customer_id"], **result})
+                finally:
+                    PRINCIPAL.reset(context)
+            conn.execute("INSERT INTO recurring_runs VALUES(?,?,?)", (key, id, json.dumps(result)))
+        return result
+
+    def due(self, now=None):
+        now = now or audit.utcnow()
+        for candidate in self.rows():
+            try:
+                with self.g.db.connect(write=True) as conn:
+                    row = self.get(candidate["id"])
+                    if row["status"] != "ACTIVE" or datetime.fromisoformat(row["next_run_at"]) > now:
+                        continue
+                    rule = rule_for(row)
+                    local_now = now.astimezone(ZoneInfo(row["cadence"]["timezone"]))
+                    latest = rule.before(local_now, inc=True)
+                    if latest:
+                        self.run(row["id"], latest)
+                    row["next_run_at"] = rule.after(local_now).isoformat()
+                    self.save(conn, row)
+            except Exception:
+                logging.getLogger(__name__).exception("Recurring occurrence failed; retry on next scheduler tick")
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return
+        self.stop.clear()
+        def worker():
+            while not self.stop.wait(1):
+                self.due()
+        self.thread = threading.Thread(target=worker, name="recurring-scheduler", daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join()
+
+
+router = APIRouter(prefix="/v1/recurring-orders", tags=["Recurring orders"])
+
+
+@router.post("", response_model=dict, summary="Approve a recurring template from a confirmed need or recipe order")
+def create(body: RecurringRequest, request: Request, principal: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.recurring.create(body, principal)
+
+
+@router.get("", response_model=list[dict])
+def listing(request: Request, principal: Principal = Depends(resolve_principal)):
+    service = request.app.state.gateway.recurring
+    return [r for r in service.rows() if (principal.kind == "agent" and r["agent_id"] == principal.id)
+            or (principal.kind == "buyer_user" and r["customer_id"] in principal.customer_ids)]
+
+
+@router.get("/{id}/runs", response_model=list[dict])
+def runs(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.recurring.runs(id, principal)
+
+
+@router.post("/{id}/baseline", response_model=dict)
+def baseline(id: str, body: BaselineRequest, request: Request, principal: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.recurring.baseline(id, body, principal)
+
+
+@router.post("/{id}/run-now", response_model=dict, summary="Execute one occurrence, deduplicated by template and local date")
+def run(id: str, request: Request, body: RunRequest = RunRequest(), principal: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.recurring.run(id, body.occurrence_at, principal)

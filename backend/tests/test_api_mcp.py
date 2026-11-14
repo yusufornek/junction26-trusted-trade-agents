@@ -60,7 +60,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 
     async def run():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "get_order_receipt", "cancel_order", "get_order_ubl", "get_order_evidence", "find_basket_offers", "get_agent_context"}
+        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "get_order_receipt", "cancel_order", "get_order_ubl", "get_order_evidence", "find_basket_offers", "get_agent_context", "list_proposals"}
         assert all(t.input_schema and t.output_schema for t in tools)
         result = await server.call_tool("search_products", {"query": "milk", "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"]})
         assert not result.is_error
@@ -92,8 +92,8 @@ def test_streamable_http_transport(gateway):
         listed = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert listed.status_code == 200
         tools = listed.json()["result"]["tools"]
-        assert len(tools) == 11
-        assert {"get_order_evidence", "get_agent_context", "find_basket_offers", "get_order_receipt"} <= {tool["name"] for tool in tools}
+        assert len(tools) == 12
+        assert {"list_proposals", "get_order_evidence", "get_agent_context", "find_basket_offers", "get_order_receipt"} <= {tool["name"] for tool in tools}
 
 
 def test_stdio_transport(gateway):
@@ -129,8 +129,8 @@ finally:
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        assert len(tools["result"]["tools"]) == 11
-        assert {"get_order_evidence", "get_agent_context", "find_basket_offers", "get_order_receipt"} <= {tool["name"] for tool in tools["result"]["tools"]}
+        assert len(tools["result"]["tools"]) == 12
+        assert {"list_proposals", "get_order_evidence", "get_agent_context", "find_basket_offers", "get_order_receipt"} <= {tool["name"] for tool in tools["result"]["tools"]}
         search = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "search_products", "arguments": {"query": "milk", "limit": 2}}})
         assert not search["result"].get("isError", False)
@@ -164,7 +164,12 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/buyer/agents/{agent_id}/resume", "/v1/buyer/mandates/{jti}/revoke",
                                     "/v1/buyer/approvals/{order_id}/approve", "/v1/buyer/approvals/{order_id}/reject",
                                     "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt",
-                                    "/v1/basket-lookups", "/v1/basket-lookups/{lookup_id}"}
+                                    "/v1/basket-lookups", "/v1/basket-lookups/{lookup_id}",
+                                    "/v1/recurring-orders", "/v1/recurring-orders/{id}/runs",
+                                    "/v1/recurring-orders/{id}/baseline", "/v1/recurring-orders/{id}/run-now",
+                                    "/v1/buyer/proposal-preferences", "/v1/proposals", "/v1/proposals/inbox",
+                                    "/v1/proposals/campaigns/{id}", "/v1/proposals/{id}/accept",
+                                    "/v1/proposals/{id}/decline", "/v1/proposals/{id}/mute"}
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"]["200"]["content"]

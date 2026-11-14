@@ -36,6 +36,10 @@ class Gateway:
         from .limits import Limiter, SourceLimiter
         from .commands import install
         self.outbox = Outbox(self.db)
+        from .recurring import Recurring
+        from .proposals import Proposals
+        self.recurring = Recurring(self)
+        self.proposals = Proposals(self)
         self.limiter = Limiter(self.policy, self.db)
         self.source_limiter = SourceLimiter()
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
@@ -72,6 +76,7 @@ class Gateway:
 
     def close(self):
         self.webhooks.client.close()
+        self.recurring.close()
         self.anchoring.close()
         self.valio.close()
         self.decisions.close()

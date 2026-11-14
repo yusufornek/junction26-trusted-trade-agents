@@ -63,12 +63,14 @@ def create_app(gateway=None, *, settings=None, keys=None):
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
         worker = asyncio.create_task(deliver_notifications())
+        service.recurring.start()
         try:
             async with mcp_http.router.lifespan_context(mcp_http):
                 yield
         finally:
             stop.set()
             await worker
+            service.recurring.close()
             if gateway is None:
                 service.close()
 
@@ -83,12 +85,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
     install_routes(app)
     from .buyer import router as buyer_router
     from .evidence import router as evidence_router
+    from .recurring import router as recurring_router
+    from .proposals import router as proposals_router
     app.include_router(buyer_router)
     app.include_router(evidence_router)
     install_discovery(app)
     from .developer_docs import install_routes as install_developer_docs
     install_developer_docs(app)
     app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+    app.include_router(recurring_router)
+    app.include_router(proposals_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
