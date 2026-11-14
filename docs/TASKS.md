@@ -16,12 +16,13 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 9 | Frontend: dashboard, buyer flow, approval inbox, orders, audit, policy | Frontend | done | Vite + React + TS + Tailwind; stats/policy/lookups wired, 5 s polling, multi-line quotes, editable policy; verified live 13.11; backend notes: `docs/FRONTEND.md` |
 | 33 | Frontend: every contract endpoint on screen — plans + policy preview, preferences, timeline, cancel, UBL, proof, agents & mandates, trust & connect, product facts | Frontend | done | 14.11; fixture mode `npm run dev:mock` for design review |
 | 34 | Frontend: Valio blue-and-white theme + pixel pass on cards, spacing and charts | Frontend (Claude + 3 subagents) | done | palette from valioaimo.fi; every route measured at 390/1024/1280/1440 with no page overflow or cut labels |
-| 35 | Live server + deploy on push | Frontend + Claude | done | https://trustedtrade.vps.webdock.cloud — see `docs/DEPLOY.md` "Live demo server" |
+| 35 | Live server + deploy on push | Frontend + Claude | done | https://luotsi.online (Webdock address still serves) — see `docs/DEPLOY.md` "Live demo server" |
 | 36 | `OPENAI_API_KEY` on the live server (without it every order is held with NO_FIT_SCORE) | Gökalp (key) + Claude | done | 14.11 14:27: key in `~/app/deploy/.env` (600), backend recreated, Decisions API answers 200 from inside the container; orders held before this stay held |
 | 37 | Frontend for graduated autonomy (spec 40): path, track record, recommendation, grant / withdraw | Frontend | done | `/agents`, autonomy chips on `/policy`; R-5 signer display waits for a contract field |
 | 38 | Frontend: Connect page (`/connect`), rail with hover labels, phone menu, Schibsted Grotesk, forest status palette | Frontend | done | 14.11; degrades to `<YOUR_AGENT_KEY>` until #39 lands |
 | 39 | Backend: `/v1/connections` (issue / list / revoke agent keys) and MCP served at `/mcp` in the gateway process | Gökalp | done | spec 42; contract in `docs/CONNECT-API.md`; AC-1–11 in `backend/tests/test_spec42_agent_connections.py` |
 | 40 | Frontend: Luotsi brand: teal and slate palette, mark, wordmark, favicon, share image | Frontend | done | 14.11; brand kit `Luotsi-7a-Kit/` |
+| 41 | Domain `luotsi.online` on the live server: DNS at Hostinger, certificates by Caddy, primary URL for MCP | Frontend + Claude | done | 14.11; the user verifies the registration e-mail from Hostinger by 29.11 |
 | 13 | Order cancel over REST + MCP (`POST /v1/orders/{id}/cancel`, tool `cancel_order`) | Backend | done | spec `docs/specs/04-order-cancel.md`, [issue #1](https://github.com/yusufornek/junction26-trusted-trade-agents/issues/1); verified live 13.11 |
 | 14 | Spec-driven core: audit + specs 01–03 as built (`docs/specs/`) | Backend | done | reviewed one by one after the MVP |
 | 15 | Size reconciliation — exact pack counts | Backend | done | spec `docs/specs/05-size-reconciliation.md` |

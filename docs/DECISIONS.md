@@ -2,6 +2,9 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The live address is https://luotsi.online** (bought by the user at Hostinger, pointed at the Webdock
+  server): it is the public URL for MCP host checks, connection URLs and link previews. The Webdock address keeps
+  serving the site for old links, but MCP answers only on luotsi.online, since the gateway allows one public host.
 - 2026-11-14 — **The product is Luotsi; the console takes its colours and marks from the Luotsi brand kit**
   (`Luotsi-7a-Kit`, the user's request): teal `#005671` for actions, charts, focus and the rail, slate `#2C6A81` as
   the secondary colour, the galley-and-star mark in the rail, phone bar and favicon, the wordmark on the sign-in card

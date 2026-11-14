@@ -188,11 +188,16 @@ after container recreation. Exercise reset and backup/restore on disposable demo
 
 ## Live demo server (14.11)
 
-**https://trustedtrade.vps.webdock.cloud** — Webdock KVM in Europe, 4 vCPU / 6 GB / 30 GB NVMe, Ubuntu 24.04,
+**https://luotsi.online** (also `www.luotsi.online`; the Webdock address https://trustedtrade.vps.webdock.cloud
+serves the same site) — Webdock KVM in Europe, 4 vCPU / 6 GB / 30 GB NVMe, Ubuntu 24.04,
 IPv4 `193.181.215.1`. Docker + Compose from Docker's apt repository, 2 GB swap, `ufw` allowing only 22/80/443.
 SSH is key-only (Webdock default); shell user `admin`, in the `docker` group so deploys need no sudo. Keys are
 assigned in the Webdock panel under *Shell Users*.
 
+- **Domain:** `luotsi.online`, registered at Hostinger; its zone (Hostinger nameservers) holds `A @ 193.181.215.1`
+  and `CNAME www luotsi.online`. Caddy serves every name in `SITE_ADDRESS` (`deploy/.env`) and gets their certificates
+  itself. MCP accepts only the host in `GATEWAY_PUBLIC_URL`, which the deploy sets from `SITE_URL`; `deploy/.env`
+  holds the same value so a manual `docker compose up` keeps it.
 - **Checkout:** `~/app` (synced, not a git clone — the server needs no GitHub access).
 - **Secrets:** `~/app/deploy/.env`, mode 600, never synced. `OPERATOR_TOKEN` and `AGENT_KEYS` were generated
   on the server with `gen_keys.py`, so they differ from anyone's local `.env.local`. `ANCHOR_*` is empty

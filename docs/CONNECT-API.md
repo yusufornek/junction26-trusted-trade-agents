@@ -34,8 +34,8 @@ Headers: `Authorization: Bearer <operator token>`, `Idempotency-Key: <uuid>`.
   "last_used_at": null,
   "revoked_at": null,
   "key": "vak_3f9c…",
-  "mcp_url": "https://trustedtrade.vps.webdock.cloud/mcp",
-  "rest_base_url": "https://trustedtrade.vps.webdock.cloud/v1",
+  "mcp_url": "https://luotsi.online/mcp",
+  "rest_base_url": "https://luotsi.online/v1",
   "mandate": { "customer_ids": ["1"], "max_auto_daily_total_eur": 1000, "autonomy": "approval_required" }
 }
 ```
