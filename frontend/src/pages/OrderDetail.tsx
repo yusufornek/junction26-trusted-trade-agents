@@ -13,7 +13,7 @@ import {
   Ticket,
   X,
 } from "lucide-react";
-import { ApiError, api, type Quote, type TimelineStep } from "../api";
+import { ApiError, api, type Quote, type TimelineStep, signedInEmail } from "../api";
 import { ANOMALY_CODES, AnomalyNotes, CorrectedQuotes } from "../anomalies";
 import { Avatar } from "../charts";
 import {
@@ -106,6 +106,7 @@ export default function OrderDetail() {
               placed by {o.agent_id} · {when(o.created_at)}
               {o.decided_by_kind ? ` · ${DECIDED_BY[o.decided_by_kind]}` : ""}
               {o.approver ? ` · signed off by ${o.approver}` : ""}
+              {o.self_approved ? " · approved by the person who runs the agent (no second person)" : ""}
             </p>
             {o.comment ? <p className="mt-2 text-[13px] text-ink-muted">“{o.comment}”</p> : null}
           </div>
@@ -366,7 +367,7 @@ export default function OrderDetail() {
 /** The one place a human can undo something the agent committed on its own. */
 function CancelCard({ orderId, onDone }: { orderId: string; onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  const [by, setBy] = useState("Ada");
+  const [by, setBy] = useState(() => signedInEmail() || "Ada");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
