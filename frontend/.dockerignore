@@ -1,0 +1,14 @@
+.venv
+**/.venv
+node_modules
+**/node_modules
+var
+**/var
+.env*
+**/.env*
+dist
+**/dist
+__pycache__
+**/__pycache__
+*.pyc
+.git
