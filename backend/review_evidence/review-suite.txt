@@ -1,0 +1,54 @@
+....................................F................................... [ 23%]
+........................................................................ [ 46%]
+.......................................................F......F......... [ 69%]
+...................................F...................F................ [ 92%]
+........................                                                 [100%]
+=================================== FAILURES ===================================
+___________ test_ac_6_local_anvil_real_transaction_and_verification ____________
+tests/test_audit_anchoring.py:194: in test_ac_6_local_anvil_real_transaction_and_verification
+    sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   PermissionError: [Errno 1] Operation not permitted
+_________________ test_cancel_ac10_generated_openapi_contract __________________
+tests/test_order_cancel.py:270: in test_cancel_ac10_generated_openapi_contract
+    assert schema == create_app(keys=TEST_KEYS).openapi()
+E   AssertionError: assert {'openapi': '...: 'bearer'}}}} == {'openapi': '...: 'bearer'}}}}
+E     
+E     Omitting 3 identical items, use -vv to show
+E     Differing items:
+E     {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}} != {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}}
+E     Use -v to get more diff
+____________ test_timeline_ac5_unknown_order_and_generated_contract ____________
+tests/test_order_timeline.py:159: in test_timeline_ac5_unknown_order_and_generated_contract
+    assert schema == create_app(keys=TEST_KEYS).openapi()
+E   AssertionError: assert {'openapi': '...: 'bearer'}}}} == {'openapi': '...: 'bearer'}}}}
+E     
+E     Omitting 3 identical items, use -vv to show
+E     Differing items:
+E     {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}} != {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}}
+E     Use -v to get more diff
+____________ test_ac_4_contract_readme_and_mcp_document_signatures _____________
+tests/test_signed_quotes.py:133: in test_ac_4_contract_readme_and_mcp_document_signatures
+    assert committed == schema
+E   AssertionError: assert {'openapi': '...: 'bearer'}}}} == {'openapi': '...: 'bearer'}}}}
+E     
+E     Omitting 3 identical items, use -vv to show
+E     Differing items:
+E     {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}} != {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}}
+E     Use -v to get more diff
+_________________ test_size_ac7_policy_and_generated_contract __________________
+tests/test_size_reconciliation.py:145: in test_size_ac7_policy_and_generated_contract
+    assert schema == create_app(keys=TEST_KEYS).openapi()
+E   AssertionError: assert {'openapi': '...: 'bearer'}}}} == {'openapi': '...: 'bearer'}}}}
+E     
+E     Omitting 3 identical items, use -vv to show
+E     Differing items:
+E     {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}} != {'components': {'schemas': {'AgentMandate': {'properties': {'customer_ids': {'items': {...}, 'type': 'array', 'minItem...: {'BearerAuth': {'type': 'http', 'description': 'Operator-issued agent key or operator token.', 'scheme': 'bearer'}}}}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/test_audit_anchoring.py::test_ac_6_local_anvil_real_transaction_and_verification
+FAILED tests/test_order_cancel.py::test_cancel_ac10_generated_openapi_contract
+FAILED tests/test_order_timeline.py::test_timeline_ac5_unknown_order_and_generated_contract
+FAILED tests/test_signed_quotes.py::test_ac_4_contract_readme_and_mcp_document_signatures
+FAILED tests/test_size_reconciliation.py::test_size_ac7_policy_and_generated_contract
+5 failed, 307 passed in 40.41s

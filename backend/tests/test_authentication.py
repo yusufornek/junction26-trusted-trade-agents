@@ -33,6 +33,24 @@ def objects(gateway, need, agent, *, qty=1, key=None):
     return lookup, quote, order
 
 
+@pytest.mark.parametrize("headers,status,code", [
+    ({}, 401, "UNAUTHENTICATED"),
+    ({"Authorization": "Bearer unknown"}, 401, "UNAUTHENTICATED"),
+    (OPERATOR_HEADERS, 422, "VALIDATION_ERROR"),
+    (agent_headers("agent-a"), 422, "VALIDATION_ERROR"),
+])
+def test_review_malformed_cancellation_authenticates_before_audit(client, gateway, headers, status, code):
+    response = client.post("/v1/orders/missing/cancel", content="{", headers={**headers, "Content-Type": "application/json"})
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    if status == 401:
+        assert response.headers["www-authenticate"] == "Bearer"
+        assert not gateway.audit()
+    elif headers == OPERATOR_HEADERS:
+        assert gateway.audit()[-1].actor == "human:operator"
+        assert gateway.audit()[-1].action == "CANCEL_FAILED"
+
+
 def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
@@ -262,6 +280,8 @@ def test_ac_11_mcp_transports(gateway, need, upstream):
         with pytest.raises(ToolError, match="ORDER_NOT_FOUND"):
             await local.call_tool("get_order_status", {"order_id": order.id})
     asyncio.run(tools())
+    _, _, owned = objects(gateway, need, "agent-b")
+    _, _, other = objects(gateway, need, "agent-a")
     # Exercise the actual --agent-id CLI path over JSON-RPC pipes with an isolated fixture DB.
     runner = """
 import sys
@@ -281,6 +301,21 @@ module.main()
         process.stdin.flush()
         assert select.select([process.stdout], [], [], 5)[0], "stdio did not initialize"
         assert json.loads(process.stdout.readline())["result"]["serverInfo"]["name"] == server.name
+        process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        for request_id, order in enumerate((owned, other), start=2):
+            process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                "params": {"name": "get_order_status", "arguments": {"order_id": order.id}}}) + "\n")
+            process.stdin.flush()
+            assert select.select([process.stdout], [], [], 5)[0], "stdio tool did not respond"
+            reply = json.loads(process.stdout.readline())
+            assert reply["id"] == request_id
+            result = reply["result"]
+            if order == owned:
+                assert not result.get("isError"), result
+                assert result["structuredContent"]["agent_id"] == "agent-b"
+                assert result["structuredContent"]["id"] == owned.id
+            else:
+                assert result["isError"] and "ORDER_NOT_FOUND" in result["content"][0]["text"]
     finally:
         process.stdin.close()
         try:

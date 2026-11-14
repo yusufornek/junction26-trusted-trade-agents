@@ -9,6 +9,18 @@ from conftest import OPERATOR_HEADERS, TEST_KEYS
 from conftest import quote_request
 
 
+def test_review_portion_weight_preserves_package_weight(gateway, need, actual_product_rows):
+    from app.catalog import extract
+    from app.lookup import offer_for
+    product = extract(next(r for r in actual_product_rows if str(r["id"]) == "460086"), {}, {})
+    need.quantity.unit, need.quantity.value = "KG", 1
+    price = {"catalogPrice": {"value": 2, "currency": "EUR", "validTo": "9999-12-31T00:00:00Z"}}
+    offer = offer_for(product, need, price, {}, {"probability": .99, "question": "fits"})
+    assert not product.size_suspect
+    assert (offer.size_per_sales_unit, offer.units_needed, offer.purchase_total) == (.5, 2, 4)
+    assert {w.code for w in offer.warnings} >= {"SIZE_UNCONFIRMED"}
+
+
 def product_size(gateway, *, name, multiplier, volume=None, weight=None):
     product = gateway.catalog.get("1").model_copy(update={
         "name_en": name, "name_fi": name, "units": {"KI": multiplier},

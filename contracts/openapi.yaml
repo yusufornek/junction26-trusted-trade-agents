@@ -2435,8 +2435,8 @@ components:
           maximum: 10.0
           minimum: 1.0
           title: Max Candidates
-          description: Maximum ranked offers returned; suitable candidates are priced
-            up to shortlist.live_max.
+          description: Strict integer maximum ranked offers returned; suitable candidates
+            are priced up to shortlist.live_max.
           default: 10
         preferences:
           $ref: '#/components/schemas/Preferences'
@@ -3032,7 +3032,7 @@ components:
             minimum: 0.0
           - type: 'null'
           title: Max Price Per Unit
-          description: Maximum net EUR per L or KG.
+          description: Maximum net EUR per L or KG; strict number.
         pack_size:
           anyOf:
           - $ref: '#/components/schemas/PackSizePreference'
@@ -3163,6 +3163,20 @@ components:
           type: boolean
           title: Size Suspect
           default: false
+        volume_suspect:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Volume Suspect
+          description: Volume evidence is suspect independently of weight; null on
+            legacy records, recalculated when used.
+        weight_suspect:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Weight Suspect
+          description: Weight evidence is suspect independently of volume; null on
+            legacy records, recalculated when used.
         sales_volume_l:
           anyOf:
           - type: number
@@ -3482,7 +3496,8 @@ components:
         on_hard_constraint_violation:
           type: boolean
           title: On Hard Constraint Violation
-          description: Reject when catalog hard constraints fail.
+          description: Reject request hard-constraint failures; false routes them
+            to approval. Customer standing constraints always reject.
         'on':
           items:
             type: string

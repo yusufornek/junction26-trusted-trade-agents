@@ -1,0 +1,1108 @@
+.FFFFFFFFFFFFFFFFFFFFFFFFFFF.FFFFFFFFFFFFFFFF..FFFF.                     [100%]
+=================================== FAILURES ===================================
+________ test_review_standing_constraints_cannot_be_approved[placement] ________
+tests/test_standing_constraints.py:124: in test_review_standing_constraints_cannot_be_approved
+    assert order.status == "REJECTED"
+E   AssertionError: assert 'PENDING_APPROVAL' == 'REJECTED'
+E     
+E     - REJECTED
+E     + PENDING_APPROVAL
+________ test_review_standing_constraints_cannot_be_approved[approval] _________
+tests/test_standing_constraints.py:130: in test_review_standing_constraints_cannot_be_approved
+    with pytest.raises(DomainError, match="HARD_CONSTRAINT_VIOLATION"):
+E   AssertionError: Regex pattern did not match.
+E     Expected regex: 'HARD_CONSTRAINT_VIOLATION'
+E     Actual message: 'EVIDENCE_CHANGED: Order evidence changed; review the refreshed order before approving.'
+_____ test_review_legacy_unbound_quote_checks_current_customer[placement] ______
+tests/test_standing_constraints.py:159: in test_review_legacy_unbound_quote_checks_current_customer
+    assert any("customer_policy" in h.detail and "AM" in h.detail for h in order.policy.hits)
+E   assert False
+E    +  where False = any(<generator object test_review_legacy_unbound_quote_checks_current_customer.<locals>.<genexpr> at 0x116ce7440>)
+______ test_review_legacy_unbound_quote_checks_current_customer[approval] ______
+tests/test_standing_constraints.py:164: in test_review_legacy_unbound_quote_checks_current_customer
+    with pytest.raises(DomainError, match="HARD_CONSTRAINT_VIOLATION") as error:
+E   Failed: DID NOT RAISE DomainError
+_____________ test_review_portion_weight_preserves_package_weight ______________
+tests/test_size_reconciliation.py:19: in test_review_portion_weight_preserves_package_weight
+    assert not product.size_suspect
+E   AssertionError: assert not True
+E    +  where True = Product(id='460086', gtin='3523230019224', unit_gtins={'KI': '3523230019231', 'RAS': '3523230019224'}, name_en='Europi...lume_l=None, sales_net_weight_kg=None, variable_unit=False, deposits=[], delivery_reliability=None, co2_kg_per_kg=None).size_suspect
+_______ test_review_strict_preference_numbers[rest-True-max_candidates] ________
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+_ test_review_strict_preference_numbers[rest-True-preferences.max_price_per_unit] _
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+__ test_review_strict_preference_numbers[rest-True-preferences.pack_size.min] __
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+__ test_review_strict_preference_numbers[rest-True-preferences.pack_size.max] __
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+_________ test_review_strict_preference_numbers[rest-5-max_candidates] _________
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+_ test_review_strict_preference_numbers[rest-5-preferences.max_price_per_unit] _
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+___ test_review_strict_preference_numbers[rest-5-preferences.pack_size.min] ____
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+___ test_review_strict_preference_numbers[rest-5-preferences.pack_size.max] ____
+tests/test_evidence_completeness.py:41: in test_review_strict_preference_numbers
+    assert response.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+________ test_review_strict_preference_numbers[mcp-True-max_candidates] ________
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+_ test_review_strict_preference_numbers[mcp-True-preferences.max_price_per_unit] _
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+__ test_review_strict_preference_numbers[mcp-True-preferences.pack_size.min] ___
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+__ test_review_strict_preference_numbers[mcp-True-preferences.pack_size.max] ___
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+_________ test_review_strict_preference_numbers[mcp-5-max_candidates] __________
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+_ test_review_strict_preference_numbers[mcp-5-preferences.max_price_per_unit] __
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+____ test_review_strict_preference_numbers[mcp-5-preferences.pack_size.min] ____
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+____ test_review_strict_preference_numbers[mcp-5-preferences.pack_size.max] ____
+tests/test_evidence_completeness.py:49: in test_review_strict_preference_numbers
+    asyncio.run(check())
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:650: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_evidence_completeness.py:45: in check
+    with pytest.raises(ToolError) as error:
+E   Failed: DID NOT RAISE ToolError
+__________ test_review_case_content_needs_no_multiplier[L-volume-LTR] __________
+tests/test_evidence_completeness.py:62: in test_review_case_content_needs_no_multiplier
+    assert (size, source, confirmed) == (6, "catalog", False)
+E   AssertionError: assert (None, None, False) == (6, 'catalog', False)
+E     
+E     At index 0 diff: None != 6
+E     Use -v to get more diff
+________ test_review_case_content_needs_no_multiplier[KG-netWeight-KGM] ________
+tests/test_evidence_completeness.py:62: in test_review_case_content_needs_no_multiplier
+    assert (size, source, confirmed) == (6, "catalog", False)
+E   AssertionError: assert (None, None, False) == (6, 'catalog', False)
+E     
+E     At index 0 diff: None != 6
+E     Use -v to get more diff
+_________ test_review_bad_volume_preserves_valid_weight[price0-False] __________
+tests/test_evidence_completeness.py:77: in test_review_bad_volume_preserves_valid_weight
+    assert (size, source, confirmed) == (20, "catalog", False)
+E   AssertionError: assert (None, None, False) == (20, 'catalog', False)
+E     
+E     At index 0 diff: None != 20
+E     Use -v to get more diff
+__________ test_review_bad_volume_preserves_valid_weight[price0-True] __________
+tests/test_evidence_completeness.py:77: in test_review_bad_volume_preserves_valid_weight
+    assert (size, source, confirmed) == (20, "catalog", False)
+E   AssertionError: assert (None, None, False) == (20, 'catalog', False)
+E     
+E     At index 0 diff: None != 20
+E     Use -v to get more diff
+_________ test_review_bad_volume_preserves_valid_weight[price1-False] __________
+tests/test_evidence_completeness.py:77: in test_review_bad_volume_preserves_valid_weight
+    assert (size, source, confirmed) == (20, "catalog", False)
+E   AssertionError: assert (None, None, False) == (20, 'catalog', False)
+E     
+E     At index 0 diff: None != 20
+E     Use -v to get more diff
+__________ test_review_bad_volume_preserves_valid_weight[price1-True] __________
+tests/test_evidence_completeness.py:77: in test_review_bad_volume_preserves_valid_weight
+    assert (size, source, confirmed) == (20, "catalog", False)
+E   AssertionError: assert (None, None, False) == (20, 'catalog', False)
+E     
+E     At index 0 diff: None != 20
+E     Use -v to get more diff
+_____________________ test_review_historical_lookup_stats ______________________
+tests/test_control_plane.py:28: in test_review_historical_lookup_stats
+    response = client.get("/v1/stats")
+               ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1112: in get
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:745: in app
+    raw_response = await run_endpoint_function(
+.venv/lib/python3.11/site-packages/fastapi/routing.py:374: in run_endpoint_function
+    return await run_in_threadpool(
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_api.py:244: in _run_sync_endpoint
+    return function(**arguments)
+           ^^^^^^^^^^^^^^^^^^^^^
+app/api.py:135: in stats
+    return read_stats(service.db, since, registered_agents=set(service.policy.get().agents))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/stats.py:30: in read_stats
+    lookup = LookupResult.model_validate_json(row[0])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   pydantic_core._pydantic_core.ValidationError: 1 validation error for LookupResult
+E   need.deliver_by
+E     Value error, deliver_by must be between today and today + 60 days (Europe/Helsinki) [type=value_error, input_value='2026-11-17', input_type=str]
+E       For further information visit https://errors.pydantic.dev/2.14/v/value_error
+_______________ test_review_current_policy_edits_survive_reload ________________
+tests/test_control_plane.py:42: in test_review_current_policy_edits_survive_reload
+    assert response.json()["reject"]["on"] == body["reject"]["on"]
+E   AssertionError: assert ['SALES_BLOCK...', 'NO_STOCK'] == ['SALES_BLOCK...NOWN_PRODUCT']
+E     
+E     Left contains one more item: 'NO_STOCK'
+E     Use -v to get more diff
+___________ test_review_written_units_are_not_search_terms[kilogram] ___________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['kilogram', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'kilogram' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+__________ test_review_written_units_are_not_search_terms[kilograms] ___________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['kilograms', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'kilograms' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+_____________ test_review_written_units_are_not_search_terms[gram] _____________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['gram', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'gram' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+____________ test_review_written_units_are_not_search_terms[grams] _____________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['grams', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'grams' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+__________ test_review_written_units_are_not_search_terms[millilitre] __________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['millilitre', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'millilitre' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+_________ test_review_written_units_are_not_search_terms[millilitres] __________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['millilitres', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'millilitres' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+__________ test_review_written_units_are_not_search_terms[milliliter] __________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['milliliter', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'milliliter' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+_________ test_review_written_units_are_not_search_terms[milliliters] __________
+tests/test_lookup_fallback.py:20: in test_review_written_units_are_not_search_terms
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+E   AssertionError: assert ['milliliters', 'quuxfruit'] == ['quuxfruit']
+E     
+E     At index 0 diff: 'milliliters' != 'quuxfruit'
+E     Left contains one more item: 'quuxfruit'
+E     Use -v to get more diff
+____________ test_review_long_broadening_does_not_hit_sqlite_limit _____________
+tests/test_lookup_fallback.py:37: in test_review_long_broadening_does_not_hit_sqlite_limit
+    response = client.post("/v1/offers", json=request.model_dump(mode="json"))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1203: in post
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:745: in app
+    raw_response = await run_endpoint_function(
+.venv/lib/python3.11/site-packages/fastapi/routing.py:374: in run_endpoint_function
+    return await run_in_threadpool(
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_api.py:244: in _run_sync_endpoint
+    return function(**arguments)
+           ^^^^^^^^^^^^^^^^^^^^^
+app/api.py:113: in offers
+    return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/service.py:32: in find_offers
+    return self.lookup.find_offers(need, actor, mandate=mandate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/lookup.py:330: in find_offers
+    return self._find_offers(need, actor, mandate, counter)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app/lookup.py:357: in _find_offers
+    pool, excluded = self.catalog.search(" ".join(retrieval.terms_used), need.required_claims,
+app/catalog.py:275: in search
+    rows = conn.execute(prefix +
+E   sqlite3.OperationalError: too many terms in compound SELECT
+________________ test_review_unknown_sizes_compare_unit_prices _________________
+tests/test_total_cost_ranking.py:21: in test_review_unknown_sizes_compare_unit_prices
+    assert [o.product_id for o in result.offers] == ["b", "a"]
+E   AssertionError: assert ['a', 'b'] == ['b', 'a']
+E     
+E     At index 0 diff: 'a' != 'b'
+E     Use -v to get more diff
+____________ test_review_reject_partial_stock_keeps_complete_split _____________
+tests/test_exceptions.py:32: in test_review_reject_partial_stock_keeps_complete_split
+    assert split is not None
+E   assert None is not None
+__________ test_review_all_planning_searches_share_node_budget[25-0] ___________
+tests/test_exceptions.py:65: in test_review_all_planning_searches_share_node_budget
+    assert sum(calls.values()) <= budget, calls
+E   AssertionError: {'fill': 318026, 'cheapest': 1}
+E   assert 318027 <= 0
+E    +  where 318027 = sum(dict_values([318026, 1]))
+E    +    where dict_values([318026, 1]) = <built-in method values of dict object at 0x3015b0980>()
+E    +      where <built-in method values of dict object at 0x3015b0980> = {'fill': 318026, 'cheapest': 1}.values
+_________ test_review_all_planning_searches_share_node_budget[40-200] __________
+tests/test_exceptions.py:65: in test_review_all_planning_searches_share_node_budget
+    assert sum(calls.values()) <= budget, calls
+E   AssertionError: {'fill': 2254241, 'cheapest': 1}
+E   assert 2254242 <= 200
+E    +  where 2254242 = sum(dict_values([2254241, 1]))
+E    +    where dict_values([2254241, 1]) = <built-in method values of dict object at 0x301708640>()
+E    +      where <built-in method values of dict object at 0x301708640> = {'fill': 2254241, 'cheapest': 1}.values
+________ test_review_all_planning_searches_share_node_budget[40-20000] _________
+tests/test_exceptions.py:65: in test_review_all_planning_searches_share_node_budget
+    assert sum(calls.values()) <= budget, calls
+E   AssertionError: {'fill': 2254241, 'cheapest': 1}
+E   assert 2254242 <= 20000
+E    +  where 2254242 = sum(dict_values([2254241, 1]))
+E    +    where dict_values([2254241, 1]) = <built-in method values of dict object at 0x309cb0380>()
+E    +      where <built-in method values of dict object at 0x309cb0380> = {'fill': 2254241, 'cheapest': 1}.values
+_ test_review_malformed_cancellation_authenticates_before_audit[headers0-401-UNAUTHENTICATED-registered_agents0] _
+.venv/lib/python3.11/site-packages/fastapi/routing.py:471: in app
+    json_body = await request.json()
+                ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/requests.py:267: in json
+    self._json = json.loads(body)
+                 ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:337: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:353: in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+E   json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+The above exception was the direct cause of the following exception:
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:491: in app
+    raise validation_error from e
+E   fastapi.exceptions.RequestValidationError: 1 validation error:
+E     {'type': 'json_invalid', 'loc': ('body', 1), 'msg': 'JSON decode error', 'input': {}, 'ctx': {'error': 'Expecting property name enclosed in double quotes'}}
+E   
+E     File "/Users/daption-ciray/Desktop/junction/.claude/worktrees/selam-junction-challenge-44cf24/backend/app/api.py", line 181, in cancel_order
+E       POST /v1/orders/{order_id}/cancel
+
+During handling of the above exception, another exception occurred:
+tests/test_authentication.py:43: in test_review_malformed_cancellation_authenticates_before_audit
+    response = client.post("/v1/orders/missing/cancel", content="{", headers={**headers, "Content-Type": "application/json"})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1203: in post
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:59: in wrapped_app
+    response = await handler(conn, exc)  # type: ignore[arg-type]
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:63: in validation_error
+    await run_in_threadpool(audit_cancel_validation, request, error.body, message)
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:83: in audit_cancel_validation
+    principal = request.state.principal
+                ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/datastructures.py:699: in __getattr__
+    raise AttributeError(message.format(self.__class__.__name__, key))
+E   AttributeError: 'State' object has no attribute 'principal'
+_ test_review_malformed_cancellation_authenticates_before_audit[headers1-401-UNAUTHENTICATED-registered_agents0] _
+.venv/lib/python3.11/site-packages/fastapi/routing.py:471: in app
+    json_body = await request.json()
+                ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/requests.py:267: in json
+    self._json = json.loads(body)
+                 ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:337: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:353: in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+E   json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+The above exception was the direct cause of the following exception:
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:491: in app
+    raise validation_error from e
+E   fastapi.exceptions.RequestValidationError: 1 validation error:
+E     {'type': 'json_invalid', 'loc': ('body', 1), 'msg': 'JSON decode error', 'input': {}, 'ctx': {'error': 'Expecting property name enclosed in double quotes'}}
+E   
+E     File "/Users/daption-ciray/Desktop/junction/.claude/worktrees/selam-junction-challenge-44cf24/backend/app/api.py", line 181, in cancel_order
+E       POST /v1/orders/{order_id}/cancel
+
+During handling of the above exception, another exception occurred:
+tests/test_authentication.py:43: in test_review_malformed_cancellation_authenticates_before_audit
+    response = client.post("/v1/orders/missing/cancel", content="{", headers={**headers, "Content-Type": "application/json"})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1203: in post
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:59: in wrapped_app
+    response = await handler(conn, exc)  # type: ignore[arg-type]
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:63: in validation_error
+    await run_in_threadpool(audit_cancel_validation, request, error.body, message)
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:83: in audit_cancel_validation
+    principal = request.state.principal
+                ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/datastructures.py:699: in __getattr__
+    raise AttributeError(message.format(self.__class__.__name__, key))
+E   AttributeError: 'State' object has no attribute 'principal'
+_ test_review_malformed_cancellation_authenticates_before_audit[headers2-422-VALIDATION_ERROR-registered_agents0] _
+.venv/lib/python3.11/site-packages/fastapi/routing.py:471: in app
+    json_body = await request.json()
+                ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/requests.py:267: in json
+    self._json = json.loads(body)
+                 ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:337: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:353: in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+E   json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+The above exception was the direct cause of the following exception:
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:491: in app
+    raise validation_error from e
+E   fastapi.exceptions.RequestValidationError: 1 validation error:
+E     {'type': 'json_invalid', 'loc': ('body', 1), 'msg': 'JSON decode error', 'input': {}, 'ctx': {'error': 'Expecting property name enclosed in double quotes'}}
+E   
+E     File "/Users/daption-ciray/Desktop/junction/.claude/worktrees/selam-junction-challenge-44cf24/backend/app/api.py", line 181, in cancel_order
+E       POST /v1/orders/{order_id}/cancel
+
+During handling of the above exception, another exception occurred:
+tests/test_authentication.py:43: in test_review_malformed_cancellation_authenticates_before_audit
+    response = client.post("/v1/orders/missing/cancel", content="{", headers={**headers, "Content-Type": "application/json"})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1203: in post
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:59: in wrapped_app
+    response = await handler(conn, exc)  # type: ignore[arg-type]
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:63: in validation_error
+    await run_in_threadpool(audit_cancel_validation, request, error.body, message)
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:83: in audit_cancel_validation
+    principal = request.state.principal
+                ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/datastructures.py:699: in __getattr__
+    raise AttributeError(message.format(self.__class__.__name__, key))
+E   AttributeError: 'State' object has no attribute 'principal'
+_ test_review_malformed_cancellation_authenticates_before_audit[headers3-422-VALIDATION_ERROR-registered_agents0] _
+.venv/lib/python3.11/site-packages/fastapi/routing.py:471: in app
+    json_body = await request.json()
+                ^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/requests.py:267: in json
+    self._json = json.loads(body)
+                 ^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/__init__.py:346: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:337: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/json/decoder.py:353: in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+E   json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+The above exception was the direct cause of the following exception:
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:152: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/fastapi/routing.py:491: in app
+    raise validation_error from e
+E   fastapi.exceptions.RequestValidationError: 1 validation error:
+E     {'type': 'json_invalid', 'loc': ('body', 1), 'msg': 'JSON decode error', 'input': {}, 'ctx': {'error': 'Expecting property name enclosed in double quotes'}}
+E   
+E     File "/Users/daption-ciray/Desktop/junction/.claude/worktrees/selam-junction-challenge-44cf24/backend/app/api.py", line 181, in cancel_order
+E       POST /v1/orders/{order_id}/cancel
+
+During handling of the above exception, another exception occurred:
+tests/test_authentication.py:43: in test_review_malformed_cancellation_authenticates_before_audit
+    response = client.post("/v1/orders/missing/cancel", content="{", headers={**headers, "Content-Type": "application/json"})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:1203: in post
+    return self.request(
+.venv/lib/python3.11/site-packages/starlette/testclient.py:518: in request
+    return super().request(
+.venv/lib/python3.11/site-packages/httpx2/_client.py:796: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_client.py:993: in send
+    raise exc
+.venv/lib/python3.11/site-packages/httpx2/_client.py:987: in send
+    response.read()
+.venv/lib/python3.11/site-packages/httpx2/_models.py:877: in read
+    self._content = b"".join(self.iter_bytes())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/httpx2/_models.py:893: in iter_bytes
+    for raw_bytes in self.iter_raw():
+.venv/lib/python3.11/site-packages/httpx2/_models.py:948: in iter_raw
+    for raw_stream_bytes in self.stream:
+.venv/lib/python3.11/site-packages/httpx2/_client.py:143: in __iter__
+    yield from self._stream
+.venv/lib/python3.11/site-packages/starlette/testclient.py:384: in iter_body
+    exit_stack.close()
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:594: in close
+    self.__exit__(None, None, None)
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:586: in __exit__
+    raise exc_details[1]
+/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/contextlib.py:571: in __exit__
+    if cb(*exc_details):
+       ^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:399: in close_app
+    raise exception
+.venv/lib/python3.11/site-packages/anyio/from_thread.py:272: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/testclient.py:366: in run_app
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/applications.py:1194: in __call__
+    await super().__call__(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/applications.py:96: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.venv/lib/python3.11/site-packages/fastapi/telemetry/_asgi.py:151: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:91: in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+.venv/lib/python3.11/site-packages/starlette/middleware/cors.py:149: in simple_response
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:683: in __call__
+    await self.middleware_stack(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:2811: in app
+    await route.handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:1330: in handle
+    await super().handle(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/routing.py:289: in handle
+    await self.app(scope, receive, send)
+.venv/lib/python3.11/site-packages/fastapi/routing.py:166: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:59: in wrapped_app
+    response = await handler(conn, exc)  # type: ignore[arg-type]
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:63: in validation_error
+    await run_in_threadpool(audit_cancel_validation, request, error.body, message)
+.venv/lib/python3.11/site-packages/starlette/concurrency.py:34: in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/to_thread.py:65: in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:2779: in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/anyio/_backends/_asyncio.py:1124: in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+app/api.py:83: in audit_cancel_validation
+    principal = request.state.principal
+                ^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/starlette/datastructures.py:699: in __getattr__
+    raise AttributeError(message.format(self.__class__.__name__, key))
+E   AttributeError: 'State' object has no attribute 'principal'
+=========================== short test summary info ============================
+FAILED tests/test_standing_constraints.py::test_review_standing_constraints_cannot_be_approved[placement]
+FAILED tests/test_standing_constraints.py::test_review_standing_constraints_cannot_be_approved[approval]
+FAILED tests/test_standing_constraints.py::test_review_legacy_unbound_quote_checks_current_customer[placement]
+FAILED tests/test_standing_constraints.py::test_review_legacy_unbound_quote_checks_current_customer[approval]
+FAILED tests/test_size_reconciliation.py::test_review_portion_weight_preserves_package_weight
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-True-max_candidates]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-True-preferences.max_price_per_unit]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-True-preferences.pack_size.min]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-True-preferences.pack_size.max]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-5-max_candidates]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-5-preferences.max_price_per_unit]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-5-preferences.pack_size.min]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[rest-5-preferences.pack_size.max]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-True-max_candidates]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-True-preferences.max_price_per_unit]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-True-preferences.pack_size.min]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-True-preferences.pack_size.max]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-5-max_candidates]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-5-preferences.max_price_per_unit]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-5-preferences.pack_size.min]
+FAILED tests/test_evidence_completeness.py::test_review_strict_preference_numbers[mcp-5-preferences.pack_size.max]
+FAILED tests/test_evidence_completeness.py::test_review_case_content_needs_no_multiplier[L-volume-LTR]
+FAILED tests/test_evidence_completeness.py::test_review_case_content_needs_no_multiplier[KG-netWeight-KGM]
+FAILED tests/test_evidence_completeness.py::test_review_bad_volume_preserves_valid_weight[price0-False]
+FAILED tests/test_evidence_completeness.py::test_review_bad_volume_preserves_valid_weight[price0-True]
+FAILED tests/test_evidence_completeness.py::test_review_bad_volume_preserves_valid_weight[price1-False]
+FAILED tests/test_evidence_completeness.py::test_review_bad_volume_preserves_valid_weight[price1-True]
+FAILED tests/test_control_plane.py::test_review_historical_lookup_stats - pyd...
+FAILED tests/test_control_plane.py::test_review_current_policy_edits_survive_reload
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[kilogram]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[kilograms]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[gram]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[grams]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[millilitre]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[millilitres]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[milliliter]
+FAILED tests/test_lookup_fallback.py::test_review_written_units_are_not_search_terms[milliliters]
+FAILED tests/test_lookup_fallback.py::test_review_long_broadening_does_not_hit_sqlite_limit
+FAILED tests/test_total_cost_ranking.py::test_review_unknown_sizes_compare_unit_prices
+FAILED tests/test_exceptions.py::test_review_reject_partial_stock_keeps_complete_split
+FAILED tests/test_exceptions.py::test_review_all_planning_searches_share_node_budget[25-0]
+FAILED tests/test_exceptions.py::test_review_all_planning_searches_share_node_budget[40-200]
+FAILED tests/test_exceptions.py::test_review_all_planning_searches_share_node_budget[40-20000]
+FAILED tests/test_authentication.py::test_review_malformed_cancellation_authenticates_before_audit[headers0-401-UNAUTHENTICATED-registered_agents0]
+FAILED tests/test_authentication.py::test_review_malformed_cancellation_authenticates_before_audit[headers1-401-UNAUTHENTICATED-registered_agents0]
+FAILED tests/test_authentication.py::test_review_malformed_cancellation_authenticates_before_audit[headers2-422-VALIDATION_ERROR-registered_agents0]
+FAILED tests/test_authentication.py::test_review_malformed_cancellation_authenticates_before_audit[headers3-422-VALIDATION_ERROR-registered_agents0]
+47 failed, 5 passed, 96 deselected in 21.04s

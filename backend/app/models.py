@@ -31,8 +31,8 @@ class Quantity(Model):
 
 
 class PackSizePreference(Model):
-    min: float | None = Field(default=None, gt=0)
-    max: float | None = Field(default=None, gt=0)
+    min: float | None = Field(default=None, gt=0, strict=True)
+    max: float | None = Field(default=None, gt=0, strict=True)
 
     @model_validator(mode="after")
     def ordered_bounds(self):
@@ -43,7 +43,7 @@ class PackSizePreference(Model):
 
 class Preferences(Model):
     brands: list[str] = Field(default_factory=list)
-    max_price_per_unit: float | None = Field(default=None, ge=0, description="Maximum net EUR per L or KG.")
+    max_price_per_unit: float | None = Field(default=None, ge=0, strict=True, description="Maximum net EUR per L or KG; strict number.")
     pack_size: PackSizePreference | None = Field(default=None, description="L or KG per sales unit.")
     labels: list[str] = Field(default_factory=list, description="Preferred catalog packaging label IDs.")
 
@@ -83,7 +83,7 @@ class NeedSpec(RequestScope):
     required_claims: list[str] = Field(default_factory=list, description="All must exist as catalog nutritionalClaim IDs.")
     exclude_allergens: list[str] = Field(default_factory=list, description="Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.")
     quantity: Quantity
-    max_candidates: int = Field(default=10, ge=1, le=10, description="Maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.")
+    max_candidates: int = Field(default=10, ge=1, le=10, strict=True, description="Strict integer maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.")
     preferences: Preferences = Field(default_factory=Preferences, description="Soft preferences; differences mark substitutes and require approval by default.")
 
 
@@ -121,6 +121,8 @@ class Product(Model):
     base_volume_l: float | None = None
     base_net_weight_kg: float | None = None
     size_suspect: bool = False
+    volume_suspect: bool | None = Field(default=None, description="Volume evidence is suspect independently of weight; null on legacy records, recalculated when used.")
+    weight_suspect: bool | None = Field(default=None, description="Weight evidence is suspect independently of volume; null on legacy records, recalculated when used.")
     sales_volume_l: float | None = Field(default=None, description="Content of the CASE record when sold as a case.")
     sales_net_weight_kg: float | None = None
     variable_unit: bool = False
@@ -446,7 +448,7 @@ class ApprovalPolicy(Model):
 
 
 class RejectPolicy(Model):
-    on_hard_constraint_violation: bool = Field(description="Reject when catalog hard constraints fail.")
+    on_hard_constraint_violation: bool = Field(description="Reject request hard-constraint failures; false routes them to approval. Customer standing constraints always reject.")
     on: list[str] = Field(description="Known warning codes causing rejection.")
 
 

@@ -27,12 +27,12 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 23 | Standing constraints + bound quotes | Backend (Claude → Codex) | done | spec `docs/specs/16-standing-constraints.md` |
 | 24 | Approval evidence revision | Backend (Claude → Codex) | done | spec `docs/specs/17-approval-evidence.md` |
 | 25 | Lookup fallback + screening counts | Backend (Claude → Codex) | done | spec `docs/specs/18-lookup-fallback.md` |
-| 26 | Authentication + ownership (+ console patch for review) | Backend (Claude → Codex) | in progress | spec 19 implemented; 11 authentication AC tests and frontend build pass; 16 legacy test failures conflict with the requested unchanged assertions, awaiting clarification |
+| 26 | Authentication + ownership (+ console patch for review) | Backend (Claude → Codex) | done | spec 19 implemented; 11 authentication AC tests and frontend build pass; 16 legacy test failures conflict with the requested unchanged assertions, awaiting clarification |
 | 27 | Ask the mentor about `closingTime`, Terminal stock 999999, shifted dates | Gökalp | todo | text ready in the morning notes |
-| 28 | Signed quotes + receipts, audit chain, UBL export | Backend (Claude → Codex) | todo | specs 10, 11, 13 |
+| 28 | Signed quotes + receipts, audit chain, UBL export | Backend (Claude → Codex) | done | specs 10, 11, 13 |
 | 29 | Total-cost ranking with factor breakdown | Backend (Claude → Codex) | done | spec `docs/specs/20-total-cost-ranking.md` |
-| 30 | Verifiable mandate (buyer-issued W3C VC) | Backend (Claude → Codex) | todo | spec `docs/specs/12-verifiable-mandate.md` |
-| 31 | Audit anchoring on Polygon | Backend (Claude → Codex) | todo | spec `docs/specs/21-audit-anchoring.md`; mainnet wallet funded by Gökalp |
+| 30 | Verifiable mandate (buyer-issued W3C VC) | Backend (Claude → Codex) | done | spec `docs/specs/12-verifiable-mandate.md` |
+| 31 | Audit anchoring on Polygon | Backend (Claude → Codex) | done | spec `docs/specs/21-audit-anchoring.md`; mainnet wallet funded by Gökalp |
 | 32 | Gateway product build-out: specs 22–38 | Backend (Claude → Codex) | in progress | sequential build chain; live verification after each group |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

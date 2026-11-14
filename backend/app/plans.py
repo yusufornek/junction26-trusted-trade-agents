@@ -8,7 +8,8 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                 autonomous_total=Decimal(0), node_budget=20_000):
     target = Decimal(str(need.quantity.value))
     # Hard filters already ran before pricing. Exclude unverifiable/unsuitable offers as well.
-    invalid = set(policy.reject.on) | {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
+    # Stock warnings on offer cards refer to the whole need, not the eventual split allocation.
+    invalid = (set(policy.reject.on) - {"PARTIAL_STOCK"}) | {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
                                       "AVAILABILITY_ERROR", "UNIT_MISMATCH", "NO_STOCK"}
     eligible = [o for o in offers if o.fit is not None and o.fit >= policy.approval.min_fit_probability
                 and o.currency == "EUR" and o.unit_price is not None and o.size_per_sales_unit
@@ -63,27 +64,48 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
         if units <= limits[i]:
             singles.append(((i, units),))
 
-    nodes_left = node_budget  # Shared by the preferred-only and mixed searches.
+    nodes_left = max(0, node_budget)  # Shared by every search, in preferred-only and mixed groups.
 
     def composite(indices):
         complete, partial = {}, {}
 
-        def fill(allocation=(), covered=Decimal(0)):
-            # At most 10P4 paths, independent of quantity/lot size. Always retain a valid fallback.
+        def remember(allocation, covered):
             if allocation:
                 key = tuple(sorted(allocation))
                 (complete if covered >= target else partial)[key] = covered
+
+        # Bounded greedy seeds survive even a zero search budget. Taking the four largest
+        # capacities guarantees a complete fallback whenever four eligible lines can cover.
+        for order in (indices, sorted(indices, key=lambda i: (-sizes[i] * limits[i], i)),
+                      sorted(indices, key=lambda i: (prices[i] / sizes[i], i))):
+            allocation, covered = (), Decimal(0)
+            for i in order[:4]:
+                units = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+                if units > 0:
+                    allocation = (*allocation, (i, units))
+                    covered += sizes[i] * units
+                if covered >= target:
+                    break
+            remember(allocation, covered)
+
+        def fill(allocation=(), covered=Decimal(0)):
+            nonlocal nodes_left
+            nodes_left -= 1
+            remember(allocation, covered)
             if covered >= target or len(allocation) == 4:
                 return
             used = {i for i, _ in allocation}
             for i in indices:
+                if nodes_left <= 0:
+                    return
                 if i in used:
                     continue
                 units = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
                 if units:
                     fill((*allocation, (i, units)), covered + sizes[i] * units)
 
-        fill()
+        if nodes_left > 0:
+            fill()
         if not complete:
             if partial:
                 return min(partial, key=lambda a: (-partial[a], cost(a), a)), "partial"
@@ -141,9 +163,11 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                     continue
                 cheapest(start + 1, (*allocation, (i, units)), next_covered, next_paid)
             # Skipping this source restores a line slot, so check it even after a capacity break.
-            cheapest(start + 1, allocation, covered, paid)
+            if nodes_left > 0:
+                cheapest(start + 1, allocation, covered, paid)
 
-        cheapest()
+        if nodes_left > 0:
+            cheapest()
         group_singles = [a for a in singles if a[0][0] in indices]
         if len(best) > 1 and (not group_singles or best_cost < min(cost(a) for a in group_singles)):
             return best, "split"

@@ -68,7 +68,8 @@ class Database:
             # A subsequent build replaces catalog rows only.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
             for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",
-                               "size_suspect": "INTEGER", "sales_volume_l": "REAL", "gtin": "TEXT", "unit_gtins": "TEXT",
+                               "size_suspect": "INTEGER", "volume_suspect": "INTEGER", "weight_suspect": "INTEGER",
+                               "sales_volume_l": "REAL", "gtin": "TEXT", "unit_gtins": "TEXT",
                                "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT"}.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")

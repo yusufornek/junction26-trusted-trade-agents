@@ -1,0 +1,10 @@
+.........................................F..........                     [100%]
+=================================== FAILURES ===================================
+____________ test_review_reject_partial_stock_keeps_complete_split _____________
+tests/test_exceptions.py:38: in test_review_reject_partial_stock_keeps_complete_split
+    partial = next(p for p in find(gateway, need).plans if p.kind == "partial")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   StopIteration
+=========================== short test summary info ============================
+FAILED tests/test_exceptions.py::test_review_reject_partial_stock_keeps_complete_split
+1 failed, 51 passed, 96 deselected in 7.00s

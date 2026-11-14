@@ -200,3 +200,11 @@ def demo_catalog(gateway, tmp_path, upstream):
     upstream.sales_units["464306"] = "ST"
     upstream.prices.update({"464306": 1.01, "462626": 13})
     upstream.sizes.update({"464306": 1, "462626": 5})
+
+
+@pytest.fixture(scope="session")
+def actual_product_rows():
+    """Unmodified organiser catalog, shared by ingestion regressions and demo replay."""
+    from app.config import ROOT
+    with gzip.open(ROOT / "data/product_data.json.gz", "rt") as file:
+        return json.load(file)

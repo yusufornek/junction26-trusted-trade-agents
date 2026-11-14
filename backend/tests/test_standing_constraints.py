@@ -5,7 +5,7 @@ from app.api import create_app
 from conftest import OPERATOR_HEADERS
 from app.db import DomainError
 from app.models import PolicyUpdateRequest, QuoteRequest
-from conftest import quote_request, set_customers
+from conftest import quote_request, set_customers, raw_product, rebuild_catalog
 
 
 def unconstrained(need):
@@ -95,12 +95,73 @@ def test_ac_6_customer_policy_get_put_preservation_vocabulary_and_audit(gateway)
         assert client.get("/v1/policy").json()["customers"] == customers
 
 
-def test_ac_7_request_and_customer_exclusion_union_counts_both_sources(gateway, need, upstream):
+def test_ac_7_request_and_customer_exclusion_union_counts_both_sources(gateway, need, upstream, tmp_path):
+    rows = [raw_product(pid, "Milk 1 L", volume=1, multiplier=1) for pid in ("request", "customer", "allowed")]
+    for row, code in zip(rows, ("AE", "AM", "X99")):
+        row["synkkaData"]["classifications"][1]["values"] = [{"id": code, "unit": "CONTAINS"}]
+    rebuild_catalog(gateway, tmp_path, rows)
     set_customers(gateway, {"1": {"exclude_allergens": ["AM"]}})
     result = gateway.find_offers(need.model_copy(update={"required_claims": []}))
-    assert not result.offers and result.excluded_count == 7
+    assert {o.product_id for o in result.offers} == {"allowed"}
+    assert result.excluded_count == 2
     assert result.effective_constraints.model_dump()["exclude_allergens"] == [
         {"code": "AE", "source": "request"}, {"code": "AM", "source": "customer_policy"}]
     assert sum(v for k, v in result.exclusion_counts.items() if "AE" in k and "request" in k) == 1
-    assert sum(v for k, v in result.exclusion_counts.items() if "AM" in k and "customer_policy" in k) == 7
-    assert "customer_policy" in result.no_match_reason and "request" in result.no_match_reason
+    assert sum(v for k, v in result.exclusion_counts.items() if "AM" in k and "customer_policy" in k) == 1
+
+
+@pytest.mark.parametrize("when", ["placement", "approval"])
+def test_review_standing_constraints_cannot_be_approved(gateway, need, upstream, when):
+    body = gateway.policy.get().model_dump(mode="json")
+    body["reject"]["on_hard_constraint_violation"] = False
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    lookup = gateway.find_offers(unconstrained(need), actor="agent:web-console")
+    quote = gateway.orders.create_quote(quote_request(need, qty=200, product_id="2", need_ref=lookup.lookup_id), "web-console")
+    if when == "placement":
+        set_customers(gateway, {"1": {"required_claims": ["FREE_FROM_LACTOSE"]}})
+    order = gateway.orders.place_order(quote.id, "binding-standing", "web-console")
+    if when == "placement":
+        assert order.status == "REJECTED"
+    else:
+        assert order.status == "PENDING_APPROVAL"
+        set_customers(gateway, {"1": {"required_claims": ["FREE_FROM_LACTOSE"]}})
+        # A retry after evidence refresh must never confirm the prohibited line either.
+        for _ in range(2):
+            with pytest.raises(DomainError, match="HARD_CONSTRAINT_VIOLATION"):
+                gateway.orders.approve(order.id, "Ada")
+        assert gateway.orders.get_order(order.id).status == "PENDING_APPROVAL"
+
+
+@pytest.mark.parametrize("when", ["placement", "approval"])
+def test_review_legacy_unbound_quote_checks_current_customer(gateway, need, upstream, when):
+    from app.signing import quote_payload
+    lookup = gateway.find_offers(unconstrained(need), actor="agent:web-console")
+    quote = gateway.orders.create_quote(quote_request(need, qty=200, need_ref=lookup.lookup_id), "web-console")
+    # Persist the pre-spec16 shape with a valid signature, without bypassing signature verification.
+    raw = quote.model_dump(mode="json")
+    raw.pop("need_ref")
+    raw["hard_constraint_violations"] = ["recorded request violation (request)"]
+    raw["signature"] = gateway.signing.sign(quote_payload(raw))
+    import json
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(raw), quote.id))
+    assert gateway.orders.get_quote(quote.id).need_ref is None
+    if when == "placement":
+        set_customers(gateway, {"1": {"exclude_allergens": ["AM"]}})
+    else:
+        # The recorded violation remains approval-eligible; current standing constraints never do.
+        body = gateway.policy.get().model_dump(mode="json")
+        body["reject"]["on_hard_constraint_violation"] = False
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    order = gateway.orders.place_order(quote.id, "legacy-standing", "web-console")
+    if when == "placement":
+        assert order.status == "REJECTED"
+        assert any("customer_policy" in h.detail and "AM" in h.detail for h in order.policy.hits)
+        assert any("recorded request" in h.detail for h in order.policy.hits)
+    else:
+        assert order.status == "PENDING_APPROVAL"
+        set_customers(gateway, {"1": {"exclude_allergens": ["AM"]}})
+        with pytest.raises(DomainError, match="HARD_CONSTRAINT_VIOLATION") as error:
+            gateway.orders.approve(order.id, "Ada")
+        assert any("customer_policy" in h["detail"] for h in error.value.data["rule_hits"])
+        assert gateway.orders.get_order(order.id).status == "PENDING_APPROVAL"

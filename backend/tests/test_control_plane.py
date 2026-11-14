@@ -14,6 +14,41 @@ from app.service import Gateway
 from conftest import quote_request
 
 
+def test_review_historical_lookup_stats(gateway, need, upstream, monkeypatch):
+    from datetime import datetime
+    import app.models as models
+    lookup = gateway.find_offers(need)
+    class FutureDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.combine(need.deliver_by + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+    monkeypatch.setattr(models, "datetime", FutureDateTime)
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        assert client.get(f"/v1/lookups/{lookup.lookup_id}").status_code == 200
+        response = client.get("/v1/stats")
+        assert response.status_code == 200
+        assert response.json()["lookups"] == 1
+
+
+def test_review_current_policy_edits_survive_reload(gateway):
+    from app.policy import Policy
+    from app.lookup import warning
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        body = client.get("/v1/policy").json()
+        body["reject"]["on"].remove("NO_STOCK")
+        body["approval"]["warnings_need_approval"] = ["NO_STOCK"]
+        response = client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"})
+        assert response.status_code == 200
+        assert response.json()["reject"]["on"] == body["reject"]["on"]
+        assert response.json()["approval"]["warnings_need_approval"] == ["NO_STOCK"]
+        assert client.get("/v1/policy").json() == response.json()
+    reloaded = Policy(gateway.policy.path, gateway.policy.runtime_path, gateway.db).get()
+    assert "NO_STOCK" not in reloaded.reject.on
+    assert gateway.policy.evaluate(0, [], warnings=[warning("NO_STOCK")]).outcome == "PENDING_APPROVAL"
+    diff = gateway.audit()[-1].data["diff"]
+    assert "NO_STOCK" not in diff["reject.on"]["after"]
+
+
 def editable(resource):
     return deepcopy({key: resource[key] for key in PolicyDocument.model_fields})
 

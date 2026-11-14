@@ -17,18 +17,18 @@ change or extend.
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | built |
 | 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | built |
 | 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
-| 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | in progress |
-| 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | in progress |
-| 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority (W3C VC as JWT) | in progress |
-| 13 | [Open-standard mapping](13-open-standard-mapping.md) | Peppol / UBL mapping and export | in progress |
+| 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | built |
+| 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | built |
+| 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority (W3C VC as JWT) | built |
+| 13 | [Open-standard mapping](13-open-standard-mapping.md) | Peppol / UBL mapping and export | built |
 | 14 | [Demo reset](14-demo-reset.md) | Archive the local state and rebuild a clean database for the demo | built |
 | 15 | [Evidence completeness](15-evidence-completeness.md) | Missing or unknown data never counts as proof; unknown codes are refused | built |
 | 16 | [Standing constraints](16-standing-constraints.md) | Buyer-owned constraints per customer; every quote bound to a stored request | built |
 | 17 | [Approval evidence](17-approval-evidence.md) | Approval applies to the evidence the human saw | built |
 | 18 | [Lookup fallback](18-lookup-fallback.md) | Deterministic recovery from a too-narrow query; screening counts | built |
-| 19 | [Authentication](19-authentication.md) | Credentials for agents and the operator; object ownership | in progress |
+| 19 | [Authentication](19-authentication.md) | Credentials for agents and the operator; object ownership | built |
 | 20 | [Total-cost ranking](20-total-cost-ranking.md) | Offers ranked by what the packs needed cost, overbuy shown | built |
-| 21 | [Audit anchoring](21-audit-anchoring.md) | Head hash of the audit chain written to Polygon | in progress |
+| 21 | [Audit anchoring](21-audit-anchoring.md) | Head hash of the audit chain written to Polygon | built |
 | 22 | [Shared foundation: one procurement state machine](22-shared-foundation.md) | Shared foundation: one procurement state machine | in progress |
 | 23 | [Machine-readable recovery contract](23-recovery-contract.md) | Machine-readable recovery contract | in progress |
 | 24 | [Per-agent rate limits](24-rate-limits.md) | Per-agent rate limits | in progress |

@@ -15,6 +15,32 @@ def intent_need(need, intent=INTENT):
     return need.model_copy(update={"search_terms": [], "intent": intent})
 
 
+@pytest.mark.parametrize("unit", ["kilogram", "kilograms", "gram", "grams", "millilitre", "millilitres", "milliliter", "milliliters"])
+def test_review_written_units_are_not_search_terms(gateway, need, upstream, tmp_path, unit):
+    assert broadened_terms(f"1000 {unit} of quuxfruit") == ["quuxfruit"]
+    replace_catalog(gateway, tmp_path, [raw_product("unit", f"Milk sold in {unit}")])
+    request = intent_need(need, f"1000 {unit} of quuxfruit")
+    request.exclude_allergens = []
+    result = gateway.find_offers(request)
+    assert result.matched_count == result.screened_count == 0
+    assert not result.offers and not upstream.decision_calls
+
+
+def test_review_long_broadening_does_not_hit_sqlite_limit(gateway, need, upstream):
+    from fastapi.testclient import TestClient
+    from app.api import create_app
+    from conftest import OPERATOR_HEADERS
+    # Alphabetic words are meaningful to the fallback; include a real match to prove OR still works.
+    terms = ["quux" + chr(97 + i // 26) + chr(97 + i % 26) for i in range(501)]
+    request = intent_need(need, " ".join([*terms, "milk"]))
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        response = client.post("/v1/offers", json=request.model_dump(mode="json"))
+    assert response.status_code == 200
+    result = response.json()
+    assert result["retrieval"]["terms_used"] == [*terms, "milk"]
+    assert result["matched_count"] == 5 and result["offers"]
+
+
 def warning_codes(result):
     return {w.code for w in result.warnings}
 

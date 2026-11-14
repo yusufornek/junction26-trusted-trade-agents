@@ -190,7 +190,7 @@ the returned offer slice. Fit evidence for every priced candidate is stored for 
 No additional Valio or Decisions calls are made. Up to three top-ranked `single` plans cover the whole
 need. A `split` plan combines up to four products when no single can cover it, or when splitting is
 cheaper; the planner compares lot/pack combinations and respects on-time stock after local
-reservations. Cheapest-split search uses stock-aware bounds and a shared 20,000-node budget per lookup
+reservations. Both fill enumeration and cheapest-split search share a 20,000-node budget per lookup
 (the internal `build_plans(..., node_budget=...)` argument can override it). On exhaustion it keeps the
 best valid plan found, with greedy fills always available as a fallback. It may miss a cheaper combination,
 including savings of a cent due only to rounding individual lines. Reservations and autonomous daily spend
@@ -199,6 +199,8 @@ the lookup and its audit row, so planning holds no writer lock against quotes, o
 Products must pass hard filters and have fit at or above the policy floor, valid EUR
 prices and verified availability. If full coverage is impossible, a `partial` plan provides the best
 coverage possible within four lines and states the missing quantity with `PARTIAL_STOCK`.
+Offer-level `PARTIAL_STOCK` does not exclude a candidate before allocation, even when the policy rejects
+partial orders: the plan's actual uncovered quantity determines that warning and its policy preview.
 
 Plan lines contain `product_id`, numeric sales `units`, and `covers {value, unit}`. KG-sold products use
 `allowed_lot_size` multiples (e.g. 10.5 kg for a 10.25 kg need with a 0.5 kg lot); other products use whole
@@ -251,7 +253,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   Unknown codes return `422 UNKNOWN_CODE` naming the field, code and valid values, including policy codes.
   Quantity units are L, KG or SALES_UNIT. `customer_id` is required and non-blank; `deliver_by` is today
   through +60 days in Europe/Helsinki. Quantities are strict numeric values >0 and <=1,000,000 (no booleans
-  or numeric strings), blank brand entries fail, and pack-size minimum cannot exceed maximum.
+  or numeric strings). Price/pack-size preferences and `max_candidates` also reject booleans and numeric
+  strings; `max_candidates` requires an integer. Blank brand entries fail, and pack-size minimum cannot exceed maximum.
   MCP validation failures use JSON `{code, message}` tool errors as REST does.
 - Decisions screens `shortlist.catalog_pool` (default 40). Every candidate at or above
   `approval.min_fit_probability` is priced, highest fit first, up to `shortlist.live_max` (default 25,
@@ -274,8 +277,11 @@ Old stored lookups without preferences/plans remain readable, including through 
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
-  Catalog sizes >100 L, >100 kg, <1 g per base unit or differing from the name by a factor >=10 are
-  stored as `size_suspect` and ignored, falling back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
+  CASE sales content needs no base-unit multiplier. Catalog sizes >100 L, >100 kg, <1 g per base unit or
+  differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
+  invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
+  `size_suspect` remains their aggregate. Legacy records without the dimension flags recompute them when used.
+  Suspect content falls back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
   uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain their explicitly requested sales quantities. KG sales use their lot-size step;
@@ -307,10 +313,13 @@ Old stored lookups without preferences/plans remain readable, including through 
   committed defaults ignore only VARIABLE_WEIGHT, DEPOSIT, RETRIEVAL_BROADENED and POOL_TRUNCATED.
   PRICE_ERROR, AVAILABILITY_ERROR, SIZE_UNKNOWN, SIZE_UNCONFIRMED, UNIT_MISMATCH, STOCK_MODEL_UNKNOWN,
   NO_FIT_SCORE and CUTOFF_UNKNOWN cannot be ignored (PUT returns 422). Disabling hard-violation rejection
-  routes violations to approval. Older runtime policies acquire the new default evidence/reject codes on load.
+  routes request violations to approval; customer standing violations always reject and cannot be approved.
+  Legacy runtime policies without `approval.ignored_warnings` acquire the new default evidence/reject codes
+  on load. Explicit current-policy edits retain their configured warning lists across reloads.
 - `purchase_total` is units needed times net sales-unit price, rounded in decimal currency arithmetic;
   `overbuy {amount, unit}` shows whole-pack excess. Both are explained in offer text; `unit_price` remains
-  per sales unit. The price factor uses purchase total when size is known, otherwise per-unit comparison.
+  per sales unit. The price factor uses purchase total when size is known; unknown-size offers compare
+  their valid per-unit prices within a separate range, retaining `SIZE_UNKNOWN` and no rank label.
   `score_breakdown {price, coverage, reliability, co2, fit}` contains weighted contributions summing to score.
   Reliability uses its absolute 0–1 value; CO2 uses the catalog-wide range. Missing values use the global
   catalog median, with neutral text (0.5 when no global data). CO2 is a product-group average.
@@ -323,6 +332,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   `customer_policy`; matched evidence, removal counts and hard-violation hits name the source.
   Updates validate vocabulary and audit customer changes in `POLICY_UPDATED.data.diff`. Approvals also
   recheck the placing agent's current customer scope. Rejection remains available when constraints tighten.
+  Persisted legacy quotes without `need_ref` still load and retain their recorded violations; placement and
+  approval also evaluate the quoted customer's current standing constraints for every product.
 - `OPEN` quotes become `ACCEPTED` or `EXPIRED`. Each quote can create only one order.
   `PENDING_APPROVAL` orders become `CONFIRMED`, `REJECTED`, or `EXPIRED`; their approval window is the
   quote expiry. Expiration is evaluated on requests (no background worker).
@@ -705,4 +716,13 @@ confirmation-depth policies are production follow-ups.
 
 Tests use temporary DB/key folders and respx JSON-RPC mocks, with no external
 network. `test_ac_6_local_anvil_real_transaction_and_verification` uses loopback
-Anvil when it is on PATH and is otherwise skipped.
+Anvil when it is on PATH and loopback listeners are permitted; otherwise it is explicitly skipped.
+
+Review regressions additionally use the real organiser catalog. Spec 15 AC-16 replays the captured demo
+projection in `tests/fixtures/demo_lookup_capture.json` against all 17,546 products, then quotes and orders
+464306 for EUR 1,010. This is recorded gateway evidence, not raw upstream HTTP: only captured candidates
+have replayed fit/price/stock evidence, and validity/delivery times are rebased. The synthetic smoke test
+remains separate. A fresh live demo check is still required to establish current live AC-16 acceptance;
+the offline replay does not establish that result. Historical lookup statistics bypass request date-window
+validation, while new requests still enforce it. Malformed cancellation JSON returns 401 without a valid
+credential, or structured 422 after authentication.

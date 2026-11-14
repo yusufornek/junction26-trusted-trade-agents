@@ -16,10 +16,89 @@ from app.catalog import build
 from app.db import DomainError
 from app.mcp_server import create_server
 from app.models import NeedSpec, PolicyUpdateRequest, QuoteRequest
-from conftest import raw_product
+from conftest import raw_product, rebuild_catalog
 
 AGENT = "hotel-chain-agent"
 SIZES = {"1": 1, "2": 10, "3": 6, "4": 4, "5": 1, "6": 1}
+
+
+def test_review_reject_partial_stock_keeps_complete_split(gateway, need, upstream):
+    body = gateway.policy.get().model_dump(mode="json")
+    body["reject"]["on"].append("PARTIAL_STOCK")
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    upstream.amounts = {"1": 500, "2": 50}
+    result = find(gateway, need)
+    split = next((p for p in result.plans if p.kind == "split"), None)
+    assert split is not None
+    assert split.coverage.value == 1000 and split.uncovered.value == 0
+    assert split.policy_preview.outcome == "CONFIRMED"
+    q = quote(gateway, need, result, result.plans.index(split))
+    order = gateway.orders.place_order(q.id, "complete-split", AGENT)
+    assert order.status == "CONFIRMED"
+    gateway.orders.cancel(order.id, actor=f"agent:{AGENT}")
+    upstream.amounts = {"1": 300, "2": 30}
+    partial = next(p for p in find(gateway, need).plans if p.kind == "partial")
+    assert partial.uncovered.value == 400 and partial.policy_preview.outcome == "REJECTED"
+
+
+@pytest.mark.parametrize("pool_size,budget", [(25, 0), (40, 200), (40, 20_000)])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_review_all_planning_searches_share_node_budget(gateway, need, upstream, tmp_path, pool_size, budget, mixed):
+    import sys
+    from app.plans import build_plans
+    from app.models import Warning
+    template = find(gateway, need).offers[0]
+    rows = [raw_product(str(i), "Milk 1 L", volume=1, multiplier=1) for i in range(pool_size)]
+    rebuild_catalog(gateway, tmp_path, rows)
+    offers = []
+    for index in range(pool_size):
+        offer = template.model_copy(deep=True)
+        offer.product_id = str(index)
+        offer.size_per_sales_unit, offer.unit_price = 1, 1 + index / 100
+        offer.availability.available_amount = 300
+        offer.warnings = [Warning(code="OUTSIDE_PREFERENCE", text="Substitute")] if mixed and index % 2 else []
+        offers.append(offer)
+    calls = {"fill": 0, "cheapest": 0}
+    def profile(frame, event, arg):
+        if event == "call" and frame.f_code.co_filename.endswith("/app/plans.py") and frame.f_code.co_name in calls:
+            calls[frame.f_code.co_name] += 1
+    old = sys.getprofile()
+    try:
+        sys.setprofile(profile)
+        plans = build_plans(need, offers, gateway.policy, gateway.policy.get(), AGENT, gateway.catalog, node_budget=budget)
+    finally:
+        sys.setprofile(old)
+    assert sum(calls.values()) <= budget, calls
+    split = next(p for p in plans if p.kind == "split")
+    assert len(split.lines) <= 4 and split.coverage.value >= 1000
+    assert len({line.product_id for line in split.lines}) == len(split.lines)
+    assert sum(line.covers.value for line in split.lines) == split.coverage.value
+
+
+def test_review_expanded_lookup_pool_keeps_planning_bounded(gateway, need, upstream, tmp_path):
+    import sys
+    rows = [raw_product(str(i), "Milk 1 L", volume=1, multiplier=1) for i in range(40)]
+    rebuild_catalog(gateway, tmp_path, rows)
+    body = gateway.policy.get().model_dump(mode="json")
+    body["shortlist"]["live_max"] = 40
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+    upstream.amount = 300
+    upstream.sizes = {str(i): 1 for i in range(40)}
+    upstream.prices = {str(i): 1 + i / 100 for i in range(40)}
+    count = 0
+    def profile(frame, event, arg):
+        nonlocal count
+        if event == "call" and frame.f_code.co_filename.endswith("/app/plans.py") and frame.f_code.co_name in {"fill", "cheapest"}:
+            count += 1
+    old = sys.getprofile()
+    try:
+        sys.setprofile(profile)
+        result = find(gateway, need)
+    finally:
+        sys.setprofile(old)
+    assert result.priced_count == 40 and count <= 20_000
+    split = next(p for p in result.plans if p.kind == "split")
+    assert split.coverage.value >= 1000 and len(split.lines) == 4
 
 
 @pytest.fixture

@@ -34,11 +34,14 @@ class Policy:
             data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
             data.setdefault("agents", {key: value.model_dump() for key, value in defaults.agents.items()})
             data.setdefault("customers", {})
-            for code in ("SIZE_UNCONFIRMED", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "CUTOFF_UNKNOWN"):
-                if code not in data["approval"]["warnings_need_approval"]:
-                    data["approval"]["warnings_need_approval"].append(code)
-            if "NO_STOCK" not in data["reject"]["on"]:
-                data["reject"]["on"].append("NO_STOCK")
+            # ignored_warnings was introduced with the evidence defaults. Its absence identifies
+            # a legacy document; explicitly saved current policies must keep their operator choices.
+            if "ignored_warnings" not in data["approval"]:
+                for code in ("SIZE_UNCONFIRMED", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "CUTOFF_UNKNOWN"):
+                    if code not in data["approval"]["warnings_need_approval"]:
+                        data["approval"]["warnings_need_approval"].append(code)
+                if "NO_STOCK" not in data["reject"]["on"]:
+                    data["reject"]["on"].append("NO_STOCK")
             data["approval"].setdefault("ignored_warnings", defaults.approval.ignored_warnings)
         return PolicyResource.model_validate(data)
 
@@ -195,8 +198,9 @@ class Policy:
             approval = True
         for violation in hard_violations:
             hits.append(RuleHit(rule="hard_constraint_violation", detail=violation))
-            rejected |= policy.reject.on_hard_constraint_violation
-            approval |= not policy.reject.on_hard_constraint_violation
+            binding = policy.reject.on_hard_constraint_violation or violation.endswith("(customer_policy)")
+            rejected |= binding
+            approval |= not binding
         if total > max_total:
             hits.append(RuleHit(rule="max_auto_total_eur", detail=f"Net total {total:.2f} exceeds {max_total:.2f} EUR ({source})"))
             approval = True

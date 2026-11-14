@@ -27,7 +27,7 @@ def read_stats(db, since=None, *, registered_agents=()):
         for event in lookup_events:
             row = conn.execute("SELECT data FROM lookups WHERE id=?", (event.data.get("lookup_id"),)).fetchone()
             if row:
-                lookup = LookupResult.model_validate_json(row[0])
+                lookup = LookupResult.model_validate_json(row[0], context={"stored": True})
                 warnings.update(w.code for offer in lookup.offers for w in offer.warnings)
 
     statuses = Counter(order.status for order in orders)

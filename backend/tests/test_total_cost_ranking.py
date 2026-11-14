@@ -5,6 +5,24 @@ from app.models import Quantity
 from conftest import demo_catalog, raw_product, rebuild_catalog
 
 
+def test_review_unknown_sizes_compare_unit_prices(gateway, need, upstream, respx_mock, tmp_path):
+    import httpx
+    rebuild_catalog(gateway, tmp_path, [raw_product("a", "Milk unknown"), raw_product("b", "Milk unknown"),
+                                      raw_product("egg", "Egg vocabulary", egg=True)])
+    upstream.prices = {"a": 20, "b": 10}
+    def no_comparison(request):
+        body = upstream.price_response(request).json()
+        for row in body["products"]:
+            row.pop("comparisonPrice")
+        return httpx.Response(200, json=body)
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=no_comparison)
+    result = gateway.find_offers(need)
+    rank(result.offers, {k: int(k == "price") for k in gateway.policy.weights})
+    assert [o.product_id for o in result.offers] == ["b", "a"]
+    assert [o.score_breakdown["price"] for o in result.offers] == [1, 0]
+    assert all(o.rank_label is None and "SIZE_UNKNOWN" in {w.code for w in o.warnings} for o in result.offers)
+
+
 def total_case(gateway, need, upstream, tmp_path, *, amount=1001, pack_size=5, pack_price=4.975):
     rebuild_catalog(gateway, tmp_path, [raw_product("a", "Milk 1 L", volume=1, multiplier=1),
                                       raw_product("b", f"Milk {pack_size} L", volume=pack_size, multiplier=1),

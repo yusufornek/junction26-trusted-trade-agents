@@ -10,7 +10,7 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number
+from .catalog import allergen_evidence, constraint_failures, number, suspect_content
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
 from .valio import RequestCounter
@@ -43,6 +43,7 @@ WARNING_TEXT = {
 INTENT_STOP_WORDS = frozenset({
     "of", "for", "the", "a", "an", "and", "with", "to", "by", "per",
     "litre", "litres", "liter", "liters", "l", "kg", "g", "ml", "dl", "cl", "pcs", "kpl",
+    "kilogram", "kilograms", "gram", "grams", "millilitre", "millilitres", "milliliter", "milliliters",
     "ja", "tai", "sekä",
 })
 
@@ -103,14 +104,20 @@ def reconcile_size(product, price, requested_unit):
         return 1.0, "base_unit", confirmed, []
     multiplier = product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None)
     exact = {}
+    content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
+    sales_content = product.sales_volume_l if requested_unit == "L" else product.sales_net_weight_kg
+    suspect = product.volume_suspect if requested_unit == "L" else product.weight_suspect
+    if suspect is None:
+        # Older product JSON only has a product-wide flag. Recompute each dimension using the
+        # retained evidence instead of letting a bad volume discard a valid weight (or vice versa).
+        names = [product.name_en, product.name_fi]
+        suspect = suspect_content(content, names, requested_unit) or suspect_content(
+            sales_content / (multiplier or 1) if sales_content is not None else None, names, requested_unit)
+    if not suspect and sales_content and sales_content > 0:
+        exact["catalog"] = sales_content  # CASE content already describes one sales unit.
     if multiplier is not None and multiplier > 0:
-        content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
-        sales_content = product.sales_volume_l if requested_unit == "L" else product.sales_net_weight_kg
-        if not product.size_suspect:
-            if sales_content and sales_content > 0:
-                exact["catalog"] = sales_content
-            elif content and content > 0:
-                exact["catalog"] = content * multiplier
+        if "catalog" not in exact and not suspect and content and content > 0:
+            exact["catalog"] = content * multiplier
         # Compute the name source too, even when structured catalog content exists.
         # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
         # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
@@ -284,6 +291,8 @@ def rank(offers, weights, fit_floor=None, *, catalog_stats=None, reject_codes=()
     for key, value in metrics.items():
         known = [value(o) for o in offers if value(o) is not None and not unorderable(o)]
         low, high = (min(known), max(known)) if known else (0, 0)
+        unit_prices = [value(o) for o in offers if o.size_per_sales_unit is None and value(o) is not None]
+        unit_low, unit_high = (min(unit_prices), max(unit_prices)) if unit_prices else (0, 0)
         for offer in offers:
             v = value(offer)
             if key in {"reliability", "co2"}:
@@ -301,7 +310,8 @@ def rank(offers, weights, fit_floor=None, *, catalog_stats=None, reject_codes=()
             elif key in {"coverage", "fit"}:
                 normalized = v if v is not None else 0
             else:
-                normalized = 0 if v is None else (1 if high == low else (high - v) / (high - low))
+                lo, hi = (unit_low, unit_high) if offer.size_per_sales_unit is None else (low, high)
+                normalized = 0 if v is None else (1 if hi == lo else (hi - v) / (hi - lo))
             contribution = weights[key] * max(0, min(1, normalized))
             offer.score_breakdown[key] = contribution
             offer.score += contribution

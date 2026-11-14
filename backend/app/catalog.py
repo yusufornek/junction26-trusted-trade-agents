@@ -36,13 +36,21 @@ def csv_values(path, column):
         return {str(row["productId"]): number(row.get(column)) for row in reader}
 
 
-def name_size(name, unit):
+def name_sizes(name, unit):
     pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
     factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
-    for match in re.finditer(pattern, name, re.IGNORECASE):
-        if match[3].lower() in factors:
-            return float(match[2].replace(",", ".")) * factors[match[3].lower()]
-    return None
+    return [float(match[2].replace(",", ".")) * factors[match[3].lower()]
+            for match in re.finditer(pattern, name, re.IGNORECASE) if match[3].lower() in factors]
+
+
+def suspect_content(value, names, unit):
+    if value is None:
+        return False
+    named = [size for name in names for size in name_sizes(name, unit) if size > 0]
+    # Names can contain both portion and package weights. A compatible package candidate
+    # supports the structured content even if an earlier portion candidate disagrees.
+    return (value <= 0 or value > 100 or (unit == "KG" and value < .001)
+            or bool(named and all(max(value / size, size / value) >= 10 for size in named)))
 
 
 def extract(raw, reliability, carbon):
@@ -67,20 +75,13 @@ def extract(raw, reliability, carbon):
     volume_l, weight_kg = content(base, "volume", volumes), content(base, "netWeight", weights)
     case_l, case_kg = content(case, "volume", volumes), content(case, "netWeight", weights)
     name = localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi")
-    suspect = False
-    for value, unit, lower in ((volume_l, "L", 0), (weight_kg, "KG", .001)):
-        named = name_size(name, unit)
-        if value is not None and (value <= 0 or value > 100 or value < lower
-                                  or (named and value > 0 and max(value / named, named / value) >= 10)):
-            suspect = True
+    suspicion = {"L": suspect_content(volume_l, [name], "L"),
+                 "KG": suspect_content(weight_kg, [name], "KG")}
     multiplier = next((number(u.get("sizeInBaseUnits")) for u in raw.get("units") or []
                        if u.get("unitId") == raw.get("salesUnit")), 1) or 1
     for value, unit in ((case_l, "L"), (case_kg, "KG")):
-        named = name_size(name, unit)
         per_base = value / multiplier if value is not None else None
-        if per_base is not None and (per_base <= 0 or per_base > 100 or (unit == "KG" and per_base < .001)
-                                    or (named and per_base > 0 and max(per_base / named, named / per_base) >= 10)):
-            suspect = True
+        suspicion[unit] |= suspect_content(per_base, [name], unit)
     statuses, declaration = {}, False
     for group in ("allergen", "nonAllergen"):
         for entry in grouped.get(group, []):
@@ -106,7 +107,8 @@ def extract(raw, reliability, carbon):
         allergens_contains=sorted(c for c, s in statuses.items() if "contains" in s),
         allergen_status={c: sorted(s) for c, s in statuses.items()}, has_allergen_declaration=declaration,
         free_from=sorted(c for c, s in statuses.items() if "free_from" in s), labels=ids("packagingMarkedLabel"),
-        base_volume_l=volume_l, size_suspect=suspect, sales_volume_l=case_l, sales_net_weight_kg=case_kg,
+        base_volume_l=volume_l, size_suspect=any(suspicion.values()),
+        volume_suspect=suspicion["L"], weight_suspect=suspicion["KG"], sales_volume_l=case_l, sales_net_weight_kg=case_kg,
         variable_unit=bool(synkka.get("variableUnit") or raw.get("variableUnit")), deposits=raw.get("deposits") or [],
         base_net_weight_kg=weight_kg or None, delivery_reliability=reliability.get(str(raw["id"])),
         co2_kg_per_kg=carbon.get(str(raw["id"])),
@@ -265,13 +267,14 @@ class Catalog:
         with self.db.connect() as conn:
             prefix, join, order, params = "", "", "", []
             if mode == "or":
-                term_queries = " UNION ALL ".join(
-                    "SELECT rowid FROM products_fts WHERE products_fts MATCH ?" for _ in phrases)
-                prefix = (f"WITH term_hits AS ({term_queries}), "
+                # json_each avoids one compound SELECT per word (SQLite caps those at 500).
+                # Each distinct phrase still contributes exactly one hit per matching product.
+                prefix = ("WITH term_hits AS (SELECT products_fts.rowid FROM json_each(?) AS term "
+                          "CROSS JOIN products_fts WHERE products_fts MATCH term.value), "
                           "hits AS (SELECT rowid, count(*) AS words FROM term_hits GROUP BY rowid) ")
                 join = "JOIN hits ON hits.rowid=f.rowid "
                 order = "hits.words DESC, "
-                params.extend(phrases)
+                params.append(json.dumps(phrases))
             rows = conn.execute(prefix +
                 "SELECT p.data FROM products_fts f JOIN products p ON p.id=f.id " + join +
                 "WHERE products_fts MATCH ? ORDER BY " + order + "bm25(products_fts), p.id", (*params, expression))

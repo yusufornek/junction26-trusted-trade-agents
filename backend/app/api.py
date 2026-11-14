@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 
 from . import audit as audit_log
-from .auth import Credentials, Principal, require_operator, resolve_principal
+from .auth import Credentials, Principal, bearer, require_operator, resolve_principal
 from .config import Settings
 from .db import DomainError
 from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, ErrorResponse, Health,
@@ -58,6 +58,13 @@ def create_app(gateway=None, *, settings=None, keys=None):
         # Omit input values from errors, retaining the field location and explanation.
         message = "; ".join(f"{'.'.join(str(v) for v in e['loc'])}: {e['msg']}" for e in error.errors())
         if getattr(request.scope.get("route"), "path", None) == "/v1/orders/{order_id}/cancel":
+            # Invalid JSON can precede dependency resolution. Authenticate before auditing or
+            # reporting validation, preserving spec19's 401 for missing/unknown credentials.
+            if getattr(request.state, "principal", None) is None:
+                try:
+                    resolve_principal(request, await bearer(request))
+                except DomainError as auth_error:
+                    return await domain_error(request, auth_error)
             # Blocking SQLite write: keep it off the event loop, and never let an audit failure replace the 422.
             try:
                 await run_in_threadpool(audit_cancel_validation, request, error.body, message)
@@ -71,6 +78,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     def audit_cancel_validation(request, raw_body, message):
         """Audit a cancel request refused by validation, with a normalised actor (never raw input)."""
+        principal = getattr(request.state, "principal", None)
+        if principal is None:
+            return
         body = raw_body if isinstance(raw_body, dict) else {}
         name = body.get("cancelled_by")
         name = name.strip()[:200] if isinstance(name, str) else ""
@@ -80,7 +90,6 @@ def create_app(gateway=None, *, settings=None, keys=None):
             row = conn.execute("SELECT quote_id,data FROM orders WHERE id=?", (order_id,)).fetchone()
             quote_id = row["quote_id"] if row else None
             inputs = {"order_id": order_id, "reason": reason, **({"quote_id": quote_id} if quote_id else {})}
-            principal = request.state.principal
             if not principal.operator and (row is None or Order.model_validate_json(row["data"]).agent_id != principal.agent_id):
                 return
             actor = "human:operator" if principal.operator else f"agent:{principal.agent_id}"

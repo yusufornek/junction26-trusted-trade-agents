@@ -11,7 +11,7 @@ from .auth import check_owner
 from .catalog import hard_violations
 from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
-from .models import LiveCalls, LookupResult, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
+from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
 from .signing import quote_payload, receipt_payload, signature_digest, verify_jws
 
@@ -295,9 +295,15 @@ class Orders:
         violations = [] if quote.need_ref else list(quote.hard_constraint_violations)
         if quote.need_ref:
             lookup = LookupResult.model_validate_json(conn.execute("SELECT data FROM lookups WHERE id=?", (quote.need_ref,)).fetchone()[0], context={"stored": True})
-            need, effective = self.policy.effective_need(lookup.need)
-            for line in quote.lines:
-                violations.extend(hard_violations(self.catalog.get(line.product_id), need.required_claims, need.exclude_allergens, effective))
+            need = lookup.need
+        else:
+            # Legacy quotes have no stored request, but still belong to a customer. Retain their
+            # recorded request violations and apply that customer's current standing constraints.
+            need = NeedSpec.model_construct(customer_id=quote.customer_id, deliver_by=quote.deliver_by,
+                                            intent="Legacy quote", quantity=Quantity(value=1, unit="SALES_UNIT"))
+        need, effective = self.policy.effective_need(need)
+        for line in quote.lines:
+            violations.extend(hard_violations(self.catalog.get(line.product_id), need.required_claims, need.exclude_allergens, effective))
         return sorted(set(violations))
 
     @staticmethod

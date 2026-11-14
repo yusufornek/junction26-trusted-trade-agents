@@ -23,6 +23,61 @@ from app.models import PolicyUpdateRequest, Quantity, QuoteLineRequest, QuoteReq
 from conftest import demo_catalog, quote_request, raw_product, rebuild_catalog
 
 
+@pytest.mark.parametrize("field", ["max_candidates", "preferences.max_price_per_unit", "preferences.pack_size.min", "preferences.pack_size.max"])
+@pytest.mark.parametrize("value", [True, "5"])
+@pytest.mark.parametrize("transport", ["rest", "mcp"])
+def test_review_strict_preference_numbers(gateway, need, upstream, field, value, transport):
+    body = need.model_dump(mode="json")
+    target = body
+    parts = field.split(".")
+    for part in parts[:-1]:
+        if target.get(part) is None:
+            target[part] = {}
+        target = target.setdefault(part, {})
+    target[parts[-1]] = value
+    if transport == "rest":
+        with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+            response = client.post("/v1/offers", json=body)
+        assert response.status_code == 422
+        assert field in response.json()["message"]
+    else:
+        async def check():
+            with pytest.raises(ToolError) as error:
+                await create_server(gateway, "external").call_tool("find_offers", {"need": body})
+            assert json.loads(str(error.value))["code"] == "VALIDATION_ERROR"
+            assert field in json.loads(str(error.value))["message"]
+        asyncio.run(check())
+    assert not upstream.price_calls and not upstream.decision_calls
+
+
+@pytest.mark.parametrize("unit,field,catalog_unit", [("L", "volume", "LTR"), ("KG", "netWeight", "KGM")])
+def test_review_case_content_needs_no_multiplier(unit, field, catalog_unit):
+    from app.lookup import reconcile_size
+    row = raw_product("case", "Milk case", sales="KI", base="ST")
+    row["units"] = []
+    row["synkkaData"]["unitConversions"] = [{"synkkaPackagingType": "CASE", field: {"value": 6, "unit": catalog_unit}}]
+    product = extract(row, {}, {})
+    assert not product.size_suspect
+    size, source, confirmed, warnings = reconcile_size(product, {}, unit)
+    assert (size, source, confirmed) == (6, "catalog", False)
+    assert {w.code for w in warnings} == {"SIZE_UNCONFIRMED"}
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("price", [{}, {"catalogPrice": {"value": 40}, "comparisonPrice": {"value": 2}, "comparisonUnit": "L"}])
+def test_review_bad_volume_preserves_valid_weight(actual_product_rows, legacy, price):
+    from app.lookup import reconcile_size
+    from app.models import Product
+    product = extract(next(r for r in actual_product_rows if str(r["id"]) == "466324"), {}, {})
+    assert product.size_suspect
+    if legacy:
+        old = product.model_dump(exclude={"volume_suspect", "weight_suspect"})
+        product = Product.model_validate(old)
+    size, source, confirmed, warnings = reconcile_size(product, price, "KG")
+    assert (size, source, confirmed) == (20, "catalog", False)
+    assert {w.code for w in warnings} == {"SIZE_UNCONFIRMED"}
+
+
 def allergen_row(pid, entries=(), free=()):
     row = raw_product(pid, f"Milk {pid} 1 L", multiplier=1, volume=1)
     for group in row["synkkaData"]["classifications"]:
@@ -393,10 +448,67 @@ def test_ac_15_build_fails_loudly_skips_deleted_and_reports_coverage(gateway, tm
     assert result.returncode == 1 and "missing-carbon.csv" in result.stderr
 
 
-def test_ac_16_mocked_demo_still_buys_464306_for_1010(gateway, need, upstream, tmp_path):
+def test_demo_smoke_still_buys_464306_for_1010(gateway, need, upstream, tmp_path):
     demo_catalog(gateway, tmp_path, upstream)
     result = gateway.find_offers(need, actor="agent:web-console")
     best = result.offers[0]
     assert best.product_id == "464306" and best.purchase_total == best.total == 1010
     quote = gateway.orders.create_quote(quote_request(need, qty=1000, product_id="464306", need_ref=result.lookup_id), "web-console")
     assert gateway.orders.place_order(quote.id, "demo-evidence", "web-console").status == "CONFIRMED"
+
+
+def test_ac_16_full_catalog_replays_recorded_demo(gateway, need, upstream, respx_mock):
+    """Offline replay of captured evidence; live acceptance remains a separate manual check."""
+    from pathlib import Path
+    from app.config import ROOT
+    from app.models import NeedSpec
+    capture = json.loads((Path(__file__).parent / "fixtures/demo_lookup_capture.json").read_text())
+    recorded = {o["product_id"]: o for o in capture["offers"]}
+    report = build(gateway.db)  # Real organiser catalog and its reliability/CO2 files, isolated fixture DB.
+    assert report["rows"] == 17546
+    actual = gateway.catalog.get("464306")
+    assert actual.gtin == "6408430000487" and actual.base_volume_l == 1
+    assert actual.name_en == recorded["464306"]["name"]
+    now = audit.utcnow()
+    body = {**capture["need"], "deliver_by": need.deliver_by.isoformat()}
+    request = NeedSpec.model_validate(body)
+
+    def decisions(request):
+        questions = json.loads(request.content)["questions"]
+        return httpx.Response(200, json={"answers": [
+            {"type": "predicate", "name": q["name"], "probability": recorded[q["name"][4:]]["fit"]}
+            for q in questions if q["name"][4:] in recorded]})
+
+    def price(request):
+        ids = json.loads(request.content)["products"]
+        rows = []
+        for pid in ids:
+            if pid not in recorded:
+                continue  # No invented price evidence for candidates absent from the capture.
+            offer = recorded[pid]
+            rows.append({"productId": pid, "quantity": 1, "error": False,
+                "netPriceFound": offer["net_price_found"],
+                "catalogPrice": {"value": offer["unit_price"], "currency": "EUR",
+                    "valueWithTax": offer["unit_price_with_tax"], "validFrom": now.isoformat(),
+                    "validTo": (now + timedelta(days=30)).isoformat()},
+                "comparisonPrice": {"value": offer["price_per_l_or_kg"]}, "comparisonUnit": "L"})
+        return httpx.Response(200, json={"currency": "EUR", "products": rows})
+
+    def availability(request):
+        ids = json.loads(request.content)["products"]
+        return httpx.Response(200, json={"timeNow": now.isoformat(), "products": [
+            {"productId": pid, "closingTime": (now + timedelta(hours=1)).isoformat(), "salesBlock": False,
+             "logisticModel": recorded[pid]["availability"]["logistic_model"], "scheduleLines": [
+                 {"availableAmount": recorded[pid]["availability"]["available_amount"],
+                  "availableDate": need.deliver_by.isoformat(), "salesUnit": recorded[pid]["sales_unit"], "salesBlock": False}]}
+            for pid in ids if pid in recorded]})
+
+    respx_mock.post("https://api.openai.com/v1/decisions").mock(side_effect=decisions)
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=price)
+    respx_mock.post("https://valio.test/api/availability").mock(side_effect=availability)
+    result = gateway.find_offers(request, actor="agent:web-console")
+    assert result.matched_count > len(recorded) and result.screened_count == 40
+    best = result.offers[0]
+    assert (best.product_id, best.purchase_total, best.units_needed) == ("464306", 1010, 1000)
+    quote = gateway.orders.create_quote(quote_request(request, qty=1000, product_id="464306", need_ref=result.lookup_id), "web-console")
+    assert gateway.orders.place_order(quote.id, "full-catalog-demo", "web-console").status == "CONFIRMED"
