@@ -137,9 +137,9 @@ export default function Shell() {
       <div className="group/rail hidden w-[72px] shrink-0 transition-[width] duration-200 ease-out hover:w-[236px] hover:delay-150 focus-within:w-[236px] motion-reduce:transition-none md:block">
         <nav
           aria-label="Main"
-          className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4"
+          className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4 [@media(max-height:900px)]:py-3"
         >
-          <div className="mb-1 flex h-10 items-center gap-3">
+          <div className="mb-1 flex h-10 shrink-0 items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
               <LuotsiMark className="block h-6 w-auto" />
             </span>
@@ -147,12 +147,14 @@ export default function Shell() {
               <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
           </div>
-          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3`}>
+          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3 [@media(max-height:900px)]:mb-1`}>
             <Plus size={20} className="shrink-0" />
             <RailLabel>New request</RailLabel>
           </button>
 
-          <div className="flex flex-col gap-1">
+          {/* Fourteen destinations no longer fit a laptop's height: the list scrolls between the fixed top and bottom
+              rows, and rows tighten below 900 px so most screens need no scrolling at all. */}
+          <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-color:rgba(255,255,255,0.3)_transparent] [scrollbar-width:thin] [@media(max-height:900px)]:gap-0.5">
             {NAV.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
@@ -176,7 +178,7 @@ export default function Shell() {
             ))}
           </div>
 
-          <div className="mt-auto flex flex-col gap-1">
+          <div className="flex shrink-0 flex-col gap-1 pt-2 [@media(max-height:900px)]:gap-0.5 [@media(max-height:900px)]:pt-1">
             <a href="/docs" target="_blank" rel="noreferrer" className={`${RAIL_ROW} ${RAIL_IDLE}`}>
               <CircleHelp size={18} className="shrink-0" />
               <RailLabel>API reference</RailLabel>
@@ -384,7 +386,7 @@ export default function Shell() {
 }
 
 // 40px rows: the icon keeps its place on the collapsed rail, the name slides in beside it.
-const RAIL_ROW = "flex h-10 w-full items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
+const RAIL_ROW = "flex h-10 w-full shrink-0 items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors [@media(max-height:900px)]:h-9";
 const RAIL_IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
 const PHONE_ROW = "flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] font-medium";
 
