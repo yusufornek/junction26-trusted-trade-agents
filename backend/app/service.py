@@ -43,9 +43,17 @@ class Gateway:
         install(self, self.mandates, "revoke", "mutation")
         install(self, self.autonomy, "change", "mutation")
 
+        from .webhooks import Webhooks
+        self.webhooks = Webhooks(self)
+        for name in ("create", "update", "disable", "redeliver"):
+            install(self, self.webhooks, name, "mutation")
+        from .a2a import ProcurementA2A
+        self.a2a = ProcurementA2A(self)
+
         def after_commit():
             self.anchoring.trigger()
             self.outbox.dispatch()
+            self.webhooks.dispatch()
         self.db.on_commit = after_commit
 
     def find_offers(self, need, actor="agent:external", *, mandate=None):
@@ -56,6 +64,7 @@ class Gateway:
         return audit.read(self.db, order_id, quote_id)
 
     def close(self):
+        self.webhooks.client.close()
         self.anchoring.close()
         self.valio.close()
         self.decisions.close()

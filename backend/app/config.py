@@ -20,7 +20,7 @@ def load_env(path: Path = ROOT / ".env.local") -> None:
         if line.startswith("export "):
             line = line[7:]
         key, sep, value = line.partition("=")
-        if sep and key.strip() in {"DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES"}:
+        if sep and key.strip() in {"DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES", "WEBHOOK_SANDBOX"}:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -39,12 +39,14 @@ class Settings:
     keys: Credentials | None = field(default=None, repr=False)
     anchoring: AnchorConfig = field(default_factory=AnchorConfig, repr=False)
     signing_key_dir: Path | None = None  # Defaults to db_path.parent / keys; fixtures stay isolated.
+    webhook_sandbox: bool = False  # Only this explicit sandbox permits http://localhost destinations.
 
     @classmethod
     def from_env(cls):
         load_env()
         return cls(
             db_path=Path(os.getenv("DB_PATH") or cls.db_path),
+            webhook_sandbox=os.getenv("WEBHOOK_SANDBOX", "").lower() == "true",
             signing_key_dir=Path(os.environ["SIGNING_KEY_DIR"]) if os.getenv("SIGNING_KEY_DIR") else None,
             anchoring=AnchorConfig.from_env(),
             valio_api_base=os.getenv("VALIO_API_BASE", cls.valio_api_base).rstrip("/"),

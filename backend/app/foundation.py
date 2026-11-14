@@ -11,6 +11,7 @@ CORRELATION = ContextVar("correlation_id", default=None)
 CAUSATION = ContextVar("causation_id", default=None)
 PRINCIPAL = ContextVar("principal", default=None)
 TRACE = ContextVar("trace_id", default=None)
+TASK = ContextVar("task_id", default=None)
 
 
 def correlation_id():
@@ -37,15 +38,26 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "CANCEL": "order.cancelled", "ORDER_EXPIRED": "order.expired",
                  "EVIDENCE_CHANGED": "order.evidence_changed", "POLICY_UPDATED": "policy.updated",
                  "MANDATE_REVOKED": "mandate.revoked"}
+EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
+    if action == "MANDATE_REVOKED" and data.get("customer_ids") and not data.get("customer_id"):
+        for customer in data["customer_ids"]:
+            for mandate in data.get("jti_revoked", []):
+                emit(conn, action, actor, ts, audit_id,
+                     {"issuer": data["issuer"], "customer_id": customer, "mandate_id": mandate, "jti_revoked": [mandate]})
+        return
     event_type = EVENT_ACTIONS.get(action)
     if event_type is None:
         return
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
+    if kind == "mandate":
+        aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
+    if kind == "proposal":
+        aggregate_id = data.get("proposal_id", aggregate_id)
     if kind == "autonomy":
         aggregate_id = data["agent_id"]
     if aggregate_id is None:
@@ -64,10 +76,11 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     links = {"request_id": obj.get("need_ref") or context.get("request_ref"), "quote_id": quote_id,
              "order_id": order_id, "event_id": event_id, "audit_checkpoint": audit_id,
              "receipt_id": order_id if obj.get("receipt") else None,
-             "trace_id": TRACE.get() or obj.get("links", {}).get("trace_id") or trace_id(), "task_id": None}
-    payload = {**data, "links": links, "status": obj.get("status"), "context": context}
+             "trace_id": TRACE.get() or obj.get("links", {}).get("trace_id") or trace_id(), "task_id": TASK.get()}
+    payload = {**data, "links": links, "status": obj.get("status"), "context": context,
+               "evidence_revision": obj.get("evidence_revision")}
     conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                 (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id"),
+                 (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
                   context.get("environment", "live"), kind, aggregate_id, revision, actor, ts,
                   correlation, CAUSATION.get(), json.dumps(payload), audit_id))
     conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
@@ -105,7 +118,7 @@ class Outbox:
     def register(self, name, handler=None, *, replay=False):
         if not name or (handler is not None and not callable(handler)):
             raise ValueError("A consumer name and callable handler are required")
-        with self.db.connect(write=True) as conn:
+        with self.db.connect(write=True, notify=False) as conn:
             conn.execute("INSERT INTO event_consumers VALUES(?,1) ON CONFLICT(name) DO UPDATE SET enabled=1", (name,))
             if replay:
                 conn.execute("INSERT OR IGNORE INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
@@ -135,7 +148,7 @@ class Outbox:
                     handler(event)
                 except Exception:
                     status = "pending"
-                with self.db.connect(write=True) as conn:
+                with self.db.connect(write=True, notify=False) as conn:
                     conn.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt_at=? WHERE event_id=? AND consumer=?",
                                  (status, (utcnow() + timedelta(seconds=min(3600, 2 ** min(row["attempts"] + 1, 12)))).isoformat(),
                                   row["event_id"], row["consumer"]))
@@ -147,8 +160,8 @@ def manifest():
     from mcp_types import LATEST_PROTOCOL_VERSION
     return {"specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
             "mcp_server_card": {"status": "draft; planned_spec_37", "draft_commit": "526201bbc80231daa40ffcdecfc9da4e54e5dc93"},
-            "a2a": {"version": "1.0", "status": "planned_spec_34"}, "ubl": "2.1",
+            "a2a": {"version": "1.0", "status": "implemented"}, "ubl": "2.1",
             "vc_data_model": "2.0", "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037",
-            "problem_details": "RFC 9457", "standard_webhooks": {"commit": "36afae792227eae8a182a7a1a5711dbdc08a4334", "status": "planned_spec_33"}},
-            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx")},
+            "problem_details": "RFC 9457", "standard_webhooks": {"commit": "36afae792227eae8a182a7a1a5711dbdc08a4334", "status": "implemented", "signature": "v1a Ed25519"}},
+            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx", "a2a-sdk")},
             "limiter_scope": "in-process, single instance", "recovery_version": 1}

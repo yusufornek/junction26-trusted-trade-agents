@@ -149,11 +149,15 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",
                                     "/v1/orders/{order_id}/timeline", "/.well-known/jwks.json", "/v1/audit/head",
                                     "/v1/audit/verify", "/v1/orders/{id}/ubl", "/v1/audit/anchors", "/v1/mandates/revocations", "/v1/meta", "/v1/me",
-                                    "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy"}
+                                    "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy",
+                                    "/.well-known/agent-card.json", "/a2a", "/approvals/{order_id}",
+                                    "/v1/webhook-subscriptions", "/v1/webhook-subscriptions/{subscription_id}",
+                                    "/v1/webhook-subscriptions/{subscription_id}/deliveries",
+                                    "/v1/webhook-subscriptions/{subscription_id}/deliveries/{delivery_id}/redeliver"}
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"]["200"]["content"]
-            assert content.get("application/json", content.get("application/xml"))["schema"]
+            assert content.get("application/json", content.get("application/xml", content.get("text/html")))["schema"]
     # Route inventory includes spec 10, 11 and 13 trust and UBL endpoints.
     models = schema["components"]["schemas"]
     assert {"plans", "no_match_reason"} <= models["LookupResult"]["properties"].keys()

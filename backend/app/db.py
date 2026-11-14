@@ -97,6 +97,8 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            from .transport_storage import A2A_SCHEMA, WEBHOOK_SCHEMA
+            conn.executescript(WEBHOOK_SCHEMA + A2A_SCHEMA)
         # Serialize additive migrations across gateway processes, including first start.
         with self.connect(write=True) as conn:
             # A subsequent build replaces catalog rows only.
@@ -200,7 +202,7 @@ class Database:
                     temporary.unlink(missing_ok=True)
 
     @contextmanager
-    def connect(self, write=False):
+    def connect(self, write=False, *, notify=True):
         active = self._connection.get()
         if active is not None:
             # Nested business writes use savepoints: a refusal rolls its partial state
@@ -265,7 +267,7 @@ class Database:
             conn.close()
             if writer_lock is not None:
                 writer_lock.close()
-        if committed and write and self.on_commit is not None:
+        if committed and write and notify and self.on_commit is not None:
             try:
                 self.on_commit()
             except Exception:

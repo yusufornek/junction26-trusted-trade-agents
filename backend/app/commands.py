@@ -41,6 +41,23 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             require_operator(principal)
     elif route == "mandates.revoke":
         gateway.mandates.authorize_revocation(conn, arguments["token"])
+    elif route in {"webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}:
+        hooks = gateway.webhooks
+        if route == "webhooks.create":
+            body = arguments["body"]
+            hooks._scope(principal, body.customer_ids, body.audience)
+            subscription_id = saved["value"]["id"]
+        else:
+            subscription_id = arguments["subscription_id"]
+        sub = hooks._get(subscription_id, principal, conn)
+        if route == "webhooks.update":
+            proposed = {**sub, **arguments["body"].model_dump(exclude_unset=True)}
+            hooks._scope(principal, proposed["customer_ids"], proposed["audience"])
+        elif route == "webhooks.redeliver":
+            delivery = conn.execute("SELECT id FROM webhook_deliveries WHERE id=? AND subscription_id=?",
+                                    (arguments["delivery_id"], subscription_id)).fetchone()
+            if delivery is None:
+                raise DomainError("WEBHOOK_NOT_FOUND", "Delivery was not found", 404)
     elif route == "gateway.find_offers":
         gateway.mandates.authorize(conn, arguments["mandate"], agent, arguments["need"].customer_id,
                                   products=[offer["product_id"] for offer in saved["value"]["offers"]],
@@ -89,7 +106,8 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 
 
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
-                          "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change"})
+                          "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
+                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"})
 
 
 def fingerprint(scope, route, arguments):
@@ -109,14 +127,16 @@ def matches_command(previous, digest, name, route, arguments, saved):
     # were hashed already; autonomy's omitted target must also match the saved result.
     legacy = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
               if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
-    return (previous["digest"] == sha256(canonical_json(legacy)).hexdigest()
+    # Lane B excluded the resolved principal from its earlier payload hashes.
+    lane_legacy = {"command": name, "arguments": {k: v for k, v in legacy["arguments"].items() if k != "principal"}}
+    return (previous["digest"] in {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
             and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
 
 
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy") if getattr(gateway, key) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "webhooks") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")

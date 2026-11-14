@@ -30,9 +30,10 @@ def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command)
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     organisations(gateway)
-    # Keep the matrix exhaustive when another keyed command is installed.
+    # Webhook commands have the same replay matrix in test_webhooks.py.
     assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
-                                   "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change"}
+                                   "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
+                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}
     actor = "external"
     headers = agent_headers(actor)
     method, url, body = "POST", "", {}
