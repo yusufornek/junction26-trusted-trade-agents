@@ -144,6 +144,8 @@ class Policy:
         return need.model_copy(update=updates), effective
 
     def check_customer(self, agent_id, customer_id, policy=None):
+        from .auth import check_customer_scope
+        check_customer_scope(agent_id, customer_id)
         mandate = (policy or self.get()).agents.get(agent_id)
         if mandate is None:
             raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; procurement requires a mandate", 403)

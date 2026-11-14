@@ -108,6 +108,12 @@ class Database:
                 label TEXT, key_prefix TEXT NOT NULL, key_digest TEXT NOT NULL UNIQUE,
                 customer_ids TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT
             )""")
+            if "credential_kind" not in {row[1] for row in conn.execute("PRAGMA table_info(connections)")}:
+                conn.execute("ALTER TABLE connections ADD COLUMN credential_kind TEXT NOT NULL DEFAULT 'api_key'")
+            from .oauth import SCHEMA as OAUTH_SCHEMA
+            for statement in OAUTH_SCHEMA.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
             # A subsequent build replaces catalog rows only.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
             for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",

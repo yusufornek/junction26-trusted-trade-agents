@@ -50,6 +50,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
                     pass
+            # A request can commit just after the worker's last poll. Drain local
+            # consumers once before shutdown; signed HTTP deliveries remain durable.
+            await run_in_threadpool(service.outbox.dispatch)
         if not serve_mcp:
             worker = asyncio.create_task(deliver_notifications())
             try:
@@ -90,6 +93,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.state.mcp_served = serve_mcp
     from .connections import router as connections_router
     app.include_router(connections_router)
+    from .oauth import install as install_oauth
+    install_oauth(app)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)
@@ -120,7 +125,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     response = await domain_error(request, error)
                     response.headers["X-Correlation-Id"] = CORRELATION.get()
                     return response
-            public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
+            public = request.url.path.startswith("/.well-known/oauth-") or request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
             response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
             if public:

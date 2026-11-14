@@ -1,5 +1,48 @@
 # Trusted Trade Agents backend MVP
 
+## Remote MCP OAuth (spec 43 R-9/R-10, operator stage)
+
+ChatGPT and claude.ai can connect through OAuth at `GATEWAY_PUBLIC_URL` + `/mcp`; no agent key is copied.
+Set `GATEWAY_PUBLIC_URL` to the gateway's public HTTPS origin and run the existing gateway process.
+The server implements the vendored MCP authorization revision 2026-07-28 and accepts 2025-11-25 clients.
+Accounts and tenants are deferred: the human signing in and consenting is the operator.
+
+Public discovery: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`
+and `/.well-known/oauth-authorization-server`. MCP 401s advertise `resource_metadata`. OAuth uses
+`/oauth/authorize`, `/oauth/token` and `/oauth/register`, authorization codes, PKCE S256 only,
+exact registered redirect URI matching, `state`, response `iss` and required `resource=<public origin>/mcp`.
+`mcp` is the buyer scope; `offline_access` is optional and advertised only by the authorization server.
+Both public clients (`none`) and DCR confidential clients (`client_secret_post`, `client_secret_basic`)
+are supported. DCR requires `application_type`. An operator may pre-register a client with
+`POST /v1/oauth/clients` (same metadata plus a chosen `client_id`). Client secrets are returned once.
+
+HTTPS URL client IDs use Client ID Metadata Documents: exact `client_id`, `client_name` and
+`redirect_uris` are required. Fetches use httpx, a 64 KiB decompressed limit, a five-second HTTP timeout
+and stream deadline, no redirects/proxies or forwarded credentials, validated public DNS addresses pinned
+to the request with original Host/SNI. CIMD clients use `token_endpoint_auth_method: none`.
+Metadata is revalidated on each authorization, avoiding stale redirect registration.
+
+The plain backend consent page signs in with the operator token, then shows agent/customer/scope choices.
+Its request-bound, short-lived HttpOnly cookie and CSRF token protect the decision. New agents use the
+same approval-first mandate rules as API-key connections; existing agents keep their authority.
+Set optional `FRONTEND_CONSENT_URL` to an HTTPS console page to receive `request_id` instead.
+The console uses operator Bearer `GET /v1/oauth/requests/{request_id}` and
+`POST /v1/oauth/requests/{request_id}/decision` with `{decision, agent_id?, customer_ids?, scopes?}`.
+The one-time `redirect_url` must be navigated to, never stored or logged. Denial returns `access_denied`.
+
+Approved consents appear in `/v1/connections` with `credential_kind: oauth` and the non-secret label
+`key_prefix: oauth`; DELETE revokes all related token families. Tokens resolve only on `/mcp`, as the
+selected agent, with customer access intersected with its current mandate. Business audit actors remain
+`agent:<agent_id>`. Access tokens expire in one hour; refresh tokens in 30 days from issue, with rotation and
+reuse detection revoking the entire family. Rotation also invalidates prior access tokens. Codes expire
+in five minutes; pending consents and browser sessions in ten. Credentials are kept only as SHA-256
+digests and are absent from consent views, audit, errors and ordinary responses after issuance.
+Existing environment and connection keys continue to work.
+
+From `backend/`, verify offline with `.venv/bin/python -m pytest tests/test_spec43_oauth_operator.py -q`
+(httpx CIMD fetches are mocked with respx) and regenerate the contract with
+`.venv/bin/python scripts/export_openapi.py`. Full console details: `docs/CONNECT-API.md`.
+
 ## Agent connections (spec 42)
 
 The console's Connect page uses operator-only `POST /v1/connections` with a required

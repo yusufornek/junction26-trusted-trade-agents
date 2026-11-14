@@ -126,6 +126,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
     server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
+        "Remote /mcp accepts agent keys or OAuth access tokens for this exact MCP resource. ChatGPT and claude.ai use OAuth discovery and operator consent; consent limits customers without expanding the agent mandate. Revoked/expired credentials require reconnecting to the gateway issuer. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
         "A2A 1.0 clients discover /.well-known/agent-card.json and use /a2a over the same authenticated core. Signed customer-scoped webhook subscriptions are managed through /v1/webhook-subscriptions; delivery status is separate from purchasing approval. "
         "Domain failures return isError=true and RFC 9457 structured content with code/message, recovery_version=1, retryable, next_action, retry_after_seconds and violations. Follow next_action, not prose. Pending orders return WAIT_FOR_APPROVAL and poll_after_seconds. "

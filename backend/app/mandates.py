@@ -80,6 +80,8 @@ class Mandates:
         return digest
 
     def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None):
+        from .auth import check_customer_scope
+        check_customer_scope(agent_id, customer_id)
         from .buyer import check_suspension
         check_suspension(self.db, agent_id)
         policy = policy or self.policy.get()
