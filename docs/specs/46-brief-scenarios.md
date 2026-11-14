@@ -1,6 +1,6 @@
 # 46 — The five brief scenarios, end to end
 
-Status: in progress · Decided on 2026-11-14 with Gökalp: every example scenario in the brief must work end to end.
+Status: implemented · Decided on 2026-11-14 with Gökalp: every example scenario in the brief must work end to end.
 Builds on specs 30 (exception journey), 31 (functional substitution), 32 (recipe to basket), 35 (recurring orders),
 36 (supplier proposals) and 41 (purchase memory).
 
@@ -54,3 +54,45 @@ the procurement work: what to buy, what can arrive in time, what to substitute a
 - **AC-7** Each of the five demo scripts runs green in the test suite.
 - **AC-8** The demo path (customer 1, 1000 L lactose-free milk → 464306, 1,010 €, CONFIRMED for hotel-chain-agent)
   is unchanged.
+
+## Decisions taken
+- On-hand inventory is a physical amount and does not scale with servings. Compatible mass/volume prefixes are
+  converted exactly; cross-dimensional inventory requires explicit manifest density. The procurement deficit
+  is calculated before the existing whole-pack rounding, so pack overbuy remains visible.
+- `focus_ingredient` names an ingredient, case-insensitively. Shared SKUs keep the substitution approval binding
+  even when another ingredient uses that same product as its preferred choice.
+- Nutrient limits are standing customer fields. Explicit catalog `nutritionalContent` amounts and basis units
+  are normalised to grams per 100 g/ml. Missing/ambiguous facts fail closed, with product-specific reasons.
+- A missed cut-off does not invent a next delivery date: `earliest_possible_date` is null unless current supplier
+  evidence establishes one. Comparison fields remain present with null values when evidence is unavailable.
+- Monitoring checks each future occurrence and each open quote/unquoted basket once per scan, and deduplicates
+  notifications by source, product and delivery date. It runs every minute through the existing recurring
+  scheduler and may be triggered explicitly. If no functional need was recorded or no compatible alternative
+  passes, the alert explains why a verified substitute is unavailable; the gateway never guesses recipe logic.
+- Demo procurement is over the in-process MCP server. Human review uses the existing buyer approval service,
+  and the stock-out demo delivers a real signed webhook through an in-memory HTTP receiver without networking.
+
+## Implementation files
+- New capability modules: `backend/app/brief_scenarios.py`, `brief_scenarios_watch.py`,
+  `brief_scenarios_selling.py`.
+- Existing flow/schema hooks in `backend/app/`: `api.py`, `baskets.py`, `catalog.py`, `foundation.py`,
+  `lookup.py`, `mcp_server.py`, `models.py`, `orders.py`, `policy.py`, `proposals.py`, `recurring.py`,
+  `sandbox.py`, `service.py`, `substitution.py`, `suppliers.py`, `visibility.py`, `webhooks.py`.
+- MCP demo client: `backend/demo/brief_scenarios_runner.py`, plus the five `scenario_1_recipe_order.py`,
+  `scenario_2_last_minute_event.py`, `scenario_3_stockout.py`, `scenario_4_proactive_selling.py`,
+  `scenario_5_allergen_safe_substitution.py` entry points.
+- Deterministic fixtures: the matching five files in `backend/sandbox/scenarios/scenario_*.yaml`.
+- Acceptance tests: `backend/tests/test_spec46_brief_scenarios.py` (exactly AC-1 through AC-8). Existing
+  `backend/tests/test_api_mcp.py` inventories include the new tools and routes.
+- Pitch/run guide: `docs/SCENARIOS.md`; task tracking: only task 46 in `docs/TASKS.md`.
+- Generated tool/developer/OpenAPI artifacts are deliberately left for regeneration at merge.
+
+## Verification
+- Final acceptance/interface run: **14 passed**, including all eight AC tests and all five socket-blocked demos.
+- Related-module runs: **372 distinct tests passed** across the focused runs; the full suite was not run.
+- The generated-artifact equality assertion in
+  `test_purchase_memory.py::test_review_memory_interfaces_and_mcp_workflows_remain_registered` awaits the
+  explicitly deferred merge regeneration of tool/developer/OpenAPI artifacts.
+- `test_purchase_memory.py::test_review_memory_current_customer_grant[customer]` also fails with the pre-change
+  shared modules in an isolated temporary copy (expected 403, observed 200). That existing account/memory grant
+  behaviour was not changed in this capability.

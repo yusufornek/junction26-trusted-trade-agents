@@ -163,6 +163,7 @@ class LiveCalls(Model):
 
 
 class Product(Model):
+    nutrition_per_100: dict[str, float] = Field(default_factory=dict, exclude_if=lambda v: not v)
     supplier_id: str = "valio"
     supplier_sku: str | None = Field(default=None, exclude_if=lambda v: v is None)
     synthetic: bool = False
@@ -255,6 +256,9 @@ class NameSizeCandidate(Model):
 
 
 class OfferCard(Model):
+    trade_off: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    arrives_in_time: bool | None = Field(default=None, exclude_if=lambda v: v is None)
+    cannot_source_in_time: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     supplier_id: str = "valio"
     synthetic: bool = False
     tax_basis: Literal["net"] = Field(default="net", exclude_if=lambda v: v == "net")
@@ -361,6 +365,7 @@ class Retrieval(Model):
 
 class LookupResult(Model):
     policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used by this lookup.")
+    excluded_products: list[dict] = Field(default_factory=list, exclude_if=lambda v: not v)
     supplier_id: str = "valio"
     environment: Literal["live", "sandbox"] = "live"
     synthetic: bool = False
@@ -398,7 +403,14 @@ class IngredientQuantity(Model):
         return value.strip().upper() if isinstance(value, str) else value
 
 
+class OnHand(IngredientQuantity):
+    value: float = Field(ge=0, le=1_000_000, strict=True)
+
+
 class Ingredient(Model):
+    on_hand: OnHand | None = None
+    function: FunctionalNeed | None = None
+    substitute_for: SubstituteFor | None = None
     name: InputText = Field(min_length=1)
     quantity: IngredientQuantity
     search_terms: InputTexts | None = None
@@ -410,6 +422,7 @@ class Ingredient(Model):
 
 class IngredientManifest(Model):
     version: Literal[1] = 1
+    focus_ingredient: InputText | None = None
     recipe_name: InputText = Field(min_length=1)
     servings: float = Field(gt=0, le=1_000_000, strict=True, description="Servings represented by the quantities unless base_servings is supplied; then the target servings.")
     base_servings: float | None = Field(default=None, gt=0, le=1_000_000, strict=True, exclude_if=lambda v: v is None,
@@ -427,6 +440,9 @@ class BasketLookupRequest(RequestScope):
 class IngredientCoverage(Model):
     ingredient_index: int
     name: str
+    needed: OnHand | None = None
+    on_hand: OnHand | None = None
+    to_buy: OnHand | None = None
     requested: IngredientQuantity
     covered: float = Field(ge=0, le=1, description="Fraction of this scaled ingredient covered on time.")
     product_id: str | None = None
@@ -443,6 +459,7 @@ class UncoveredIngredient(Model):
 
 
 class IngredientOffers(Model):
+    excluded_products: list[dict] = Field(default_factory=list, exclude_if=lambda v: not v)
     ingredient_index: int
     name: str
     offers: list[OfferCard]
@@ -917,6 +934,11 @@ class SubstitutionProfile(Model):
 
 
 class CustomerConstraints(Model):
+    max_salt_g: float | None = Field(default=None, ge=0)
+    max_sugar_g: float | None = Field(default=None, ge=0)
+    max_saturated_fat_g: float | None = Field(default=None, ge=0)
+    min_protein_g: float | None = Field(default=None, ge=0)
+
     substitution_profile: SubstitutionProfile | None = None
     clinical_review: Literal["required"] | None = None
     mandate_issuers: dict[InputText, list[BuyerJWK]] = Field(default_factory=dict, description="Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator onboarding only.")
@@ -931,6 +953,7 @@ class ConstraintSource(Model):
 
 
 class EffectiveConstraints(Model):
+    nutrient_limits: dict[str, float] = Field(default_factory=dict, exclude_if=lambda v: not v)
     required_claims: list[ConstraintSource] = Field(default_factory=list)
     exclude_allergens: list[ConstraintSource] = Field(default_factory=list)
 

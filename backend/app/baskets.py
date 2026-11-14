@@ -92,24 +92,44 @@ class Baskets:
         scaled = IngredientManifest.model_validate(data)
         needs, sources, pools, fits, exclusions = [], [], [], [], []
         products = {}
-        for ingredient in scaled.ingredients:
-            q = ingredient.quantity
-            unit = {"G": "KG", "ML": "L"}.get(q.unit, q.unit)
-            value = q.value / 1000 if q.unit in {"G", "ML"} else q.value
+        excluded_products = []
+        from .brief_scenarios import stock_to_buy, filter_nutrition, annotate_timing, annotate_substitution
+        from .substitution import functional_categories, include_preferred, annotate, rank_substitutes
+        demands = [stock_to_buy(ingredient, Fraction(str(original.quantity.value))
+            * Fraction(str(request.servings or request.manifest.servings))
+            / Fraction(str(request.manifest.base_servings or request.manifest.servings)))
+            for ingredient, original in zip(scaled.ingredients, request.manifest.ingredients)]
+        for ingredient, demand in zip(scaled.ingredients, demands):
+            deficit, deficit_unit, _, _ = demand
             need = NeedSpec(customer_id=request.customer_id, deliver_by=request.deliver_by,
                             intent=ingredient.name, search_terms=ingredient.search_terms,
                             required_claims=ingredient.required_claims, exclude_allergens=ingredient.exclude_allergens,
-                            quantity=Quantity(value=value, unit=unit))
+                            quantity=Quantity(value=float(deficit) or 1, unit=deficit_unit),
+                            function=ingredient.function, substitute_for=ingredient.substitute_for)
             need, effective = g.policy.effective_need(need, policy)
             removed = {}
+            rejected = []
+            excluded_products.append(rejected)
+            functional = functional_categories(g.catalog, need)
+            ingredient_categories = (sorted(functional if categories is None else functional.intersection(categories)) if functional is not None else categories)
             pool, _ = g.catalog.search(" ".join(need.search_terms) if need.search_terms else need.intent,
                 need.required_claims, need.exclude_allergens, policy.shortlist.catalog_pool,
-                max_limit=policy.shortlist.catalog_pool, removed_by=removed, sources=effective, categories=categories)
+                max_limit=policy.shortlist.catalog_pool, removed_by=removed, sources=effective, categories=ingredient_categories, excluded_products=rejected)
             if not pool and not need.search_terms and ingredient.substitutions_allowed:
                 pool, _ = g.catalog.search(" ".join(broadened_terms(need.intent)), need.required_claims,
                     need.exclude_allergens, policy.shortlist.catalog_pool, max_limit=policy.shortlist.catalog_pool,
-                    mode="or", removed_by=removed, sources=effective, categories=categories)
+                    mode="or", removed_by=removed, sources=effective, categories=ingredient_categories, excluded_products=rejected)
+            if ingredient.function and ingredient.substitutions_allowed:
+                extra, _ = g.catalog.search(ingredient.function.product_type, need.required_claims, need.exclude_allergens,
+                    policy.shortlist.catalog_pool, max_limit=policy.shortlist.catalog_pool, sources=effective, categories=ingredient_categories)
+                pool = list({p.id: p for p in [*pool, *extra]}.values())
+            pool = include_preferred(pool, need, g.catalog, ingredient_categories)
+            if ingredient.substitute_for and not ingredient.substitutions_allowed:
+                pool = [p for p in pool if p.id == ingredient.substitute_for.product_id]
+            pool = filter_nutrition(pool, effective, removed) if deficit else []
             fit = g.decisions.ask(need, pool, counter) or {}
+            if need.function:
+                pool = [p for p in pool if fit.get(p.id, {}).get("probability", -1) >= policy.approval.min_fit_probability]
             # Keep unavailable fit evidence visible for human review, as in ordinary lookup.
             pool.sort(key=lambda p: -fit.get(p.id, {}).get("probability", -1))
             pool = pool[:policy.shortlist.live_max]
@@ -119,7 +139,11 @@ class Baskets:
             pools.append(pool)
             fits.append(fit)
             exclusions.append(removed)
-        ids = list(products)
+        from .models import SubstituteFor
+        for ingredient, need, pool in zip(scaled.ingredients, needs, pools):
+            if ingredient.function and ingredient.substitutions_allowed and pool and not need.substitute_for:
+                need.substitute_for = SubstituteFor(product_id=pool[0].id)
+        ids = list(dict.fromkeys([*products, *[n.substitute_for.product_id for n in needs if n.substitute_for]]))
         price = g.valio.fetch("price", request.customer_id, request.deliver_by, ids, counter)
         stock = g.valio.fetch("availability", request.customer_id, request.deliver_by, ids, counter)
         with self.db.connect() as conn:
@@ -131,11 +155,7 @@ class Baskets:
             unit_failure = False
             for p in pool:
                 candidate_need = need
-                original_quantity = request.manifest.ingredients[i].quantity
-                exact = (Fraction(str(original_quantity.value)) * Fraction(str(request.servings or request.manifest.servings))
-                         / Fraction(str(request.manifest.base_servings or request.manifest.servings)))
-                if original_quantity.unit in {"G", "ML"}:
-                    exact /= 1000
+                exact = demands[i][0]
                 if not reconcile_size(p, price.get(p.id, {}), need.quantity.unit)[0]:
                     other = {"KG": "L", "L": "KG"}.get(need.quantity.unit)
                     density = ingredient.density_kg_per_l or p.density_kg_per_l
@@ -156,10 +176,25 @@ class Baskets:
                 exact_demands[i, p.id] = exact
             rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability,
                  catalog_stats=g.catalog.metadata("ranking"), reject_codes=policy.reject.on)
+            for offer in offers:
+                annotate(offer, need, g.catalog, policy, price)
+                annotate_substitution(offer, need, g.catalog, price, stock)
+            annotate_timing(offers, need, g.catalog, price, stock)
+            if need.substitute_for:
+                preferred = next((o for o in offers if o.product_id == need.substitute_for.product_id), None)
+                offers = rank_substitutes(offers, need, g.catalog, price)
+                if preferred and all(o.product_id != preferred.product_id for o in offers):
+                    offers.append(preferred)  # Keep late/stock-out evidence visible beside its alternatives.
+            if ingredient.function:
+                offers.sort(key=lambda o: not o.arrives_in_time)
             invalid = set(policy.reject.on) | {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "UNIT_MISMATCH"}
             chosen = next((o for o in offers if not any(w.code in invalid for w in o.warnings)), None)
             results.append({"ingredient_index": i, "name": ingredient.name, "offers": offers,
-                            "chosen_line": chosen.product_id if chosen else None, "exclusion_counts": exclusions[i]})
+                            "chosen_line": chosen.product_id if chosen else None, "exclusion_counts": exclusions[i],
+                            "excluded_products": excluded_products[i]})
+            if not demands[i][0]:
+                allocations[i] = (None, 1.0)
+                continue
             if chosen is None:
                 uncovered.append({"ingredient_index": i, "name": ingredient.name,
                                   "reason": "unit cannot be converted" if unit_failure else "no compliant product"})
@@ -168,6 +203,9 @@ class Baskets:
             selected.setdefault(pid, []).append((i, converted[pid], chosen))
         lines, line_needs, coverages = [], {}, []
         for pid, entries in selected.items():
+            # Shared SKUs retain the strictest approval binding, including a replaced focus ingredient.
+            entries.sort(key=lambda entry: (entry[2].substitution is None,
+                scaled.ingredients[entry[0]].name.casefold() != (scaled.focus_ingredient or "").casefold()))
             # Sum exact fractions of sales packs BEFORE rounding, including cross-dimensional ingredients.
             packs = sum((exact_demands[i, pid] / Fraction(str(o.size_per_sales_unit))
                          for i, n, o in entries), Fraction(0))
@@ -188,6 +226,10 @@ class Baskets:
             fit = {"probability": min(o.fit for _, _, o in entries if o.fit is not None), "question": entries[0][2].fit_question} if all(o.fit is not None for _, _, o in entries) else None
             line = offer_for(products[pid], effective_need, price[pid], stock[pid], fit, sales_quantity=lots,
                              reserved_amount=reservations[pid], sources=effective)
+            annotate(line, effective_need, g.catalog, policy, price)
+            annotate_substitution(line, effective_need, g.catalog, price, stock)
+            from .brief_scenarios import basket_line_timing
+            basket_line_timing(line, effective_need, entries, results, g.catalog, price, stock, reservations)
             lines.append(line)
             line_needs[pid] = raw_merged
             for i, n, o in entries:
@@ -203,6 +245,8 @@ class Baskets:
                               "covered": fraction, "product_id": pid, "coverage": fraction,
                               "quantity": ingredient.quantity, "purchasable_quantity": results[i].get("purchasable_quantity"),
                               "overbuy": results[i].get("overbuy")})
+        from .brief_scenarios import enrich_coverage
+        enrich_coverage(coverages, scaled)
         total = float(sum((Decimal(str(o.total)) for o in lines), Decimal(0)))
         warnings = [warning("PARTIAL_BASKET")] if uncovered else []
         preview = g.policy.evaluate(total, lines, agent_id=agent_id, customer_id=request.customer_id,

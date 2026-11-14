@@ -16,7 +16,8 @@ EXPECTED_MCP_TOOLS = {"search_products", "find_offers", "create_quote", "place_o
     "get_order_status", "get_order_receipt", "cancel_order", "get_order_ubl", "get_order_evidence",
     "find_basket_offers", "get_agent_context", "list_proposals", "get_replenishment_suggestions", "prepare_suggestion",
     "create_recurring_from_suggestion", "list_recurring_orders", "create_recurring_order",
-    "run_recurring_order_now", "pause_recurring_order", "apply_anomaly_fix"}
+    "run_recurring_order_now", "pause_recurring_order", "apply_anomaly_fix",
+    "list_stockout_alerts", "run_stockout_watch", "suggest_proposals", "accept_proposal"}
 
 
 @pytest.mark.parametrize("registered_agents", [("hotel-agent",)], indirect=True)
@@ -183,6 +184,7 @@ def test_contract_all_routes_have_response_schema():
                                     "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token",
                                     "/oauth/register", "/v1/oauth/clients", "/v1/oauth/requests/{request_id}",
                                     "/v1/oauth/requests/{request_id}/decision"}
+    legacy_paths.update({"/v1/stockout-watch/run", "/v1/stockout-watch/inbox", "/v1/proposals/suggest"})
     assert legacy_paths <= set(schema["paths"])
     assert all(path.startswith(("/v1/auth/", "/v1/tenant/", "/v1/operator/", "/v1/connect/", "/v1/oauth/", "/oauth/",
                                "/.well-known/oauth-", "/a2a/tenant", "/a2a/operator")) for path in set(schema["paths"]) - legacy_paths)

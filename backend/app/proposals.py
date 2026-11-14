@@ -254,7 +254,9 @@ class Proposals:
                     removed = {}
                     filtered = []
                     for p in permitted:
+                        from .brief_scenarios import nutrition_failures, NUTRIENTS
                         failures = hard_violations(p, constraints.required_claims if constraints else [], constraints.exclude_allergens if constraints else [])
+                        failures += [reason for _, _, reason in nutrition_failures(p, {k: getattr(constraints, k) for k in NUTRIENTS if constraints and getattr(constraints, k) is not None})]
                         if failures:
                             removed[p.id] = failures
                         else:

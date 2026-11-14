@@ -1,0 +1,21 @@
+customers:
+  recipe:
+    exclude_allergens: [AM]
+    max_salt_g: 0.2
+  hospital:
+    exclude_allergens: [AM]
+    max_salt_g: 0.2
+    clinical_review: required
+    substitution_profile:
+      max_price_increase_pct: 50
+      pack_size_range: {min: 0.5, max: 2}
+      requires_approval: true
+  "1": {}
+organisations:
+  hospital: {customer_ids: [hospital, recipe, "1"]}
+identities:
+  sandbox-agent: {kind: agent, role: agent, organisation_id: hospital}
+  hospital-approver: {kind: buyer_user, role: buyer_approver, organisation_id: hospital}
+  supplier-agent: {kind: supplier_agent, role: supplier_agent}
+recurring: false
+products: [{"id":"usual-oat","name":"Oat drink UHT 1 L","category":"drinks","unit":"L","size":1,"price":2,"stock":0,"nutrition_per_100":{"salt_g":0.1,"protein_g":2},"claims":["VEGAN"],"allergens":{"AM":"FREE_FROM"}},{"id":"new-oat","name":"Oat drink cooking UHT 1 L","category":"drinks","unit":"L","size":1,"price":2.2,"stock":1000,"nutrition_per_100":{"salt_g":0.05,"protein_g":3},"claims":["VEGAN"],"allergens":{"AM":"FREE_FROM"}},{"id":"similar-wrong","name":"Oat drink chocolate dessert 1 KG","category":"desserts","unit":"KG","size":1,"price":1,"stock":1000,"fit":0.1,"nutrition_per_100":{"salt_g":0.02},"allergens":{"AM":"FREE_FROM"}},{"id":"salty-oat","name":"Oat drink salted 1 L","category":"drinks","unit":"L","size":1,"price":1,"stock":1000,"nutrition_per_100":{"salt_g":1},"allergens":{"AM":"FREE_FROM"}},{"id":"unknown-oat","name":"Oat drink unmeasured 1 L","category":"drinks","unit":"L","size":1,"price":1.5,"stock":1000,"allergens":{"AM":"FREE_FROM"}},{"id":"milk-oat","name":"Oat drink milk blend 1 L","category":"drinks","unit":"L","size":1,"price":1,"stock":1000,"allergens":{"AM":"CONTAINS"},"nutrition_per_100":{"salt_g":0.01}},{"id":"464306","name":"Valio Eila lactose free milk 1 L","category":"milk","unit":"L","size":1,"price":1.01,"stock":100000,"claims":["FREE_FROM_LACTOSE"],"allergens":{"AM":"CONTAINS"}}]

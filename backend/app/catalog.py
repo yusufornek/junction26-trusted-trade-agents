@@ -306,7 +306,9 @@ def extract(raw, reliability, carbon):
             if code and status in ({"contains", "may_contain", "undeclared"} if group == "allergen" else {"free_from"}):
                 statuses.setdefault(code, set()).add(status)
                 declaration |= status != "free_from"
+    from .brief_scenarios import nutrition_facts
     return Product(
+        nutrition_per_100=nutrition_facts(synkka),
         id=str(raw["id"]), name_en=localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi"),
         gtin=str(raw["salesUnitGtin"]) if raw.get("salesUnitGtin") else None,
         unit_gtins={u["unitId"]: str(u["gtin"]) for u in (raw.get("units") or []) if u.get("gtin")},
@@ -351,6 +353,7 @@ def build(db, source=ROOT / "data/product_data.json.gz", reliability_path=ROOT /
                 continue
             product = extract(raw, reliability, carbon)
             values = product.model_dump()
+            values.pop("nutrition_per_100", None)  # Evidence lives in data; no indexed SQL column needed.
             for field in Product.model_fields:
                 value = getattr(product, field)
 
@@ -421,7 +424,9 @@ def constraint_failures(product, required_claims, exclude_allergens):
 
 
 def hard_violations(product, required_claims, exclude_allergens, sources=None):
-    return [f"{product.id}: {reason} {code} ({source})"
+    from .brief_scenarios import nutrition_failures
+    nutrition = [f"{product.id}: {reason} ({code}) (customer_policy)" for _, code, reason in nutrition_failures(product, sources.nutrient_limits if sources else {})]
+    return nutrition + [f"{product.id}: {reason} {code} ({source})"
             for field, code, reason in constraint_failures(product, required_claims, exclude_allergens)
             for source in ([v.source for v in getattr(sources, field) if v.code == code] if sources else ["request"])]
 
@@ -461,7 +466,7 @@ class Catalog:
 
     @traced("catalog.search")
     def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
-               removed_by=None, mode="and", counts=None, sources=None, categories=None):
+               removed_by=None, mode="and", counts=None, sources=None, categories=None, excluded_products=None):
         """Keep the (products, excluded) API; optional counts includes every hard-filter match.
 
         OR retrieval orders by distinct terms matched, then FTS rank and product ID.
@@ -501,12 +506,15 @@ class Catalog:
                 p = Product.model_validate_json(row["data"])
                 if categories is not None and p.category not in categories:
                     continue
-                failures = constraint_failures(p, required_claims, exclude_allergens)
+                from .brief_scenarios import nutrition_failures
+                failures = constraint_failures(p, required_claims, exclude_allergens) + nutrition_failures(p, sources.nutrient_limits if sources else {})
                 if failures:
+                    if excluded_products is not None:
+                        excluded_products.append({"product_id": p.id, "reasons": [f"{field}.{code}: {reason}" for field, code, reason in failures]})
                     excluded += 1
                     if removed_by is not None:
                         for field, code, reason in failures:
-                            origins = [v.source for v in getattr(sources, field) if v.code == code] if sources else ["request"]
+                            origins = (["customer_policy"] if field == "nutrient_limits" else [v.source for v in getattr(sources, field) if v.code == code]) if sources else ["request"]
                             for origin in origins:
                                 key = f"{field}.{code} ({origin}; {reason})"
                                 removed_by[key] = removed_by.get(key, 0) + 1

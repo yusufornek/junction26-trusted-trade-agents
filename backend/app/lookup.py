@@ -472,20 +472,22 @@ class Lookup:
         if governance:
             categories = governance.categories(policy._governance, categories)
         removed_by, counts = {}, {}
+        excluded_products = []
         retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
                               terms_used=list(need.search_terms) if need.search_terms else
                               re.findall(r"[^\W_]+", need.intent, re.UNICODE))
         pool, excluded = catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
                                              max_limit=pool_size, removed_by=removed_by, counts=counts, sources=effective,
-                                             categories=categories)
+                                             categories=categories, excluded_products=excluded_products)
         global_warnings = []
         if not pool and retrieval.mode == "intent":
             retrieval = Retrieval(mode="intent_broadened", terms_used=broadened_terms(need.intent))
             removed_by, counts = {}, {}
+            excluded_products.clear()
             pool, excluded = catalog.search(" ".join(retrieval.terms_used), need.required_claims,
                                                  need.exclude_allergens, pool_size, max_limit=pool_size,
                                                  removed_by=removed_by, mode="or", counts=counts, sources=effective,
-                                                 categories=categories)
+                                                 categories=categories, excluded_products=excluded_products)
             global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
                 f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
         matched_count = counts.get("matched_count", len(pool))
@@ -498,6 +500,10 @@ class Lookup:
             pool = [p for p in pool if not constraint_failures(p, need.required_claims, need.exclude_allergens)
                     and (categories is None or p.category in categories)]
             matched_count = len(pool)
+        from .brief_scenarios import filter_nutrition
+        before = len(pool)
+        pool = filter_nutrition(pool, effective, removed_by)
+        excluded += before - len(pool)
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = counter.screened_count
@@ -522,10 +528,10 @@ class Lookup:
             preferred = next((p for p in pool if p.id == need.substitute_for.product_id), None)
             if preferred and all(p.id != preferred.id for p in candidates):
                 candidates = [preferred, *candidates[:max(0, policy.shortlist.live_max - 1)]]
-        return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool)
+        return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool, excluded_products)
 
     def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None, product_ids=None):
-        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter, product_ids=product_ids)
+        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool, excluded_products) = prepared or self.prepare(need, actor, mandate, counter, product_ids=product_ids)
         adapter = self.suppliers.get(need.supplier_id)
         catalog = adapter.catalog
         ids = [p.id for p in candidates]
@@ -561,6 +567,10 @@ class Lookup:
         from .substitution import annotate, rank_substitutes
         for offer in offers:
             annotate(offer, need, catalog, policy, price)
+        from .brief_scenarios import annotate_timing, annotate_substitution
+        annotate_timing(offers, need, catalog, price, stock)
+        for offer in offers:
+            annotate_substitution(offer, need, catalog, price, stock)
         if need.substitute_for:
             offers = rank_substitutes(offers, need, catalog, price)
 
@@ -582,7 +592,7 @@ class Lookup:
             "exclude_allergens": catalog.normalize_codes(original_need.exclude_allergens, "exclude_allergens"),
             "preferences": need.preferences})
         result = LookupResult(supplier_id=need.supplier_id, environment=ENVIRONMENT.get(), synthetic=adapter.synthetic, mandate=record, lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
-                              exclusion_counts=removed_by, offers=returned, plans=plans,
+                              exclusion_counts=removed_by, excluded_products=excluded_products, offers=returned, plans=plans,
                               no_match_reason=no_match_reason, excluded_count=excluded,
                               retrieval=retrieval, matched_count=matched_count,
                               priced_count=len(candidates), screened_count=screened_count,

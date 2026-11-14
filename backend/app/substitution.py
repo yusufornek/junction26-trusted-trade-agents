@@ -92,7 +92,7 @@ def rank_substitutes(offers, need, catalog, prices):
     blocked = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "UNIT_MISMATCH", "SALES_BLOCK", "NO_STOCK", "NOT_AVAILABLE"}
     def usable(o):
         return o.availability.enough and not any(w.code in blocked for w in o.warnings)
-    if preferred and usable(preferred):
+    if preferred and usable(preferred) and preferred.arrives_in_time is not False:
         preferred.rank_label = "best"
         return [preferred]
     baseline = prices.get(original.id, {})

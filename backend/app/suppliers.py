@@ -169,7 +169,7 @@ class SupplierCatalog(Catalog):
 
     @traced("catalog.search")
     def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
-               removed_by=None, mode="and", counts=None, sources=None, categories=None):
+               removed_by=None, mode="and", counts=None, sources=None, categories=None, excluded_products=None):
         claims = self.normalize_codes(required_claims or [], "required_claims")
         allergens = self.normalize_codes(exclude_allergens or [], "exclude_allergens")
         if not 1 <= limit <= max_limit:
@@ -181,12 +181,15 @@ class SupplierCatalog(Catalog):
             hits = [t in words for t in tokens]
             if not hits or not (any(hits) if mode == "or" else all(hits)) or (categories is not None and p.category not in categories):
                 continue
-            failures = constraint_failures(p, claims, allergens)
+            from .brief_scenarios import nutrition_failures
+            failures = constraint_failures(p, claims, allergens) + nutrition_failures(p, sources.nutrient_limits if sources else {})
             if failures:
+                if excluded_products is not None:
+                    excluded_products.append({"product_id": p.id, "reasons": [f"{field}.{code}: {reason}" for field, code, reason in failures]})
                 excluded += 1
                 if removed_by is not None:
                     for field, code, reason in failures:
-                        origins = [v.source for v in getattr(sources, field) if v.code == code] if sources else ["request"]
+                        origins = (["customer_policy"] if field == "nutrient_limits" else [v.source for v in getattr(sources, field) if v.code == code]) if sources else ["request"]
                         for origin in origins:
                             key = f"{field}.{code} ({origin}; {reason})"
                             removed_by[key] = removed_by.get(key, 0) + 1
