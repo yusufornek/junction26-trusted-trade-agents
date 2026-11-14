@@ -190,7 +190,9 @@ class ProcurementA2A:
             from .commands import ADMISSION, failure_audit
             admission_token = ADMISSION.set(None)
             try:
-                task = self._send(params, principal, mandate)
+                from .connection_contract_surface import a2a_scope
+                with a2a_scope(self.gateway, params, principal):
+                    task = self._send(params, principal, mandate)
                 from .agent_surface_interpret import note_a2a
                 note_a2a(self.gateway, params, principal)
             except DomainError as error:

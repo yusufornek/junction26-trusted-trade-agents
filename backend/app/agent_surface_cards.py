@@ -72,6 +72,7 @@ async def enrich_agent_card(card, gateway, audience):
     existing = {skill.id: skill for skill in card.skills}
     del card.skills[:]
     schemas = {}
+    from .connection_contract import manager
     toolmap = {tool.name: tool for tool in tools}
     for name in [*toolmap, *(name for name, target in aliases.items() if target in toolmap)]:
         tool = toolmap.get(name) or toolmap[aliases[name]]
@@ -100,6 +101,8 @@ async def enrich_agent_card(card, gateway, audience):
         card.capabilities.extensions.add(uri=uri, description=description, params={"jwksUrl": base + "/.well-known/jwks.json"})
     ParseDict({"oauth2SecurityScheme": {"oauth2MetadataUrl": base + "/.well-known/oauth-authorization-server",
         "flows": {"authorizationCode": {"authorizationUrl": base + "/oauth/authorize", "tokenUrl": base + "/oauth/token", "scopes": {"*": "Consented " + audience + " operations"}}}}}, card.security_schemes["OAuth2"])
+    card.capabilities.extensions.add(uri="urn:luotsi:connection-contract:v1", description="Versioned trading profile, schemas and recovery vocabulary",
+                                    params=manager(gateway).public())
     del card.signatures[:]
     value = MessageToDict(card)
     protected, _, signature = gateway.signing.sign(value).split(".")
@@ -109,6 +112,7 @@ async def enrich_agent_card(card, gateway, audience):
 
 async def mcp_card(gateway, audience="buyer"):
     from .discovery import server_card, EXTENSION as MCP_EXTENSION
+    from .connection_contract import manager
     base = canonical_origin(gateway)
     audience = effective_audience(PRINCIPAL.get(), audience)
     server, tools = await inventory(gateway, audience)
@@ -117,6 +121,7 @@ async def mcp_card(gateway, audience="buyer"):
     if audience != "buyer":
         card["name"], card["title"] = server.name, server._lowlevel_server.title
     card["_meta"][MCP_EXTENSION].update({"canonicalOrigin": base,
+        "contract": manager(gateway).public(),
         "discovery": discovery_context(gateway, audience),
         "tools": [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools],
         "resources": [r.model_dump(mode="json", by_alias=True, exclude_none=True) for r in await server.list_resources()],

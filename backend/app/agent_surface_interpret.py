@@ -49,7 +49,7 @@ async def invoke_generated(server, cap, arguments, ctx, mandate):
 
 async def resume_supported_question(server, name, arguments, ctx, result):
     """SDK elicitation also covers governance and future REST human decisions."""
-    if not supports_elicitation(ctx):
+    if not supports_elicitation(ctx) or (result.meta or {}).get("approval_link"):
         return result
     from pydantic import create_model
     responses = {}
@@ -64,8 +64,16 @@ async def resume_supported_question(server, name, arguments, ctx, result):
                 annotation = Literal[tuple(detail["enum"])]
             fields[field] = (annotation, ... if field in schema.get("required", []) else None)
         model = create_model("HumanQuestion", **fields)
-        answer = await ctx.elicit(request.params.message, schema=model)
-        responses[key] = mt.ElicitResult(action=answer.action, content=answer.data.model_dump() if answer.data else None)
+        from .connection_contract_surface import question as bounded_question
+        answer_data = await bounded_question(server, ctx, model, request.params.message)
+        if answer_data is None:
+            from .connection_contract_surface import fallback_metadata
+            from .agent_surface import principal
+            result.meta = {**(result.meta or {}), **fallback_metadata(server.gateway, principal(server), result.request_state)}
+            from .connection_contract_surface import notify_question
+            await notify_question(ctx, result)
+            return result
+        responses[key] = mt.ElicitResult(action="accept", content=answer_data.model_dump())
     class Resumed:
         _surface_resume = True
         request_state = result.request_state
@@ -120,10 +128,10 @@ async def question(server, ctx, purpose, data, schema, message):
     from .agent_surface import principal
     p = principal(server)
     if supports_elicitation(ctx):
-        answer = await ctx.elicit(message, schema=schema)
-        if answer.action != "accept" or answer.data is None:
-            raise DomainError("CONFIRMATION_DECLINED", "Human question was declined", 409)
-        return answer.data
+        from .connection_contract_surface import question as bounded_question
+        answer = await bounded_question(server, ctx, schema, message)
+        if answer is not None:
+            return answer
     state = ctx.request_state if ctx else None
     if state:
         if load(server.gateway, p, state, purpose) != data:
@@ -133,8 +141,13 @@ async def question(server, ctx, purpose, data, schema, message):
             raise DomainError("CONFIRMATION_DECLINED", "Human question was declined", 409)
         return schema.model_validate(response.content or {})
     state = store(server.gateway, p, purpose, data)
-    return mt.InputRequiredResult(request_state=state, input_requests={"decision": mt.ElicitRequest(
+    from .connection_contract_surface import fallback_metadata
+    result = mt.InputRequiredResult(request_state=state, input_requests={"decision": mt.ElicitRequest(
         params=mt.ElicitRequestFormParams(message=message, requested_schema=schema.model_json_schema()))})
+    result.meta = fallback_metadata(server.gateway, p, state)
+    from .connection_contract_surface import notify_question
+    await notify_question(ctx, result)
+    return result
 
 
 def interpretation_schema():
@@ -373,6 +386,8 @@ def a2a_skill(gateway, params, p, audience, mandate=None):
     if len(parts) != 1 or parts[0].get("version") != 1 or not params.message.message_id:
         raise DomainError("VALIDATION_ERROR", "Supply one version=1 skill command and message id", 422)
     command = parts[0]
+    from .connection_contract_surface import validate_a2a_command
+    validate_a2a_command(gateway, command, audience)
     name = command.get("skill")
     arguments = dict(command.get("arguments") or {})
     from .human_tools import available, execute
@@ -387,13 +402,19 @@ def a2a_skill(gateway, params, p, audience, mandate=None):
                 tools = {t.name: t for t in await server.list_tools()}
                 if name not in tools:
                     raise DomainError("TOOL_NOT_FOUND", "Skill unavailable for this audience", 404)
-                if "idempotency_key" in tools[name].input_schema.get("properties", {}) and "idempotency_key" not in arguments:
-                    arguments["idempotency_key"] = params.message.message_id
                 responses = {k: mt.ElicitResult.model_validate(v) for k, v in command.get("input_responses", {}).items()}
                 ctx = Context(mcp_server=server, subscriptions=server._subscriptions)
+                from .connection_contract import ECHO, SIGNED_QUOTE, CONTRACT_META
+                meta = command.get("_meta", {})
+                echo_token = ECHO.set(meta.get(CONTRACT_META) or ECHO.get())
+                signed_token = SIGNED_QUOTE.set(meta.get("luotsi/contractPin") == "signed-quote")
                 if command.get("request_state"):
                     ctx = SimpleNamespace(request_state=command["request_state"], input_responses=responses, headers=None, meta=None)
-                return await server.call_tool(name, arguments, ctx)
+                try:
+                    return await server.call_tool(name, arguments, ctx)
+                finally:
+                    ECHO.reset(echo_token)
+                    SIGNED_QUOTE.reset(signed_token)
             finally:
                 PRINCIPAL.reset(token)
         result = asyncio.run(invoke())

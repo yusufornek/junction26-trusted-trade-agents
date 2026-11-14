@@ -287,8 +287,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return request.app.state.gateway
 
     @app.get("/v1/meta", response_model=dict, summary="Public pinned standards and installed packages; limiter scope")
-    def meta():
-        return manifest()
+    def meta(request: Request):
+        from .connection_contract import manager
+        return {**manifest(), "contract": manager(svc(request)).public()}
 
     @app.get("/v1/suppliers", response_model=list[dict], summary="Supplier capabilities; Nordfood is synthetic")
     def suppliers(request: Request, principal: Principal = Depends(resolve_principal)):
@@ -399,7 +400,11 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
 
     @app.get("/v1/basket-lookups/{lookup_id}", response_model=BasketLookupResult, summary="Read this agent's stored recipe basket")
     def get_basket(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).baskets.get(lookup_id, principal.owner)
+        from .connection_contract import manager
+        result = svc(request).baskets.get(lookup_id, principal.owner)
+        if principal.connection_id:
+            result.connection_contract = manager(svc(request)).intent(lookup_id, result.agent_id)
+        return result
 
     @app.get("/v1/policy", response_model=PolicyResource, summary="Read effective procurement policy and known warning codes")
     def get_policy(request: Request, principal: Principal = Depends(require_operator)):
@@ -555,6 +560,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return result
 
     install_aliases(app)
+    from .connection_contract_surface import install as install_connection_contract
+    install_connection_contract(app)
     from .agent_surface import install as install_agent_surface
     install_agent_surface(app)
 

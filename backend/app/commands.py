@@ -604,7 +604,10 @@ def install(gateway, target, name, category):
         started = time.perf_counter()
         try:
             with gateway.activate(), span(label, links=saved_links) as current:
+                from .connection_contract import manager
+                contract_version = manager(gateway).before(route, values, PRINCIPAL.get(), category)
                 result = execute(*args, **kwargs)
+                manager(gateway).after(route, values, result, PRINCIPAL.get(), contract_version)
                 if gateway.sandbox:
                     gateway.sandbox.after(name, result)
                 if current is not None:

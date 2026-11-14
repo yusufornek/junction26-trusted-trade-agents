@@ -586,6 +586,10 @@ class Governance:
                     if r["agent_id"] in agents and (not agent_id or r["agent_id"] == agent_id)]
 
     def decide(self, request_id, decision, reason, p):
+        from .connection_contract_driving import decide_override
+        override = decide_override(self.gateway, request_id, decision, reason, p)
+        if override is not None:
+            return override
         self.gateway.accounts.manage(p)
         with self.db.connect(write=True) as conn:
             row = conn.execute("SELECT * FROM governance_requests WHERE id=?", (request_id,)).fetchone()
@@ -740,6 +744,8 @@ class Governance:
                     continue
                 effective = self.resolve(row["agent_id"], conn=conn)
                 connections = [dict(c) for c in conn.execute("SELECT connection_id,client,type,audience,revoked_at,last_used_at FROM connections WHERE agent_id=?", (row["agent_id"],))]
+                from .connection_contract_surface import register_connections
+                register_connections(self.gateway, connections)
                 orders = [json.loads(r[0]) for r in conn.execute("SELECT data FROM orders WHERE json_extract(data,'$.agent_id')=?", (row["agent_id"],))]
                 entries = self._activity(conn, row["agent_id"])
                 result.append({**dict(row), "status": state, "connections": connections,

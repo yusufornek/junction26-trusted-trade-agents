@@ -60,7 +60,15 @@ for _code in ("OUTSIDE_GUARDRAIL", "OPERATION_NOT_ALLOWED", "CATEGORY_NOT_ALLOWE
 for _code in ("POLICY_VERSION_NOT_FOUND", "POLICY_REQUEST_NOT_FOUND"):
     RECOVERY[_code] = (False, "STOP")
 RECOVERY["POLICY_CHANGED"] = (False, "REVIEW_UPDATED_EVIDENCE")
+RECOVERY.update(UNKNOWN_ARGUMENT=(False, "FIX_REQUEST"), ARGUMENT_REQUIRED=(False, "FIX_REQUEST"),
+                CONTRACT_STALE=(False, "FIX_REQUEST"), REEVALUATION_REQUIRED=(False, "FIX_REQUEST"),
+                DRIVING_TEST_REQUIRED=(False, "CONTACT_ADMIN"), CONNECTION_REQUIRED=(False, "CONTACT_ADMIN"),
+                DRIVING_TEST_NOT_FOUND=(False, "STOP"))
 
+# Keep the published version-1 vocabulary stable. Contract-aware failures use
+# version 2, which adds an explicit refresh transition instead of changing v1.
+RECOVERY_V2 = {**RECOVERY, "CONTRACT_STALE": (False, "REFRESH_CONTRACT"),
+               "REEVALUATION_REQUIRED": (False, "REFRESH_CONTRACT")}
 
 
 def problem(error, instance=None):
@@ -68,12 +76,13 @@ def problem(error, instance=None):
     if instance:
         instance = re.sub(r"(/v1/auth/(?:invites|password-resets)/)[^/]+", r"\1[redacted]", instance)
     from .runtime import ENVIRONMENT
-    retryable, action = RECOVERY[error.code]
+    retryable, action = RECOVERY_V2[error.code]
+    version = 2 if RECOVERY_V2[error.code] != RECOVERY[error.code] else 1
     data = error.data if error.status != 401 else {}
     result = {"type": f"urn:trusted-trade:problem:{error.code.lower().replace('_', '-')}",
               "title": error.code.replace("_", " ").title(), "status": error.status,
               "detail": error.message, "instance": instance or "urn:correlation:" + correlation_id(),
-              "code": error.code, "message": error.message, "recovery_version": 1,
+              "code": error.code, "message": error.message, "recovery_version": version,
               "retryable": retryable, "next_action": action,
               "retry_after_seconds": data.get("retry_after_seconds", 1 if retryable else None),
               "correlation_id": correlation_id(), "violations": data.get("violations", []), "data": data}

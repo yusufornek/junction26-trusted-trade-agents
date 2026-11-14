@@ -317,6 +317,8 @@ class AgentSurface:
                 async_exit_stack=stack, embed_body_fields=cap.route._embed_body_fields)
             if solved.errors:
                 raise DomainError("VALIDATION_ERROR", "Correct missing or invalid request fields", 422)
+            from .connection_contract_surface import apply_explicit_nulls
+            apply_explicit_nulls(cap, arguments, solved.values)
             value = await run_endpoint_function(dependant=cap.route.dependant, values=solved.values,
                                                is_coroutine=inspect.iscoroutinefunction(cap.route.endpoint))
             if isinstance(value, Response):
@@ -369,8 +371,10 @@ class AgentSurface:
             if call["code"]:
                 codes.add(call["code"])
         current = self.connection_principal(row)
+        from .connection_contract_driving import driving
         return {"connection_id": cid, "last_used_at": last or connection.last_used_at,
                 "calls_last_24h": by_tool, "error_codes": sorted(codes),
+                "connection_contract": driving(self.gateway).status(current) if current.kind == "agent" else None,
                 "scope": {"audience": current.audience, "scopes": list(current.scopes),
                           "customer_ids": list(current.customer_ids), "tenant_id": current.tenant_id, "all_tenants": current.operator}}
 
@@ -455,6 +459,10 @@ def effective_mandate(server):
 
 
 async def read_uri(server, uri):
+    if str(uri) == "luotsi://trading-profile":
+        from .connection_contract import manager
+        m = manager(server.gateway)
+        return {"contract": m.public(), "profile": m.profile()}
     gateway, p = server.gateway, principal(server)
     uri = str(uri)
     if uri in {"luotsi://agent/context", "luotsi://policy/effective"}:
@@ -566,7 +574,8 @@ def register(server):
             async def adapter(ctx: Context, **arguments) -> dict[str, Any]:
                 from .mcp_server import PRESENTED_MANDATE
                 from .agent_surface_interpret import invoke_generated
-                arguments = {k: v for k, v in arguments.items() if v is not None or k in cap.input_schema.get("required", [])}
+                from .connection_contract_surface import supplied_arguments
+                arguments = supplied_arguments(arguments)
                 return await invoke_generated(server, cap, arguments, ctx, PRESENTED_MANDATE.get())
             adapter.__signature__ = inspect.Signature([inspect.Parameter("ctx", inspect.Parameter.KEYWORD_ONLY, annotation=Context), *[
                 inspect.Parameter(k, inspect.Parameter.KEYWORD_ONLY, annotation=Any,
@@ -617,7 +626,11 @@ def register(server):
 
     register_resources(server)
     register_prompts(server)
+    from .connection_contract_surface import register as register_contract
+    register_contract(server)
     quality(server)
+    from .connection_contract_surface import capture
+    capture(server)
     for name, cap in server.surface_capabilities.items():
         tool = server._tool_manager._tools[name]
         tool.meta = {**(tool.meta or {}), "restCapabilities": [cap.key]}
@@ -703,6 +716,10 @@ async def call_tool(server, name, arguments, context=None):
         from .mcp_server import create_server
         return await create_server(server.gateway, agent_id=None, audience=target).call_tool(name, arguments, context)
     try:
+        from .connection_contract_surface import validate_arguments
+        tool = server._tool_manager._tools.get(name)
+        if tool is not None:
+            validate_arguments(arguments or {}, tool.parameters)
         if name in getattr(server, "surface_capabilities", {}) and name not in server._tool_manager._tools:
             raise DomainError("TOOL_NOT_FOUND", "Tool is not available", 404)
         # Generated human adapters must retain their route rather than the older
@@ -733,6 +750,8 @@ async def call_tool(server, name, arguments, context=None):
         if isinstance(result, mt.InputRequiredResult):
             from .agent_surface_interpret import resume_supported_question
             result = await resume_supported_question(server, name, arguments, context, result)
+            from .connection_contract_surface import compatible_input_required
+            result = compatible_input_required(context, result)
     except (DomainError, ValidationError) as error:
         value = problem(validation_problem(error) if isinstance(error, ValidationError) else error)
         result = mt.CallToolResult(is_error=True, structured_content=value, content=[mt.TextContent(type="text", text=json.dumps(value))])
