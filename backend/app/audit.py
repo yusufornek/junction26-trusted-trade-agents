@@ -5,6 +5,21 @@ from datetime import datetime, timezone
 from .models import AuditEntry
 from .canonical import canonical_json
 
+from functools import wraps
+from .tenancy import GLOBAL_AUDIT
+
+
+def global_chain(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        token = GLOBAL_AUDIT.set(True)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            GLOBAL_AUDIT.reset(token)
+    return wrapped
+
+
 GENESIS = "0" * 64
 
 
@@ -88,6 +103,7 @@ def bounded_summary(value):
     return result
 
 
+@global_chain
 def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=None):
     from .foundation import CORRELATION, TRACE, emit
     data = dict(data or {})
@@ -95,6 +111,17 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
         data = bounded_summary(data)
         summary = summary[:2000]
         actor = actor[:256]
+    from .tenancy import principal, HOTEL, TARGET_TENANT
+    p = principal()
+    tenant_id = data.get("tenant_id") or (p.tenant_id if p and not p.operator else None) or TARGET_TENANT.get()
+    if not tenant_id:
+        for table, value in (("orders", order_id), ("quotes", quote_id)):
+            if value:
+                owned = conn.execute(f"SELECT tenant_id FROM main.{table} WHERE id=?", (value,)).fetchone()
+                if owned:
+                    tenant_id = owned[0]
+                    break
+    tenant_id = tenant_id or ("platform" if actor == "authentication" or p and p.operator else HOTEL)
     from .runtime import ENVIRONMENT
     if ENVIRONMENT.get() == "sandbox":
         data["environment"] = "sandbox"
@@ -115,13 +142,16 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
     payload = {"seq": seq, "ts": ts, "actor": actor, "action": action, "summary": summary,
                "order_id": order_id, "quote_id": quote_id, "data": json.loads(encoded)}
     digest = entry_hash(previous, payload)
-    conn.execute(
-        "INSERT INTO audit(id,ts,actor,action,order_id,quote_id,summary,data,prev_hash,hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (seq, ts, actor, action, order_id, quote_id, summary, encoded, previous, digest),
-    )
+    columns = "id,ts,actor,action,order_id,quote_id,summary,data,prev_hash,hash"
+    values = (seq, ts, actor, action, order_id, quote_id, summary, encoded, previous, digest)
+    if "tenant_id" in {r[1] for r in conn.execute("PRAGMA main.table_info(audit)")}:
+        columns += ",tenant_id"
+        values += (tenant_id,)
+    conn.execute(f"INSERT INTO audit({columns}) VALUES({','.join('?' for _ in values)})", values)
     emit(conn, action, actor, ts, seq, data, order_id, quote_id)
 
 
+@global_chain
 def head(db, signing):
     from .runtime import ENVIRONMENT
     with db.connect() as conn:
@@ -132,6 +162,7 @@ def head(db, signing):
     return {**payload, "jws": signing.sign(payload)}
 
 
+@global_chain
 def verify(db, checkpoint_entries=None, checkpoint_hash=None):
     # Serialize full scans per gateway so concurrent readers do not multiply
     # verification allocations. Keep just one row and one requested prefix hash.
@@ -174,7 +205,7 @@ def read(db, order_id=None, quote_id=None):
             args.append(value)
     sql = "SELECT * FROM audit" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY id"
     with db.connect() as conn:
-        return [AuditEntry(**{**dict(r), "data": json.loads(r["data"])}) for r in conn.execute(sql, args)]
+        return [AuditEntry(**{**{k: r[k] for k in AuditEntry.model_fields if k in r.keys()}, "data": json.loads(r["data"])}) for r in conn.execute(sql, args)]
 
 
 def read_timeline(conn, order_id, quote_id, lookup_id):
@@ -184,5 +215,5 @@ def read_timeline(conn, order_id, quote_id, lookup_id):
            OR (action='LOOKUP' AND json_extract(data, '$.lookup_id')=?)""",
         (order_id, quote_id, lookup_id),
     )
-    events = [AuditEntry(**{**dict(row), "data": json.loads(row["data"])}) for row in rows]
+    events = [AuditEntry(**{**{k: row[k] for k in AuditEntry.model_fields if k in row.keys()}, "data": json.loads(row["data"])}) for row in rows]
     return sorted(events, key=lambda event: (datetime.fromisoformat(event.ts), event.id))

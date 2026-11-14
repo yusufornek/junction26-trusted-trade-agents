@@ -58,7 +58,7 @@ def authorize_order(gateway, order_id, principal):
     with gateway.db.connect() as conn:
         row = conn.execute("SELECT data FROM orders WHERE id=?", (order_id,)).fetchone()
         order = Order.model_validate_json(row[0]) if row else None
-        buyer = principal.kind == "buyer_user" and order and gateway.buyer.visible(
+        buyer = principal.kind in {"buyer_user", "tenant_user"} and order and gateway.buyer.visible(
             principal, order.agent_id, [order.customer_id])
         if order is None or not (principal.operator or buyer or (
                 principal.kind == "agent" and order.agent_id == principal.id)):

@@ -17,6 +17,18 @@ class AgentContext(Model):
 
 
 def agent_context(service, principal, mandate=None):
+    if principal.kind in {"tenant_user", "platform_admin"} and principal.user_id != "legacy-operator":
+        from .accounts import ROLES
+        customers = list(principal.customer_ids)
+        if principal.operator:
+            with service.db.connect() as conn:
+                customers = [r[0] for r in conn.execute("SELECT customer_id FROM tenant_customers ORDER BY customer_id")]
+        return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+            principal=principal.public(), customer_ids=customers,
+            mandate={"source": "human_role", "role": principal.role, "registered": True},
+            effective_limits={}, remaining_budget={}, environment=service.settings.environment,
+            rate_limits=service.limiter.snapshot(principal.id), supported_operations=ROLES.get(principal.role, []),
+            standing_constraints={})
     policy = service.policy.get()
     customers = list(principal.customer_ids)
     if mandate:
@@ -28,6 +40,8 @@ def agent_context(service, principal, mandate=None):
         customer = vc["credentialSubject"].get("customer_id")
         with service.db.connect() as conn:
             policy, record, _ = service.mandates.authorize(conn, mandate, principal.id, customer)
+        from dataclasses import replace
+        principal = replace(principal, customer_ids=(customer,))
         customers = [customer]
         summary = record.model_dump(mode="json")
     else:
@@ -36,7 +50,8 @@ def agent_context(service, principal, mandate=None):
                    "autonomy": (row.autonomy or policy.autonomy.default) if row else None}
     row = policy.agents.get(principal.id)
     if row:
-        customers = [customer for customer in row.customer_ids if not customers or customer in customers]
+        legacy_unbound = not principal.tenant_id and not principal.connection_id and not customers
+        customers = [customer for customer in row.customer_ids if legacy_unbound or customer in customers]
     with service.db.connect() as conn:
         spent = float(service.policy.autonomous_total(conn, principal.id))
     if row:
@@ -48,7 +63,7 @@ def agent_context(service, principal, mandate=None):
     else:
         per_order, daily = 0, 0
     operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "get_order_evidence", "cancel_order"]
-    if row:
+    if row and customers:
         operations += ["find_offers", "create_quote", "place_order"]
     return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
         principal=principal.public(), customer_ids=customers, mandate=summary,

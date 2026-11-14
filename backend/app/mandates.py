@@ -82,6 +82,8 @@ class Mandates:
     def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None, supplier_id="valio"):
         from .auth import check_customer_scope
         check_customer_scope(agent_id, customer_id)
+        from .foundation import PRINCIPAL
+        p = PRINCIPAL.get()
         from .buyer import check_suspension
         check_suspension(self.db, agent_id)
 
@@ -95,17 +97,32 @@ class Mandates:
                     self.verify(conn, token, agent_id, customer_id, products=products, policy=policy, supplier_id=supplier_id)
                     invalid("binding")
                 token = original
+        if p and p.tenant_id and not p.operator and customer_id not in p.customer_ids:
+            owned = conn.execute("SELECT 1 FROM tenant_customers WHERE tenant_id=? AND customer_id=?", (p.tenant_id, customer_id)).fetchone()
+            # Legacy env/stdio identities can present their original VC authority
+            # without a fallback policy row. Connections never widen their scope.
+            if token is None or p.connection_id or not owned:
+                if token is None:
+                    self.policy.check_customer(agent_id, customer_id, policy)
+                raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Customer is outside the credential's allowed customers", 403)
         if token is None:
             self.policy.check_customer(agent_id, customer_id, policy)
             return policy, None, None
         record, subject = self.verify(conn, token, agent_id, customer_id, products=products, policy=policy, supplier_id=supplier_id)
         effective = policy.model_copy(deep=True)
         row = effective.agents.get(agent_id)
+        if row is None and p and p.kind == "agent" and p.tenant_id and not p.connection_id:
+            # A verified legacy VC is the authority for this request. Publish its
+            # narrow scope so later shared policy checks see the same principal.
+            from dataclasses import replace
+            PRINCIPAL.set(replace(p, customer_ids=(customer_id,)))
         if row is not None:
             self.policy.check_customer(agent_id, customer_id, policy)
         order_limit = min(subject["max_auto_total_eur"], policy.approval.max_auto_total_eur,
                           row.max_auto_total_eur if row and row.max_auto_total_eur is not None else float("inf"))
         daily_limit = min(subject["max_auto_daily_total_eur"], row.max_auto_daily_total_eur if row else float("inf"))
+        if policy._tenant_daily_ceiling is not None:
+            daily_limit = min(daily_limit, policy._tenant_daily_ceiling)
         buyer_level = subject.get("autonomy", policy.autonomy.default)
         operator_level = (row.autonomy or policy.autonomy.default) if row else buyer_level
         grant = conn.execute("SELECT level FROM agent_autonomy WHERE agent_id=?", (agent_id,)).fetchone()
@@ -139,6 +156,8 @@ class Mandates:
             invalid("format")
         customer = (policy or self.policy.get()).customers.get(subject["customer_id"])
         keys = customer.mandate_issuers.get(claims["iss"], []) if customer else []
+        from .tenant_api import tenant_issuer_keys
+        keys = tenant_issuer_keys(conn, claims["iss"], subject["customer_id"]) or keys
         if not keys:
             invalid("issuer")
         check_signature(header, message, signature, keys)
@@ -224,9 +243,17 @@ class Mandates:
                 customers.append(customer_id)
             if not customers:
                 invalid("signature")
-            return issuer, ids, customers
         except DomainError:
             raise DomainError("REVOCATION_INVALID", "Revocation signature or claims are invalid", 422) from None
+        from .foundation import PRINCIPAL
+        p = PRINCIPAL.get()
+        if p and p.tenant_id and not p.operator:
+            allowed = set(p.customer_ids) if p.connection_id else {
+                row[0] for row in conn.execute("SELECT customer_id FROM tenant_customers WHERE tenant_id=?", (p.tenant_id,))}
+            customers = [customer for customer in customers if customer in allowed]
+            if not customers:
+                raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Revocation belongs to another tenant or customer scope", 403)
+        return issuer, ids, customers
 
     def revoke(self, token, actor):
         with self.db.connect(write=True) as conn:

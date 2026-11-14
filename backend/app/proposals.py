@@ -231,55 +231,62 @@ class Proposals:
             for customer in sorted(targets):
                 if customer in delivered_customers:
                     continue
-                prefs = self.preferences(customer)
-                permitted = [p for p in products if (not body.target.categories or p.category in body.target.categories)
-                             and self.relevant(p, prefs)]
-                reason = None
-                if not (prefs.categories or prefs.interests) or not prefs.channels:
-                    reason = "no opt-in"
-                elif campaign["campaign_id"] in prefs.muted_campaigns or fingerprint in prefs.muted_campaigns:
-                    reason = "muted campaign"
-                elif self.quiet(prefs, now):
-                    reason = "quiet period"
-                delivered = conn.execute("SELECT count(*) FROM proposals WHERE customer_id=? AND json_extract(data,'$.delivered_at')>=?",
-                                         (customer, self.week_start(now, prefs.timezone))).fetchone()[0]
-                if reason is None and delivered >= min(prefs.cadence_limit_per_week, policy.proposal_quotas.per_customer_per_week):
-                    reason = "weekly cadence or customer quota"
-                constraints = policy.customers.get(customer)
-                removed = {}
-                filtered = []
-                for p in permitted:
-                    failures = hard_violations(p, constraints.required_claims if constraints else [], constraints.exclude_allergens if constraints else [])
-                    if failures:
-                        removed[p.id] = failures
-                    else:
-                        filtered.append(p.id)
-                if not filtered and reason is None:
-                    reason = "no relevant compliant products"
-                if reason:
-                    if conn.execute("SELECT 1 FROM proposal_filter_log WHERE campaign_id=? AND customer_id=? AND reason=?",
-                                    (campaign["id"], customer, reason)).fetchone():
-                        continue  # Retry without a changed recipient outcome writes nothing.
-                if removed:
-                    audit.append(conn, "system:proposals", "PROPOSAL_FILTERED", "Noncompliant products removed before delivery.",
-                                 data={"customer_id": customer, "campaign_id": campaign["id"], "removed": removed})
-                if reason:
-                    conn.execute("INSERT INTO proposal_filter_log(campaign_id,customer_id,reason,at) VALUES(?,?,?,?)",
-                                 (campaign["id"], customer, reason, now.isoformat()))
-                    audit.append(conn, "system:proposals", "PROPOSAL_HELD", reason,
-                                 data={"customer_id": customer, "campaign_id": campaign["id"], "reason": reason})
-                    continue
-                proposal = {"id": str(uuid4()), "campaign_id": campaign["id"], "customer_id": customer,
-                            "supplier_id": principal.id, "products": filtered, "rationale": campaign["rationale"],
-                            "valid_until": campaign["valid_until"], "delivered_at": now.isoformat(),
-                            "price_evidence": [e.model_dump(mode="json") for e in evidence if e.product_id in filtered],
-                            "channels": prefs.channels, "status": "received"}
-                conn.execute("INSERT INTO proposals VALUES(?,?,?,?)", (proposal["id"], campaign["id"], customer, json.dumps(proposal)))
-                new_deliveries += 1
-                # The durable outbox feeds spec 33 consumers. Channels travel with the event;
-                # a webhook consumer must require the customer's explicit webhook consent.
-                audit.append(conn, f"supplier:{principal.id}", "PROPOSAL_RECEIVED", "Consented supplier proposal received.",
-                             data=proposal)
+                # A supplier campaign spans buyers; recipient records belong to each buyer tenant.
+                from .tenancy import TARGET_TENANT
+                recipient = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer,)).fetchone()
+                tenant_token = TARGET_TENANT.set(recipient[0] if recipient else "platform")
+                try:
+                    prefs = self.preferences(customer)
+                    permitted = [p for p in products if (not body.target.categories or p.category in body.target.categories)
+                                 and self.relevant(p, prefs)]
+                    reason = None
+                    if not (prefs.categories or prefs.interests) or not prefs.channels:
+                        reason = "no opt-in"
+                    elif campaign["campaign_id"] in prefs.muted_campaigns or fingerprint in prefs.muted_campaigns:
+                        reason = "muted campaign"
+                    elif self.quiet(prefs, now):
+                        reason = "quiet period"
+                    delivered = conn.execute("SELECT count(*) FROM proposals WHERE customer_id=? AND json_extract(data,'$.delivered_at')>=?",
+                                             (customer, self.week_start(now, prefs.timezone))).fetchone()[0]
+                    if reason is None and delivered >= min(prefs.cadence_limit_per_week, policy.proposal_quotas.per_customer_per_week):
+                        reason = "weekly cadence or customer quota"
+                    constraints = policy.customers.get(customer)
+                    removed = {}
+                    filtered = []
+                    for p in permitted:
+                        failures = hard_violations(p, constraints.required_claims if constraints else [], constraints.exclude_allergens if constraints else [])
+                        if failures:
+                            removed[p.id] = failures
+                        else:
+                            filtered.append(p.id)
+                    if not filtered and reason is None:
+                        reason = "no relevant compliant products"
+                    if reason:
+                        if conn.execute("SELECT 1 FROM proposal_filter_log WHERE campaign_id=? AND customer_id=? AND reason=?",
+                                        (campaign["id"], customer, reason)).fetchone():
+                            continue  # Retry without a changed recipient outcome writes nothing.
+                    if removed:
+                        audit.append(conn, "system:proposals", "PROPOSAL_FILTERED", "Noncompliant products removed before delivery.",
+                                     data={"customer_id": customer, "campaign_id": campaign["id"], "removed": removed})
+                    if reason:
+                        conn.execute("INSERT INTO proposal_filter_log(campaign_id,customer_id,reason,at) VALUES(?,?,?,?)",
+                                     (campaign["id"], customer, reason, now.isoformat()))
+                        audit.append(conn, "system:proposals", "PROPOSAL_HELD", reason,
+                                     data={"customer_id": customer, "campaign_id": campaign["id"], "reason": reason})
+                        continue
+                    proposal = {"id": str(uuid4()), "campaign_id": campaign["id"], "customer_id": customer,
+                                "supplier_id": principal.id, "products": filtered, "rationale": campaign["rationale"],
+                                "valid_until": campaign["valid_until"], "delivered_at": now.isoformat(),
+                                "price_evidence": [e.model_dump(mode="json") for e in evidence if e.product_id in filtered],
+                                "channels": prefs.channels, "status": "received"}
+                    conn.execute("INSERT INTO proposals VALUES(?,?,?,?)", (proposal["id"], campaign["id"], customer, json.dumps(proposal)))
+                    new_deliveries += 1
+                    # The durable outbox feeds spec 33 consumers. Channels travel with the event;
+                    # a webhook consumer must require the customer's explicit webhook consent.
+                    audit.append(conn, f"supplier:{principal.id}", "PROPOSAL_RECEIVED", "Consented supplier proposal received.",
+                                 data=proposal)
+                finally:
+                    TARGET_TENANT.reset(tenant_token)
         return {**self.counts(campaign, principal), "merged": bool(duplicate), "new_delivery_count": new_deliveries}
 
     def inbox(self, principal, mandate=None):

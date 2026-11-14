@@ -150,7 +150,7 @@ finally:
 
 def test_contract_all_routes_have_response_schema():
     schema = create_app(keys=TEST_KEYS).openapi()
-    assert set(schema["paths"]) == {"/v1/quotes/{quote_id}/anomaly-fixes/{fix_id}", "/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
+    legacy_paths = {"/v1/quotes/{quote_id}/anomaly-fixes/{fix_id}", "/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/approvals", "/v1/approvals/{order_id}/approve",
 
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
@@ -182,6 +182,8 @@ def test_contract_all_routes_have_response_schema():
                                     "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token",
                                     "/oauth/register", "/v1/oauth/clients", "/v1/oauth/requests/{request_id}",
                                     "/v1/oauth/requests/{request_id}/decision"}
+    assert legacy_paths <= set(schema["paths"])
+    assert all(path.startswith(("/v1/auth/", "/v1/tenant/", "/v1/operator/", "/v1/connect/")) for path in set(schema["paths"]) - legacy_paths)
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"].get("200", operation["responses"].get("201"))["content"]

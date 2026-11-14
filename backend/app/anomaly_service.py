@@ -183,7 +183,7 @@ class Anomalies:
         # stock and approval checks. Nothing here places or approves an order.
         from .buyer import check_suspension
         with self.g.db.connect(write=True) as conn:
-            reviewer = operator or (principal is not None and principal.kind == "buyer_user")
+            reviewer = operator or (principal is not None and principal.kind in {"buyer_user", "tenant_user"})
             quote = self.g.orders._verified_quote(conn, quote_id, None if reviewer else agent_id)
             if reviewer:
                 from .autonomy import authorize_review

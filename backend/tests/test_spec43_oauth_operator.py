@@ -144,9 +144,15 @@ def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gatew
             "plan_ref": {"lookup_id": lookup["lookup_id"], "plan_index": 0}})
         order = call(client, token, "place_order", {"quote_id": quote["id"], "idempotency_key": "oauth-purchase"})
         assert order["status"] == "PENDING_APPROVAL" and order["agent_id"] == "oauth-agent"
-        approved = client.post(f'/v1/approvals/{order["id"]}/approve', headers=ADMIN_HEADERS,
-            json={"approver": "Operator", "evidence_revision": order["evidence_revision"]})
+        approval_url = f'/v1/approvals/{order["id"]}/approve'
+        approval_body = {"approver": "Operator", "evidence_revision": order["evidence_revision"]}
+        preview = client.post(approval_url, headers=ADMIN_HEADERS, json=approval_body)
+        assert preview.status_code == 200 and preview.json()["confirmation_required"]
+        assert call(client, token, "get_order_status", {"order_id": order["id"]})["status"] == "PENDING_APPROVAL"
+        approved = client.post(approval_url, headers=ADMIN_HEADERS,
+            json={**approval_body, "confirmation_token": preview.json()["confirmation_token"]})
         assert approved.status_code == 200, approved.text
+        assert approved.json()["status"] == "CONFIRMED"
         assert call(client, token, "get_order_status", {"order_id": order["id"]})["status"] == "CONFIRMED"
         for action in ["LOOKUP", "CREATE_QUOTE", "PLACE_ORDER"]:
             assert any(e.action == action and e.actor == "agent:oauth-agent" for e in service.audit())
@@ -314,6 +320,10 @@ def test_r10_frontend_handoff_exposes_only_request_id(gateway):
 
 
 def test_r13_connection_customers_intersect_current_mandate_and_preserve_existing(gateway, need, upstream):
+    # Exercise two customers of the same business; cross-tenant access is tested separately.
+    from app.tenancy import HOTEL
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE tenant_customers SET tenant_id=? WHERE customer_id='2'", (HOTEL,))
     policy = gateway.policy._editable(gateway.policy.get())
     policy["customers"]["2"] = {}
     policy["agents"]["external"]["customer_ids"] = ["1", "2"]

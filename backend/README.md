@@ -47,14 +47,20 @@ From `backend/`, verify offline with `.venv/bin/python -m pytest tests/test_spec
 
 The console's Connect page uses operator-only `POST /v1/connections` with a required
 `Idempotency-Key` and `{agent_id, client, customer_ids, label?}`. Agent IDs use
-`^[a-z0-9][a-z0-9-]{1,47}$`; clients are `claude_desktop`, `claude_code`, `cursor`,
-`vscode`, `chatgpt`, `mcp_other`, or `rest`. The client choice records the setup tool;
-it grants no additional authority. Customer IDs must already occur in customer policy,
-an agent mandate or an organisation's scope. Empty customer lists are refused.
+`^[a-z0-9][a-z0-9-]{1,47}# Trusted Trade Agents backend MVP
+
+## Agent connections (spec 42)
+
+The console's Connect page uses operator-only `POST /v1/connections` with a required
+`Idempotency-Key` and `{agent_id, client, customer_ids, label?}`. Agent IDs use
+; legacy clients include `claude_desktop`, `claude_code`, `cursor`,
+`vscode`, `chatgpt`, `mcp_other`, and `rest`; GET /v1/connect/catalog lists the full current set. The client choice records the setup tool;
+it grants no additional authority. Customer IDs must belong to the connection's tenant. Empty customer lists are refused.
+Spec 43 adds tenant-admin management under /v1/tenant/connections and the public client catalog.
 
 Creation returns `201` with the console's `NewConnection` fields and a high-entropy
-`vak_` key. Copy the key immediately: only its SHA-256 digest and first eight characters
-are retained. Exact idempotent replays return the same connection with `key: null`;
+`vtg_live_<connection_id>_<secret>` key (`vtg_sbx_...` in sandbox). Copy the key immediately:
+only its SHA-256 digest, public connection id and first eight characters are retained. Exact idempotent replays return the same connection with `key: null`;
 changed payloads return `409 IDEMPOTENCY_CONFLICT`. No key is recorded in the command
 ledger or audit. `GET /v1/connections` lists public `Connection` records newest first,
 including revoked connections. `DELETE /v1/connections/{connection_id}` revokes a key
@@ -1826,3 +1832,51 @@ returns 0.05 and 0.95 quantiles; valid forecasts replace the quantity band and r
 `band_source: forecast`. Missing packages/weights, invalid output and inference
 errors retain `band_source: statistical`. See `docs/DEPLOY.md` for provisioning and
 the production licence prerequisite already recorded in `docs/DECISIONS.md`.
+
+## Accounts and tenant connections (spec 43, part 1)
+
+The additive SQLite migration seeds Hotel Aurora chain (customer 1) and Kaari Hospital Kitchen
+(customer 2). Business tables carry tenant_id; shared connection-local views scope reads and
+shared writes retain tenant predicates. The audit chain is global and each entry records its tenant.
+The catalog, signing keys, supplier health and chain checkpoints are platform data.
+
+Run scripts/gen_keys.py --write locally to append missing demo password variables to .env.local
+without printing values. reset_demo.py seeds the six people and two tenants in its new database;
+startup also installs missing account rows. Never run reset against a running demo without its
+normal archive/port checks. Demo emails: director@aurora.example (tenant_admin), chef@aurora.example
+(approver), finance@aurora.example (viewer), manager@kaari.example (tenant_admin),
+dietitian@kaari.example (approver), staff@valio.example (platform_admin). Password variables are
+listed in .env.example. No password is committed. Hospital orders require approval; the hotel
+1,000 L milk demo keeps its established authority and price.
+
+POST /v1/auth/login accepts email/password and returns the role, tenant, customer_ids and a CSRF
+token. Cookie sessions last 12 hours; only a digest is stored. Mutating cookie requests send
+X-CSRF-Token. GET /v1/auth/session checks the current role and enabled state; POST /v1/auth/logout
+ends the session. Passwords use scrypt (N=32768, r=8, p=1, random 16-byte salt). Login attempts are
+throttled for 15 minutes per email and address. Invite links last seven days; reset links one day.
+
+Tenant admins manage /v1/tenant/users, /agents, /connections and /policy. Approvers and admins
+decide tenant approvals; viewers read orders, evidence, audit and spend. /v1/tenant/roles exposes
+permissions as data. LAST_TENANT_ADMIN prevents removing the final active admin. Disabling or
+removing a user ends sessions and revokes their connections. Platform admins manage tenants and
+Valio staff under /v1/operator/tenants and /users and read across tenants.
+
+GET /v1/connect/catalog?audience=buyer|tenant|operator and connection instructions share one client
+registry; instructions include the current MCP tool schemas. Create/list/read/rotate/revoke at
+/v1/tenant/connections (or /v1/operator/connections). API keys have vtg_live_ or vtg_sbx_ prefixes,
+are shown once, expire optionally and have independent rate buckets. Rotation supports 0–24 hours
+of overlap. A credential's allowed customers intersect its connection, mandate and current tenant.
+Tenant/operator audience keys require a human creator and follow the creator's current role.
+
+Human REST decisions use a summary and single-use five-minute confirmation token, then an
+identical retry including confirmation_token. Approval records approver_user_id and approver_role.
+Tokens bind the user, tenant, action, payload and evidence revision. Existing OPERATOR_TOKEN paths
+also use confirmation for human decisions; the token retains platform-admin authority. Agent purchases
+keep their existing autonomous mandate flow. Operator-consented OAuth for the buyer MCP resource
+is available through the discovery, registration, authorization and token endpoints documented above.
+Tenant-account OAuth consent and tenant/operator MCP, A2A, webhook and tool-pack audiences remain
+pending; catalog availability describes the tenant-managed connection subset.
+The frontend data contract is docs/FRONTEND.md, Accounts and connections (spec 43).
+
+Verify offline from backend/: .venv/bin/python -m pytest tests -q, then
+.venv/bin/python scripts/export_openapi.py. No startup/schema-generation command needs demo state.

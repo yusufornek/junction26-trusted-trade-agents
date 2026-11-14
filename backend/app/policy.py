@@ -48,13 +48,37 @@ class Policy:
             data["approval"].setdefault("ignored_warnings", defaults.approval.ignored_warnings)
         return PolicyResource.model_validate(data)
 
-    def get(self):
+    def get(self, *, tenant_overlay=True):
         from .lookup import WARNING_TEXT
 
         defaults = self._load(self.path)
         content = self.db.file_content(self.runtime_path) if self.db is not None else None
         resource = self._load(self.runtime_path, defaults, content=content) if content is not None or self.runtime_path.exists() else defaults
         resource.known_warning_codes = sorted(WARNING_TEXT)
+        if tenant_overlay and self.db:
+            from .tenancy import principal, TARGET_TENANT
+            p = principal()
+            tid = TARGET_TENANT.get() or (p.tenant_id if p and not p.operator else None)
+            if tid:
+                import json
+                with self.db.connect() as conn:
+                    overlay = conn.execute("SELECT data FROM tenant_policy_overlays WHERE id=?", (tid,)).fetchone()
+                if overlay:
+                    data = json.loads(overlay[0])
+                    daily_ceiling = data.get("approval", {}).get("max_auto_daily_total_eur")
+                    resource._tenant_daily_ceiling = daily_ceiling
+                    if daily_ceiling is not None:
+                        with self.db.connect() as conn:
+                            customers = {r[0] for r in conn.execute("SELECT customer_id FROM tenant_customers WHERE tenant_id=?", (tid,))}
+                        for mandate in resource.agents.values():
+                            if customers.intersection(mandate.customer_ids):
+                                mandate.max_auto_daily_total_eur = min(mandate.max_auto_daily_total_eur, daily_ceiling)
+                    for key, value in data.get("approval", {}).items():
+                        current = getattr(resource.approval, key)
+                        setattr(resource.approval, key, sorted(set(current) | set(value)) if isinstance(current, list) else
+                                max(current, value) if key.startswith("min_") else min(current, value))
+                    resource.reject.on = sorted(set(resource.reject.on) | set(data.get("reject", {}).get("on", [])))
+                    resource.reject.on_hard_constraint_violation |= data.get("reject", {}).get("on_hard_constraint_violation", False)
         return resource
 
     @property
@@ -109,7 +133,7 @@ class Policy:
                     # never mint a policy mandate that bypasses VC expiry or revocation.
                     audit.append(conn, actor, audit_action, "Changed verifiable-mandate agent autonomy.", data=audit_data)
                     return self.get()
-            before = self._editable(self.get())
+            before = self._editable(self.get(tenant_overlay=False))
             after = self._editable(self._load(self.path) if reset else request.policy)
             if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                 after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
@@ -155,6 +179,10 @@ class Policy:
         mandate = (policy or self.get()).agents.get(agent_id)
         if mandate is None:
             raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; procurement requires a mandate", 403)
+        from .foundation import PRINCIPAL
+        principal = PRINCIPAL.get()
+        if principal and not principal.operator and principal.tenant_id and customer_id not in principal.customer_ids:
+            raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Customer is outside the credential's allowed customers", 403)
         if mandate is not None and customer_id not in mandate.customer_ids:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", f"Agent {agent_id} has no mandate for customer {customer_id}", 403)
 

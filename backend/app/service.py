@@ -94,6 +94,9 @@ class Gateway:
             install(self, self.recurring, name, "mutation")
         for name in ("put_preferences", "submit", "action"):
             install(self, self.proposals, name, "mutation")
+
+        from .accounts import Accounts
+        self.accounts = Accounts(self)
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")

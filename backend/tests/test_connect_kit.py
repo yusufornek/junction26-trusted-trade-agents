@@ -173,7 +173,11 @@ def test_ac_5_generated_tables_equal_live_tool_schemas(sandbox, monkeypatch):
     assert shlex.split(cli[0]) == ["cd", config["cwd"]]
     command = shlex.split(cli[1])
     assert command == ["MCP_AGENT_ID=issued-agent", ".venv/bin/mcp", "dev", "app/mcp_entry.py"]
-    assert (BACKEND / command[1]).is_file()
+    # Integration worktrees may use the shared virtualenv named by sys.executable.
+    executable = BACKEND / command[1]
+    if not executable.is_file():
+        executable = Path(sys.executable).parent / Path(command[1]).name
+    assert executable.is_file()
     assert config["args"] == ["-m", "app.mcp_server", "--agent-id", "issued-agent"]
     assert '--transport http' in source and '${GATEWAY_URL}/mcp' in source
     # Exercise the installed CLI's real loader without its optional Typer/inspector UI dependency.

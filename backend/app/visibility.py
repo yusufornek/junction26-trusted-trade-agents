@@ -42,12 +42,12 @@ def event_visible(gateway, conn, event, principal):
     if not owners:
         # Unowned historical procurement records are operator-only. Buyer-wide
         # controls may instead carry an explicit recorded organisation.
-        return bool(organisation and principal.kind == "buyer_user")
+        return bool(organisation and principal.kind in {"buyer_user", "tenant_user"})
     if event["actor"].startswith("agent:") and event["actor"][6:] not in owners:
         return False
     policy = gateway.policy.get()
     return all((owner == principal.id if principal.kind == "agent" else
-                principal.kind == "buyer_user" and buyer_scope(policy, principal, owner, customers)) for owner in owners)
+                principal.kind in {"buyer_user", "tenant_user"} and buyer_scope(policy, principal, owner, customers)) for owner in owners)
 
 
 def audit_visible(row, agent_id):

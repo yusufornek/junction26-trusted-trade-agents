@@ -18,7 +18,16 @@ router = APIRouter(prefix="/v1/connections", tags=["connections"])
 
 
 def public_connection(row):
-    return Connection.model_validate({name: row[name] for name in Connection.model_fields})
+    data = {name: row[name] for name in Connection.model_fields}
+    data["scopes"] = json.loads(data["scopes"])
+    data["customer_ids"] = json.loads(data["customer_ids"])
+    return Connection.model_validate(data)
+
+
+def require_connection_admin(principal):
+    if not principal.operator and not (principal.kind == "tenant_user" and principal.role == "tenant_admin"):
+        raise DomainError("TENANT_ADMIN_REQUIRED", "A tenant administrator or platform administrator is required", 403)
+    return principal
 
 
 class Connections:
@@ -54,20 +63,81 @@ class Connections:
         return row
 
     def create(self, body: ConnectionRequest, principal: Principal, origin: str, mcp_served: bool):
-        require_operator(principal)
+        require_connection_admin(principal)
+        if body.client not in {"claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest", "curl", "python", "typescript", "openai_agents_sdk", "anthropic_api", "langchain", "a2a"}:
+            raise DomainError("VALIDATION_ERROR", "Unsupported client; see /v1/connect/catalog", 422)
+        tid = body.tenant_id if principal.operator and body.tenant_id else principal.tenant_id
+        if not tid:
+            from .tenancy import HOTEL
+            tid = HOTEL
+        if body.tenant_id and not principal.operator and body.tenant_id != principal.tenant_id:
+            raise DomainError("TENANT_NOT_FOUND", "Tenant was not found", 404)
+        if body.audience == "operator" and not principal.operator:
+            raise DomainError("OPERATOR_REQUIRED", "Operator audience requires platform staff", 403)
+        if body.audience == "operator":
+            tid = "platform"
+        if body.audience == "tenant" and principal.operator:
+            raise DomainError("TENANT_ADMIN_REQUIRED", "Create tenant-audience keys while signed in as that tenant's administrator", 403)
+        if body.audience != "buyer" and not principal.user_id:
+            raise DomainError("HUMAN_REQUIRED", "Human audiences need a user identity", 403)
+        if body.expires_at and body.expires_at <= audit.utcnow():
+            raise DomainError("VALIDATION_ERROR", "Expiry must be in the future", 422)
         with self.gateway.db.connect(write=True) as conn:
-            mandate = self.prepare_agent(conn, body.agent_id, body.customer_ids)
-            secret = "vak_" + token_urlsafe(32)
+            policy = self.gateway.policy.get(tenant_overlay=False)
+            agent = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone()
+            if principal.operator and body.tenant_id is None and body.audience != "operator":
+                customer = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (body.customer_ids[0],)).fetchone()
+                tid = agent["tenant_id"] if agent else customer[0] if customer else tid
+            if tid != "platform" and not conn.execute("SELECT 1 FROM tenants WHERE id=? AND disabled_at IS NULL", (tid,)).fetchone():
+                raise DomainError("TENANT_NOT_FOUND", "Tenant was not found", 404)
+            known = set(self.gateway.accounts.customers(tid))
+            if agent and body.audience != "operator" and (agent["tenant_id"] != tid or agent["disabled_at"]):
+                raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
+            if not agent and body.audience != "operator":
+                conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, tid, body.agent_id))
+            legacy_known = set(policy.customers)
+            for mandate in policy.agents.values():
+                legacy_known.update(mandate.customer_ids)
+            for organisation in policy.organisations.values():
+                legacy_known.update(organisation.customer_ids)
+            legacy_known.update(row[0] for row in conn.execute("SELECT customer_id FROM tenant_customers"))
+            if any(customer not in (legacy_known if body.audience == "operator" else known) for customer in body.customer_ids):
+                raise DomainError("VALIDATION_ERROR", "customer_ids must contain known customer identifiers", 422)
+            mandate = self._existing_mandate(conn, body.agent_id, policy)
+            if mandate is None:
+                mandate = AgentMandate(customer_ids=body.customer_ids, autonomy="approval_required",
+                    max_auto_daily_total_eur=policy.approval.max_auto_daily_total_eur)
+                # Enlist the policy projection in the enclosing command transaction.
+                # Do not emit a policy diff containing optional free-text input.
+                import yaml
+                policy.agents[body.agent_id] = mandate
+                self.gateway.policy._replace(yaml.safe_dump(
+                    policy.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
             connection_id, now = "con_" + token_hex(4), audit.utcnow()
-            conn.execute("INSERT INTO connections (connection_id,agent_id,client,label,key_prefix,key_digest,"
-                         "customer_ids,created_at,last_used_at,revoked_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            env = "sbx" if self.gateway.settings.environment == "sandbox" else "live"
+            prefix = f"vtg_{env}_{connection_id}_"
+            secret = prefix + token_urlsafe(32)
+            conn.execute("INSERT INTO connections(connection_id,agent_id,client,label,key_prefix,key_digest,customer_ids,created_at,last_used_at,revoked_at,tenant_id,type,audience,scopes,created_by,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (connection_id, body.agent_id, body.client, body.label, secret[:8],
-                 sha256(secret.encode()).hexdigest(), json.dumps(body.customer_ids), now.isoformat(), None, None))
-            audit.append(conn, "human:operator", "CONNECTION_CREATED", "Issued an agent connection.",
+                 sha256(secret.encode()).hexdigest(), json.dumps(body.customer_ids), now.isoformat(), None, None,
+                 tid, body.type, body.audience, json.dumps(body.scopes), principal.user_id or principal.id,
+                 body.expires_at.isoformat() if body.expires_at else None))
+            audit.append(conn, "human:operator" if principal.user_id == "legacy-operator" else "human:" + (principal.user_id or principal.id), "CONNECTION_CREATED", "Issued an agent connection.",
                 data={"connection_id": connection_id, "agent_id": body.agent_id,
-                      "client": body.client, "key_prefix": secret[:8]})
+                      "client": body.client, "tenant_id": tid, "key_prefix": secret[:8]})
+            from .tenancy import TARGET_TENANT
+            target_token = TARGET_TENANT.set(tid)
+            try:
+                effective = self.gateway.policy.get()
+                mandate = mandate.model_copy(deep=True)
+                if effective._tenant_daily_ceiling is not None:
+                    mandate.max_auto_daily_total_eur = min(mandate.max_auto_daily_total_eur, effective._tenant_daily_ceiling)
+            finally:
+                TARGET_TENANT.reset(target_token)
             return NewConnection(connection_id=connection_id, agent_id=body.agent_id, client=body.client,
-                key_prefix=secret[:8], created_at=now, key=secret,
+                key_prefix=secret[:8], created_at=now, key=secret, tenant_id=tid, type=body.type, audience=body.audience,
+                scopes=body.scopes, created_by=principal.user_id or principal.id, expires_at=body.expires_at,
+                customer_ids=body.customer_ids,
                 mcp_url=origin + "/mcp" if mcp_served and (self.gateway.settings.public_url or
                     urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}) else None,
                 rest_base_url=origin + "/v1",
@@ -96,25 +166,28 @@ class Connections:
         return mandate
 
     def list(self, principal):
-        require_operator(principal)
+        require_connection_admin(principal)
         with self.gateway.db.connect() as conn:
             return [public_connection(row) for row in conn.execute(
-                "SELECT * FROM connections ORDER BY created_at DESC, rowid DESC")]
+                "SELECT * FROM connections WHERE (? IS NULL OR tenant_id=?) ORDER BY created_at DESC, rowid DESC",
+                (None if principal.operator else principal.tenant_id, principal.tenant_id))]
 
     def revoke(self, connection_id, principal):
-        require_operator(principal)
+        require_connection_admin(principal)
         self.gateway.limiter.consume(principal.id, "mutation")
         with self.gateway.db.connect(write=True) as conn:
-            row = conn.execute("SELECT * FROM connections WHERE connection_id=?", (connection_id,)).fetchone()
+            self.get(connection_id, principal)
+            row = conn.execute("SELECT * FROM connections WHERE connection_id=? AND (? IS NULL OR tenant_id=?)",
+                               (connection_id, None if principal.operator else principal.tenant_id, principal.tenant_id)).fetchone()
             if row is None:
                 raise DomainError("CONNECTION_NOT_FOUND", "Connection was not found", 404)
             if row["revoked_at"] is None:
                 conn.execute("UPDATE connections SET revoked_at=? WHERE connection_id=?",
                              (audit.utcnow().isoformat(), connection_id))
                 self.gateway.oauth.revoke_connection(conn, connection_id)
-                audit.append(conn, "human:operator", "CONNECTION_REVOKED", "Revoked an agent connection.",
+                audit.append(conn, "human:operator" if principal.user_id == "legacy-operator" else "human:" + (principal.user_id or principal.id), "CONNECTION_REVOKED", "Revoked an agent connection.",
                     data={"connection_id": connection_id, "agent_id": row["agent_id"],
-                          "client": row["client"], "key_prefix": row["key_prefix"]})
+                          "client": row["client"], "key_prefix": row["key_prefix"], "tenant_id": row["tenant_id"]})
             return public_connection(conn.execute("SELECT * FROM connections WHERE connection_id=?",
                                                   (connection_id,)).fetchone())
 
@@ -122,7 +195,10 @@ class Connections:
         digest = sha256(secret.encode()).hexdigest()
         with self.gateway.db.connect() as conn:
             row = conn.execute("SELECT * FROM connections WHERE key_digest=?", (digest,)).fetchone()
-        if row is None or row["credential_kind"] != "api_key" or not compare_digest(digest, row["key_digest"]) or row["revoked_at"] is not None:
+            if row is None:
+                old = conn.execute("SELECT connection_id FROM connection_secrets WHERE digest=? AND expires_at>?", (digest, audit.utcnow().isoformat())).fetchone()
+                row = conn.execute("SELECT * FROM connections WHERE connection_id=?", (old[0],)).fetchone() if old else None
+        if row is None or row["credential_kind"] != "api_key" or row["revoked_at"] is not None or row["expires_at"] and datetime.fromisoformat(row["expires_at"]) <= audit.utcnow():
             raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
         now = audit.utcnow()
         cutoff = (now - timedelta(minutes=1)).isoformat()
@@ -135,7 +211,35 @@ class Connections:
                 if conn.execute("SELECT revoked_at FROM connections WHERE connection_id=?",
                                 (row["connection_id"],)).fetchone()[0] is not None:
                     raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-        return Principal(row["agent_id"], credential_ref=row["connection_id"])
+        return Principal(row["agent_id"], credential_ref=row["connection_id"], tenant_id=row["tenant_id"],
+                         user_id=row["created_by"] if row["audience"] != "buyer" else None,
+                         connection_id=row["connection_id"], customer_ids=tuple(json.loads(row["customer_ids"])),
+                         audience=row["audience"], scopes=tuple(json.loads(row["scopes"])))
+
+    def get(self, connection_id, principal):
+        require_connection_admin(principal)
+        with self.gateway.db.connect() as conn:
+            row = conn.execute("SELECT * FROM connections WHERE connection_id=? AND (? IS NULL OR tenant_id=?)",
+                               (connection_id, None if principal.operator else principal.tenant_id, principal.tenant_id)).fetchone()
+        if row is None:
+            raise DomainError("CONNECTION_NOT_FOUND", "Connection was not found", 404)
+        return public_connection(row)
+
+    def rotate(self, connection_id, principal, overlap_hours=0):
+        require_connection_admin(principal)
+        if not 0 <= overlap_hours <= 24:
+            raise DomainError("VALIDATION_ERROR", "Overlap must be between zero and 24 hours", 422)
+        with self.gateway.db.connect(write=True) as conn:
+            record = self.get(connection_id, principal)
+            row = conn.execute("SELECT * FROM connections WHERE connection_id=?", (connection_id,)).fetchone()
+            if row["revoked_at"] or row["expires_at"] and datetime.fromisoformat(row["expires_at"]) <= audit.utcnow():
+                raise DomainError("CONNECTION_REVOKED", "Create a new connection", 409)
+            until = audit.utcnow() + timedelta(hours=overlap_hours)
+            conn.execute("INSERT INTO connection_secrets VALUES(?,?,?)", (row["key_digest"], connection_id, until.isoformat()))
+            key = f"vtg_{'sbx' if self.gateway.settings.environment == 'sandbox' else 'live'}_{connection_id}_" + token_urlsafe(32)
+            conn.execute("UPDATE connections SET key_digest=?,key_prefix=? WHERE connection_id=?", (sha256(key.encode()).hexdigest(), key[:8], connection_id))
+            audit.append(conn, principal.user_id or principal.id, "CONNECTION_ROTATED", "Rotated connection credential.", data={"connection_id": connection_id, "tenant_id": record.tenant_id})
+            return {**record.model_dump(mode="json"), "key": key, "old_key_valid_until": until}
 
 
 @router.post("", response_model=NewConnection, status_code=201,

@@ -247,6 +247,11 @@ def test_review_campaign_merge_delivers_to_new_targets(gateway, proposal_setup, 
         assert first["id"] == second["id"] and second["merged"] is True
         assert second["delivery_count"] == 2 and second["new_delivery_count"] == 1
         assert len(client.get("/v1/proposals/inbox", headers=agent_headers("agent-b")).json()) == 1
+        assert len(inbox(client)) == 1
+        with gateway.db.connect() as conn:
+            assert {(row["customer_id"], row["tenant_id"]) for row in conn.execute("SELECT customer_id,tenant_id FROM proposals")} == {
+                ("1", "hotel-aurora"), ("2", "kaari-hospital")}
+            assert conn.execute("SELECT tenant_id FROM audit WHERE action='PROPOSAL_RECEIVED' AND json_extract(data,'$.customer_id')='2'").fetchone()[0] == "kaari-hospital"
         assert submit(client, targets=["1", "2"])["new_delivery_count"] == 0
 
 

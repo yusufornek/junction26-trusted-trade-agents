@@ -24,6 +24,11 @@ WITH owned_audit AS (
 
 
 def buyer_scope(policy, principal, agent_id, customer_ids):
+    if principal.kind == "tenant_user":
+        # Customer numbers have exactly one tenant. The scoped database has already
+        # hidden foreign objects; policy-only agent projections need the same check.
+        return bool(principal.tenant_id and set(customer_ids) <= set(principal.customer_ids)
+                    and customer_ids)
     target = policy.identities.get(agent_id)
     if target and target.organisation_id:
         return bool(principal.organisation_id and principal.organisation_id == target.organisation_id
@@ -38,7 +43,8 @@ def authorize_review(policy, principal, order):
         return
     if not buyer_scope(policy, principal, order.agent_id, [order.customer_id]):
         raise DomainError("ORDER_NOT_FOUND", "Order was not found", 404)
-    if principal.kind != "buyer_user" or principal.role not in {"buyer_admin", "buyer_approver"}:
+    if not ((principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}) or
+            (principal.kind == "tenant_user" and principal.role in {"tenant_admin", "approver"})):
         raise DomainError("APPROVER_REQUIRED", "A buyer approver or operator credential is required", 403)
 
 
@@ -48,7 +54,7 @@ class Autonomy:
         self.db, self.policy = gateway.db, gateway.policy
 
     def _target(self, conn, agent_id, principal, *, change=False):
-        policy = self.policy.get()
+        policy = self.policy.get(tenant_overlay=False)
         row = policy.agents.get(agent_id)
         if row is None:
             # Only successfully used credentials enter this store. Retain historical records
@@ -67,10 +73,10 @@ class Autonomy:
             raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
         if principal.operator:
             return policy, row
-        same_buyer = principal.kind == "buyer_user" and buyer_scope(policy, principal, agent_id, row.customer_ids)
+        same_buyer = principal.kind in {"buyer_user", "tenant_user"} and buyer_scope(policy, principal, agent_id, row.customer_ids)
         if not same_buyer and (change or principal.id != agent_id):
             raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
-        if change and principal.role != "buyer_admin":
+        if change and principal.role not in {"buyer_admin", "tenant_admin"}:
             raise DomainError("BUYER_ADMIN_REQUIRED", "A buyer admin or operator credential is required", 403)
         return policy, row
 

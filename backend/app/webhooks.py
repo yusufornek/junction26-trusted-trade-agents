@@ -441,8 +441,12 @@ def review(order_id: str, request: Request, revision: int = Query(ge=1), princip
         '<form id="review"><label>Approver <input id="name" required></label>'
         '<label>Bearer credential <input id="token" type="password" required autocomplete="off"></label>'
         '<button>Approve reviewed revision</button></form><pre id="result"></pre><script>'
-        'document.getElementById("review").onsubmit=async e=>{e.preventDefault();const r=await fetch('
-        + json.dumps(f"/v1/approvals/{order_id}/approve") + ',{method:"POST",headers:{"Content-Type":"application/json",'
-        'Authorization:"Bearer "+document.getElementById("token").value},body:JSON.stringify({approver:document.getElementById("name").value,evidence_revision:'
-        + str(revision) + '})});document.getElementById("result").textContent=JSON.stringify(await r.json(),null,2);};</script>',
+        'document.getElementById("review").onsubmit=async e=>{e.preventDefault();const url='
+        + json.dumps(f"/v1/approvals/{order_id}/approve") + ';const headers={"Content-Type":"application/json",'
+        'Authorization:"Bearer "+document.getElementById("token").value};const body={approver:document.getElementById("name").value,evidence_revision:'
+        + str(revision) + '};const send=async()=>{const r=await fetch(url,{method:"POST",headers,body:JSON.stringify(body)});return r.json();};'
+        'let result=await send();if(result.confirmation_required){const order=result.summary.order;'
+        'if(window.confirm("Approve "+order.total+" "+order.currency+" using evidence revision "+order.evidence_revision+" shown above?"))'
+        '{body.confirmation_token=result.confirmation_token;result=await send();}else{result={detail:"Approval cancelled."};}}'
+        'document.getElementById("result").textContent=result.status||result.detail||"Review the current order before retrying.";};</script>',
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})

@@ -273,7 +273,8 @@ def test_cancel_ac10_generated_openapi_contract():
     operation = schema["paths"]["/v1/orders/{order_id}/cancel"]["post"]
     assert operation["requestBody"]["required"]
     assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/CancelRequest"
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/Order"
+    assert {item["$ref"] for item in operation["responses"]["200"]["content"]["application/json"]["schema"]["anyOf"]} == {
+        "#/components/schemas/Order", "#/components/schemas/DecisionPreview"}
     models = schema["components"]["schemas"]
     assert models["CancelRequest"]["required"] == ["cancelled_by"]
     assert models["CancelRequest"]["properties"]["reason"]["default"] == ""

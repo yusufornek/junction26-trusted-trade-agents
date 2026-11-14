@@ -128,9 +128,26 @@ def test_ac_5_tenfold_quantity_fix_requotes_pending_order_and_split_holds_remain
         assert gateway.orders.get_order(order.id).status == "CANCELLED"
         assert client.post(f"/v1/quotes/{original.id}/anomaly-fixes/{fix.id}").status_code == 409
     second = quote(gateway, need, 2000)
-    result = asyncio.run(create_server(gateway, "external").call_tool("apply_anomaly_fix",
-        {"quote_id": second.id, "fix_id": "1:split"}))
-    assert not result.is_error
+    from app.foundation import PRINCIPAL
+    from dataclasses import replace
+
+    server = create_server(gateway, "external")
+    scoped = gateway.accounts.bind(Principal("external", customer_ids=("1",),
+        connection_id="scoped-anomaly-test", scopes=("read",)))
+    scope_token = PRINCIPAL.set(scoped)
+    try:
+        denied = asyncio.run(server.call_tool("apply_anomaly_fix",
+            {"quote_id": second.id, "fix_id": "1:split"}))
+        assert denied.is_error and denied.structured_content["code"] == "INSUFFICIENT_SCOPE"
+    finally:
+        PRINCIPAL.reset(scope_token)
+    scope_token = PRINCIPAL.set(replace(scoped, scopes=("quotes:write",)))
+    try:
+        result = asyncio.run(server.call_tool("apply_anomaly_fix",
+            {"quote_id": second.id, "fix_id": "1:split"}))
+    finally:
+        PRINCIPAL.reset(scope_token)
+    assert not result.is_error, result.structured_content
     split = result.structured_content["quotes"]
     assert [q["lines"][0]["units_needed"] for q in split] == [200, 1800]
     held = gateway.orders.place_order(split[1]["id"], "remainder")
@@ -304,3 +321,28 @@ def test_ac_10_synthetic_90_day_history_keeps_hotel_demo_confirmed(gateway, need
         conn.execute("DELETE FROM purchase_memory")
         history = gateway.anomalies.history(conn, "hotel-chain-agent", "1", "valio", audit.utcnow() + timedelta(seconds=1), 90)
         assert len(history) == 1 and history[0]["sales_units"] == 1000
+
+
+@pytest.mark.parametrize("tenant,role,status", [("hotel-aurora", "approver", 200),
+    ("hotel-aurora", "viewer", 403), ("kaari-hospital", "approver", 404)])
+def test_ac_5_tenant_reviewer_fix_preserves_scope_and_role(gateway, need, upstream, tenant, role, status):
+    from app.foundation import PRINCIPAL
+
+    seed(gateway)
+    need.quantity = Quantity(value=10000, unit="L")
+    original = quote(gateway, need, 2000)
+    reviewer = Principal("tenant-reviewer", kind="tenant_user", role=role, tenant_id=tenant,
+        user_id="tenant-reviewer", customer_ids=("1",) if tenant == "hotel-aurora" else ("2",))
+    token = PRINCIPAL.set(reviewer)
+    try:
+        if status == 200:
+            result = gateway.anomalies.apply_fix(original.id, "1:correct",
+                reviewer.agent_id, principal=reviewer)
+            assert result.quotes[0].lines[0].units_needed == 200
+        else:
+            with pytest.raises(DomainError) as error:
+                gateway.anomalies.apply_fix(original.id, "1:correct",
+                    reviewer.agent_id, principal=reviewer)
+            assert error.value.status == status
+    finally:
+        PRINCIPAL.reset(token)

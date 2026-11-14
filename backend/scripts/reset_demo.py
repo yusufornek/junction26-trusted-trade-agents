@@ -87,9 +87,11 @@ def reset_demo(db_path, runtime_policy_path, archive_root, source, reliability_p
         if path.exists():
             shutil.move(str(path), archive_dir / path.name)
 
-    db = Database(db_path)
-    result = build(db, source, reliability_path, carbon_path)
-    seed_anomaly_history(db)
+    database = Database(db_path)
+    result = build(database, source, reliability_path, carbon_path)
+    from app.accounts import seed_demo
+    seed_demo(database)
+    seed_anomaly_history(database)
     # With no runtime policy copy, Policy.get() falls back to the committed defaults.
     return ResetResult(archive_dir=archive_dir, products=result["rows"])
 

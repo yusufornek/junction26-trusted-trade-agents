@@ -39,7 +39,7 @@ def test_ac_1_create_once_digest_and_approval_first_mandate(gateway):
         assert response.status_code == 201, response.text
         value = response.json()
         assert re.fullmatch(r"con_[0-9a-f]{8}", value["connection_id"])
-        assert value["key"].startswith("vak_") and len(value["key"]) >= 40
+        assert value["key"].startswith("vtg_") and len(value["key"]) >= 40
         assert value["key_prefix"] == value["key"][:8]
         assert value["last_used_at"] is None and value["revoked_at"] is None
         assert value["mandate"]["customer_ids"] == ["1"]
@@ -86,8 +86,10 @@ def test_ac_2_existing_agent_keeps_mandate_autonomy_history_and_demo(gateway, ne
 
 
 def check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch=None, authority="signed"):
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT OR IGNORE INTO tenant_customers VALUES('3','hotel-aurora')")
     policy = gateway.policy._editable(gateway.policy.get())
-    policy["customers"]["2"] = {}
+    policy["customers"]["3"] = {}
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
     token = issue_mandate(vc_issuer, daily=700, order=100)
     if authority == "policy_and_signed":
@@ -114,7 +116,7 @@ def check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch=None
         assert gateway.policy.get().model_dump(mode="json") == policy
         assert all(e in [v.model_dump(mode="json") for v in gateway.audit()] for e in history)
         # Another key, even with a different requested scope, must preserve authority.
-        assert issue(client, AGENT, idem="another", customer_ids=["2"]).json()["mandate"] == before
+        assert issue(client, AGENT, idem="another", customer_ids=["3"]).json()["mandate"] == before
         with gateway.db.connect() as conn:
             after, _, _ = gateway.mandates.authorize(conn, token, AGENT, "1")
         assert after.agents[AGENT].model_dump(mode="json") == before
@@ -211,7 +213,7 @@ def test_ac_6_list_newest_first_includes_revoked_without_key_or_digest(gateway, 
         rows = client.get("/v1/connections", headers=OPERATOR_HEADERS).json()
         assert [r["connection_id"] for r in rows] == [newer["connection_id"], older["connection_id"]]
         assert rows[1]["revoked_at"] is not None
-        assert all(set(r) == {"connection_id", "agent_id", "client", "key_prefix", "created_at", "last_used_at", "revoked_at"} for r in rows)
+        assert all(set(r) == {"connection_id", "agent_id", "client", "key_prefix", "created_at", "last_used_at", "revoked_at", "tenant_id", "type", "audience", "scopes", "created_by", "expires_at", "customer_ids"} for r in rows)
         assert older["key"] not in json.dumps(rows) and newer["key"] not in json.dumps(rows)
 
 
@@ -298,7 +300,8 @@ def test_ac_10_public_origin_and_mcp_disabled_urls_and_contract(gateway):
         schema = client.get("/openapi.json").json()
         assert schema["paths"]["/v1/connections"]["post"]["responses"]["201"]
         assert set(schema["components"]["schemas"]["Connection"]["properties"]["client"]["enum"]) == {
-            "claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest"}
+            "claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest",
+            "curl", "python", "typescript", "openai_agents_sdk", "anthropic_api", "langchain", "a2a"}
     with TestClient(create_app(gateway, serve_mcp=False)) as client:
         value = issue(client, idem="rest-only").json()
         assert value["mcp_url"] is None and value["rest_base_url"] == "https://public.example/v1"

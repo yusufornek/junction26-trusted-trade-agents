@@ -89,9 +89,10 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
                         "/.well-known/jwks-history.json", "/v1/meta",
                         "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt",
                         "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
-                        "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/register"}:
+                        "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/register", "/v1/connect/catalog", "/v1/auth/login",
+                        "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept"}:
                 continue
-            assert operation["security"] == [{"BearerAuth": []}]
+            assert {"BearerAuth": []} in operation["security"]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
             for headers in ({}, {"Authorization": "Bearer unknown"}, {"X-Agent-Id": "agent-a"},
                             {"Authorization": "Basic unknown"}):
