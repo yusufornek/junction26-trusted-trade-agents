@@ -109,18 +109,40 @@ class Catalog:
         with self.db.connect() as conn:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
-    def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10, removed_by=None):
+    def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
+               removed_by=None, mode="and", counts=None):
+        """Keep the (products, excluded) API; optional counts includes every hard-filter match.
+
+        OR retrieval orders by distinct terms matched, then FTS rank and product ID.
+        Quoted hyphenated terms are phrases; callers can also supply their parts.
+        """
         if not 1 <= limit <= max_limit:
             raise DomainError("INVALID_LIMIT", f"limit must be between 1 and {max_limit}", 422)
-        tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
+        if mode not in {"and", "or"}:
+            raise DomainError("INVALID_SEARCH_MODE", "Search mode must be and or or", 422)
+        if counts is not None:
+            counts["matched_count"] = 0
+        tokens = re.findall(r"[^\W_]+(?:-[^\W_]+)*" if mode == "or" else r"[^\W_]+", query, re.UNICODE)
+        if mode == "or":
+            tokens = list(dict.fromkeys(t.lower() for t in tokens))
         if not tokens:
             return [], 0
-        expression = " AND ".join('"' + token + '"' for token in tokens)
-        offers, excluded = [], 0
+        phrases = ['"' + token + '"' for token in tokens]
+        expression = (" OR " if mode == "or" else " AND ").join(phrases)
+        offers, excluded, matched = [], 0, 0
         with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT p.data FROM products_fts f JOIN products p ON p.id=f.id "
-                "WHERE products_fts MATCH ? ORDER BY bm25(products_fts), p.id", (expression,))
+            prefix, join, order, params = "", "", "", []
+            if mode == "or":
+                term_queries = " UNION ALL ".join(
+                    "SELECT rowid FROM products_fts WHERE products_fts MATCH ?" for _ in phrases)
+                prefix = (f"WITH term_hits AS ({term_queries}), "
+                          "hits AS (SELECT rowid, count(*) AS words FROM term_hits GROUP BY rowid) ")
+                join = "JOIN hits ON hits.rowid=f.rowid "
+                order = "hits.words DESC, "
+                params.extend(phrases)
+            rows = conn.execute(prefix +
+                "SELECT p.data FROM products_fts f JOIN products p ON p.id=f.id " + join +
+                "WHERE products_fts MATCH ? ORDER BY " + order + "bm25(products_fts), p.id", (*params, expression))
             for row in rows:
                 p = Product.model_validate_json(row["data"])
                 if hard_violations(p, required_claims or [], exclude_allergens or []):
@@ -134,8 +156,12 @@ class Catalog:
                             if allergen in p.allergens_contains:
                                 key = f"exclude_allergens.{allergen}"
                                 removed_by[key] = removed_by.get(key, 0) + 1
-                elif len(offers) < limit:
-                    offers.append(p)
+                else:
+                    matched += 1
+                    if len(offers) < limit:
+                        offers.append(p)
+        if counts is not None:
+            counts["matched_count"] = matched
         return offers, excluded
 
 

@@ -17,10 +17,17 @@ change or extend.
 | 07 | [Order timeline](07-order-timeline.md) | One call tells the whole story of an order | built |
 | 08 | [Exceptions](08-exceptions.md) | Fulfilment plans (single / split / partial), policy preview, substitutes outside preferences | built |
 | 09 | [Price-complete shortlist](09-price-complete-shortlist.md) | Every suitable candidate is priced before ranking; stable best offer | built |
-| 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | draft |
-| 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | draft |
-| 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority | draft |
-| 13 | [Open-standard mapping](13-open-standard-mapping.md) | Peppol / UBL mapping and export | draft |
+| 10 | [Signed quotes](10-signed-quotes.md) | JWS-signed quotes and a public key set — trust protocol | in progress |
+| 11 | [Tamper-evident audit](11-tamper-evident-audit.md) | Hash-chained audit entries with a verify endpoint | in progress |
+| 12 | [Verifiable mandate](12-verifiable-mandate.md) | Buyer-issued, signed agent authority (W3C VC as JWT) | in progress |
+| 13 | [Open-standard mapping](13-open-standard-mapping.md) | Peppol / UBL mapping and export | in progress |
 | 14 | [Demo reset](14-demo-reset.md) | Archive the local state and rebuild a clean database for the demo | built |
+| 15 | [Evidence completeness](15-evidence-completeness.md) | Missing or unknown data never counts as proof; unknown codes are refused | in progress |
+| 16 | [Standing constraints](16-standing-constraints.md) | Buyer-owned constraints per customer; every quote bound to a stored request | in progress |
+| 17 | [Approval evidence](17-approval-evidence.md) | Approval applies to the evidence the human saw | in progress |
+| 18 | [Lookup fallback](18-lookup-fallback.md) | Deterministic recovery from a too-narrow query; screening counts | in progress |
+| 19 | [Authentication](19-authentication.md) | Credentials for agents and the operator; object ownership | in progress |
+| 20 | [Total-cost ranking](20-total-cost-ranking.md) | Offers ranked by what the packs needed cost, overbuy shown | in progress |
+| 21 | [Audit anchoring](21-audit-anchoring.md) | Head hash of the audit chain written to Polygon | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

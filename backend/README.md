@@ -90,7 +90,16 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    reuse with another quote/agent is a conflict.
 4. If `PENDING_APPROVAL`, inspect `GET /v1/approvals`. A human calls
    `POST /v1/approvals/{order_id}/approve` or `/reject`, body
-   `{"approver":"Ada","comment":"Reviewed delivery and budget"}`.
+   `{"approver":"Ada","comment":"Reviewed delivery and budget","evidence_revision":1}`.
+   Approval is REST-only. Every order starts at `evidence_revision: 1`; the revision in the body is optional.
+   A stale stated revision returns `409 EVIDENCE_CHANGED` with the current revision before any upstream call.
+   Approval refreshes stock and policy and compares decision evidence: each line's quantity, covered sales
+   units, delivery date and warning codes, order-level warning codes, and policy rule names. Fetch timestamps,
+   warning texts and rule details do not change that evidence. Changed evidence stays `PENDING_APPROVAL`,
+   stores the refreshed lines/policy/warnings, increments the revision, and returns
+   `409 EVIDENCE_CHANGED` with `data {evidence_revision, changes[]}` in plain words. Review the refreshed
+   order before approving again. Unchanged evidence confirms; hard failures and unverifiable stock still
+   prevent confirmation. The timeline includes an `EVIDENCE_CHANGED` decision step with its actual calls.
 5. Read `/v1/orders/{id}`, `/v1/quotes/{id}`, `/v1/orders`, and
    `/v1/audit?order_id=...&quote_id=...`. When both audit filters are supplied, they combine with AND.
 
@@ -101,7 +110,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
 
 - `GET /v1/orders/{order_id}/timeline` returns the complete order story: the lookup referenced by the
   quote's `need_ref`, quote creation, placement and idempotent replays, human decisions, expiration,
-  cancellation and failed attempts tied to the order or its quote. The response contains `order_id`,
+  `EVIDENCE_CHANGED` revisions, cancellation and failed attempts tied to the order or its quote. The response contains `order_id`,
   `quote_id`, nullable `lookup_id`, `agent_id`, current `status`, `steps`, `total_live_calls`
   (`price`, `availability`) and `total_decision_calls`. Each step preserves audit `ts`, `actor`, `action`,
   `summary` and `data`, plus a `step` stage (`lookup`, `quote`, `order`, `decision`, `cancellation`,
@@ -217,7 +226,14 @@ Old stored lookups without preferences/plans remain readable, including through 
 ## Evidence, policy and lifecycle
 
 - `search_products` is catalog-only. FTS searches English/Finnish names, English ingredients and marketing
-  using AND tokens; `search_terms` avoids incidental words in the buyer's natural-language intent.
+  using AND tokens. `find_offers` reports `retrieval {mode, terms_used}`: explicit `search_terms` uses
+  mode `terms`, otherwise all intent words use mode `intent`. Only an empty intent search broadens
+  deterministically to mode `intent_broadened`: lower-case meaningful words, with numbers, common
+  English/Finnish stop words and units removed; hyphenated words are also tried in parts. OR results
+  are ordered by most distinct terms matched, then FTS rank and product ID. Hard constraints stay
+  unchanged and Decisions receives the original intent. `RETRIEVAL_BROADENED` names the tried words;
+  if no products match, `no_match_reason` names them and suggests `search_terms`. Explicit terms never
+  broaden. The small stop-word/unit list is documented in `app/lookup.py`.
   Required claims and excluded `CONTAINS` allergens are hard filters before shortlisting. Absence from
   the contains list is catalog evidence, not certification that an allergen is absent.
 - Decisions screens `shortlist.catalog_pool` (default 40). Every candidate at or above
@@ -228,7 +244,12 @@ Old stored lookups without preferences/plans remain readable, including through 
   the top `max_candidates` (at most 10). `priced_count` counts live-price candidates including cache hits.
   Fit's ranking contribution is capped at the suitability floor so noise above it cannot reorder
   suitable products; response and approval checks retain the original probabilities.
-  `screened_count` reports the catalog screening pool. Older stored lookups default both counts to zero.
+  `matched_count` counts every search match passing hard constraints before the pool limit;
+  `screened_count` reports the catalog screening pool. When `matched_count > screened_count`,
+  `POOL_TRUNCATED` reports both numbers and suggests narrowing the search. The `LOOKUP` audit records
+  `retrieval`, `matched_count`, `screened_count` and `priced_count`. The two retrieval warnings are
+  informational in the default policy. Older stored lookups default counts to zero and retrieval
+  to `intent` with no recorded terms.
   Policy updates omitting `shortlist.live_max` retain its current value; older runtime files inherit
   the committed default.
 - Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
@@ -248,7 +269,7 @@ Old stored lookups without preferences/plans remain readable, including through 
   its precise meaning is unconfirmed. Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
 - Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `UNKNOWN_PRODUCT`,
-  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, and `AVAILABILITY_ERROR`. Empty schedule lines signal
+  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, `AVAILABILITY_ERROR`, `RETRIEVAL_BROADENED`, and `POOL_TRUNCATED`. Empty schedule lines signal
   `UNKNOWN_PRODUCT`. Lookup failures remain visible; a quote requires a valid price and successful
   upstream checks. Human approval cannot override sales blocks, unknown products, hard constraints,
   or unverifiable availability.

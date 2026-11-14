@@ -153,10 +153,14 @@ def create_app(gateway=None):
         return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order,
-              description="Re-evaluate the placing agent's policy. A revoked mandate returns 403 AGENT_NOT_REGISTERED "
+              description="Approve only the reviewed evidence. Optionally send evidence_revision; a stale revision "
+                          "returns 409 EVIDENCE_CHANGED without upstream calls. Refresh stock and policy; changed decision "
+                          "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
+                          "data {evidence_revision, changes}. Review the refreshed order before approving again. "
+                          "Unchanged evidence confirms. A revoked mandate returns 403 AGENT_NOT_REGISTERED "
                           "with rule hits in data; the order remains pending and can be rejected.")
     def approve(order_id: str, body: ApprovalRequest, request: Request):
-        return svc(request).orders.approve(order_id, body.approver, body.comment)
+        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision)
 
     @app.post("/v1/approvals/{order_id}/reject", response_model=Order)
     def reject(order_id: str, body: ApprovalRequest, request: Request):

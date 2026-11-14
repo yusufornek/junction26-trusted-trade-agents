@@ -7,7 +7,7 @@ from uuid import uuid4
 from . import audit
 from .catalog import number
 from .db import DomainError
-from .models import Availability, LookupResult, OfferCard, Provenance, Warning
+from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
 from .valio import RequestCounter
 
 WARNING_TEXT = {
@@ -22,7 +22,28 @@ WARNING_TEXT = {
     "NO_FIT_SCORE": "Decisions fit probability is unavailable; a human must review suitability.",
     "AVAILABILITY_ERROR": "Availability could not be verified with the upstream API.",
     "OUTSIDE_PREFERENCE": "The product is a substitute outside the buyer's soft preferences.",
+    "RETRIEVAL_BROADENED": "No intent matches; searched any of these words instead",
+    "POOL_TRUNCATED": "Only part of the matching catalog was screened; add search terms to narrow.",
 }
+
+
+# Deliberately small English/Finnish stop-word and unit list, not a language model.
+INTENT_STOP_WORDS = frozenset({
+    "of", "for", "the", "a", "an", "and", "with", "to", "by", "per",
+    "litre", "litres", "liter", "liters", "l", "kg", "g", "ml", "dl", "cl", "pcs", "kpl",
+    "ja", "tai", "sekä",
+})
+
+
+def broadened_terms(intent):
+    """Preserve word order, remove numbers/units, and also try hyphenated parts."""
+    words = re.findall(r"[^\W\d_]+(?:-[^\W\d_]+)*", intent.lower(), re.UNICODE)
+    terms = []
+    for word in words:
+        for term in [word, *word.split("-")]:
+            if term not in INTENT_STOP_WORDS and term not in terms:
+                terms.append(term)
+    return terms
 
 
 def warning(code):
@@ -240,13 +261,29 @@ class Lookup:
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         policy = self.policy.get()
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
-        removed_by = {}
+        removed_by, counts = {}, {}
+        retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
+                              terms_used=list(need.search_terms) if need.search_terms else
+                              re.findall(r"[^\W_]+", need.intent, re.UNICODE))
         pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
-                                             max_limit=pool_size, removed_by=removed_by)
+                                             max_limit=pool_size, removed_by=removed_by, counts=counts)
+        global_warnings = []
+        if not pool and retrieval.mode == "intent":
+            retrieval = Retrieval(mode="intent_broadened", terms_used=broadened_terms(need.intent))
+            removed_by, counts = {}, {}
+            pool, excluded = self.catalog.search(" ".join(retrieval.terms_used), need.required_claims,
+                                                 need.exclude_allergens, pool_size, max_limit=pool_size,
+                                                 removed_by=removed_by, mode="or", counts=counts)
+            global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
+                f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
+        matched_count = counts.get("matched_count", len(pool))
         counter = RequestCounter()
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = len(pool)
+        if matched_count > screened_count:
+            global_warnings.append(Warning(code="POOL_TRUNCATED", text=(
+                f"{screened_count:,} of {matched_count:,} matching products screened; add search terms to narrow.")))
         if fits:
             order = {p.id: i for i, p in enumerate(pool)}
             pool = sorted(pool, key=lambda p: (-(fits.get(p.id) or {}).get("probability", -1), order[p.id]))
@@ -255,7 +292,7 @@ class Lookup:
         else:
             candidates = pool[:need.max_candidates]
         ids = [p.id for p in candidates]
-        price, stock, global_warnings = {}, {}, []
+        price, stock = {}, {}
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
                 target.update(self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
@@ -279,11 +316,15 @@ class Lookup:
                             autonomous_total=autonomous_total)
         no_match_reason = None
         if not pool:
-            counts = "; ".join(f"{key} removed {count} candidates" for key, count in sorted(removed_by.items()))
-            no_match_reason = (f"No products pass the hard filters: {counts}. Counts may overlap."
-                               if counts else "No catalog products match the search terms.")
+            constraint_counts = "; ".join(f"{key} removed {count} candidates" for key, count in sorted(removed_by.items()))
+            no_match_reason = (f"No products pass the hard filters: {constraint_counts}. Counts may overlap."
+                               if constraint_counts else "No catalog products match the search terms.")
+            if retrieval.mode == "intent_broadened":
+                tried = ", ".join(retrieval.terms_used) or "(no meaningful words)"
+                no_match_reason += f" Tried words: {tried}. Supply search_terms to narrow the product search."
         result = LookupResult(lookup_id=str(uuid4()), need=need, offers=returned, plans=plans,
                               no_match_reason=no_match_reason, excluded_count=excluded,
+                              retrieval=retrieval, matched_count=matched_count,
                               priced_count=len(candidates), screened_count=screened_count,
                               live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
@@ -291,6 +332,7 @@ class Lookup:
             audit.append(conn, actor, "LOOKUP", f"Priced {len(candidates)} candidates, returned {len(result.offers)} offers and excluded {excluded} hard-filter failures.",
                          data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id,
                                "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": len(pool) if fits else 0,
+                               "retrieval": result.retrieval.model_dump(), "matched_count": result.matched_count,
                                "priced_count": result.priced_count, "screened_count": result.screened_count,
                                "live_calls": counter.live().model_dump(),
                                "decision_calls": counter.decision_calls, "warnings": [w.model_dump() for w in global_warnings]})

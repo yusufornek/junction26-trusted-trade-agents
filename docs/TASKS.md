@@ -23,5 +23,15 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 19 | Exceptions — fulfilment plans, policy preview, substitutes | Backend | done | spec `docs/specs/08-exceptions.md`; verified live 14.11 |
 | 20 | Ordering requires a mandate (`403 AGENT_NOT_REGISTERED` for unregistered agents) | Backend (Claude → Codex) | done | spec `docs/specs/06-agent-mandate.md` R-2; verified live 14.11 |
 | 21 | Demo reset script (`backend/scripts/reset_demo.py`) | Backend (Claude → Codex) | done | spec `docs/specs/14-demo-reset.md`; verified live 14.11 |
+| 22 | Evidence completeness — missing data never counts as proof | Backend (Claude → Codex) | in progress | spec `docs/specs/15-evidence-completeness.md` |
+| 23 | Standing constraints + bound quotes | Backend (Claude → Codex) | todo | spec `docs/specs/16-standing-constraints.md` |
+| 24 | Approval evidence revision | Backend (Claude → Codex) | in progress | spec `docs/specs/17-approval-evidence.md` |
+| 25 | Lookup fallback + screening counts | Backend (Claude → Codex) | in progress | spec `docs/specs/18-lookup-fallback.md` |
+| 26 | Authentication + ownership (+ console patch for review) | Backend (Claude → Codex) | todo | spec `docs/specs/19-authentication.md` |
+| 27 | Ask the mentor about `closingTime`, Terminal stock 999999, shifted dates | Gökalp | todo | text ready in the morning notes |
+| 28 | Signed quotes + receipts, audit chain, UBL export | Backend (Claude → Codex) | todo | specs 10, 11, 13 |
+| 29 | Total-cost ranking with factor breakdown | Backend (Claude → Codex) | todo | spec `docs/specs/20-total-cost-ranking.md` |
+| 30 | Verifiable mandate (buyer-issued W3C VC) | Backend (Claude → Codex) | todo | spec `docs/specs/12-verifiable-mandate.md` |
+| 31 | Audit anchoring on Polygon | Backend (Claude → Codex) | todo | spec `docs/specs/21-audit-anchoring.md`; mainnet wallet funded by Gökalp |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |

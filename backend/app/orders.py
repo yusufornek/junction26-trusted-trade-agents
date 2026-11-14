@@ -10,6 +10,35 @@ from .models import LiveCalls, LookupResult, NeedSpec, Order, OrderTimeline, Qua
 from .valio import RequestCounter
 
 
+def evidence_changes(before, after):
+    """Compare decision facts only: timestamps, wording and excess stock are not evidence changes."""
+    changes = []
+
+    def codes(old, new, label, noun):
+        changes.extend(f"{label}new {noun} {code}" for code in sorted(new - old))
+        changes.extend(f"{label}removed {noun} {code}" for code in sorted(old - new))
+
+    old_lines = {line.product_id: line for line in before.lines}
+    new_lines = {line.product_id: line for line in after.lines}
+    for product_id in sorted(old_lines.keys() | new_lines.keys()):
+        old, new = old_lines.get(product_id), new_lines.get(product_id)
+        if old is None or new is None:
+            changes.append(f"{product_id}: {'added' if old is None else 'removed'} order line")
+            continue
+        if old.units_needed != new.units_needed:
+            changes.append(f"{product_id}: quantity {old.units_needed} → {new.units_needed} sales units")
+        old_covered = min(old.units_needed, old.availability.available_amount)
+        new_covered = min(new.units_needed, new.availability.available_amount)
+        if old_covered != new_covered:
+            changes.append(f"{product_id}: covered {old_covered:g} → {new_covered:g} of {new.units_needed:g}")
+        if old.availability.available_date != new.availability.available_date:
+            changes.append(f"{product_id}: delivery date {old.availability.available_date} → {new.availability.available_date}")
+        codes({w.code for w in old.warnings}, {w.code for w in new.warnings}, f"{product_id}: ", "warning")
+    codes({w.code for w in before.warnings}, {w.code for w in after.warnings}, "Order: ", "warning")
+    codes({h.rule for h in before.policy.hits}, {h.rule for h in after.policy.hits}, "Order: ", "policy rule")
+    return changes
+
+
 class Orders:
     def __init__(self, db, catalog, valio, policy):
         self.db, self.catalog, self.valio, self.policy = db, catalog, valio, policy
@@ -19,6 +48,10 @@ class Orders:
         try:
             return operation(counter)
         except DomainError as error:
+            # A changed revision is already persisted and audited atomically, with its actual calls.
+            # Do not add a second failed event that would double-count the same refresh in the timeline.
+            if error.code == "EVIDENCE_CHANGED" and error.data.get("changes"):
+                raise
             if error.code in {"EXPIRED_QUOTE", "EXPIRED_ORDER"}:
                 self.expire()
             with self.db.connect(write=True) as conn:
@@ -182,7 +215,8 @@ class Orders:
                                                 policy=policy, warnings=quote.warnings)
             order = Order(id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
-                          total=quote.total, currency=quote.currency, lines=lines, policy=result, live_calls=counter.live())
+                          total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
+                          policy=result, live_calls=counter.live())
             conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
@@ -246,6 +280,7 @@ class Orders:
             events = audit.read_timeline(conn, order.id, quote.id, quote.need_ref)
         stages = {"LOOKUP": "lookup", "CREATE_QUOTE": "quote", "PLACE_ORDER": "order",
                   "ORDER_REPLAY": "order", "APPROVE": "decision", "REJECT": "decision",
+                  "EVIDENCE_CHANGED": "decision",
                   "CANCEL": "cancellation"}
         steps = [TimelineStep(
             ts=event.ts, actor=event.actor, action=event.action,
@@ -268,27 +303,36 @@ class Orders:
             sql = "SELECT data FROM orders" + (" WHERE status='PENDING_APPROVAL'" if pending_only else "") + " ORDER BY rowid DESC"
             return [Order.model_validate_json(r[0]) for r in conn.execute(sql)]
 
-    def approve(self, order_id, approver, comment=""):
-        return self._review(order_id, approver, comment, True)
+    def approve(self, order_id, approver, comment="", evidence_revision=None):
+        return self._review(order_id, approver, comment, True, evidence_revision)
 
     def reject(self, order_id, approver, comment=""):
         return self._review(order_id, approver, comment, False)
 
-    def _review(self, order_id, approver, comment, approve):
+    def _review(self, order_id, approver, comment, approve, evidence_revision=None):
         self.expire()
         if not approver.strip():
             raise DomainError("APPROVER_REQUIRED", "An approver name is required", 422)
         action = "APPROVE" if approve else "REJECT"
-        return self._run(action, f"human:{approver}", {"order_id": order_id, "comment": comment},
-                         lambda counter: self._review_transaction(order_id, approver, comment, approve, counter))
+        inputs = {"order_id": order_id, "comment": comment}
+        if approve and evidence_revision is not None:
+            inputs["evidence_revision"] = evidence_revision
+        return self._run(action, f"human:{approver}", inputs,
+                         lambda counter: self._review_transaction(order_id, approver, comment, approve, counter,
+                                                                  evidence_revision))
 
-    def _review_transaction(self, order_id, approver, comment, approve, counter):
+    def _review_transaction(self, order_id, approver, comment, approve, counter, evidence_revision=None):
+        changes = []
         with self.db.connect(write=True) as conn:
             order = self._order(conn, order_id)
             if order.status != "PENDING_APPROVAL":
                 raise DomainError("INVALID_TRANSITION", "Only PENDING_APPROVAL orders can be approved or rejected")
+            if approve and evidence_revision is not None and evidence_revision != order.evidence_revision:
+                raise DomainError("EVIDENCE_CHANGED", "Review the current order evidence before approving.",
+                                  data={"evidence_revision": order.evidence_revision, "changes": []})
             quote = self._quote(conn, order.quote_id)
             if approve:
+                previous = order.model_copy(deep=True)
                 stock = self.valio.fetch("availability", quote.customer_id, quote.deliver_by,
                                          [o.product_id for o in order.lines], counter, fresh=True)
                 order.lines = self._refresh_stock(conn, order.lines, quote.deliver_by, stock, order.id)
@@ -307,19 +351,36 @@ class Orders:
                     raise DomainError("AVAILABILITY_ERROR", "Availability must be verified before approval", 502)
                 if order.expires_at <= audit.utcnow():
                     raise DomainError("EXPIRED_ORDER", "The approval window expired during stock verification")
-            order.status = "CONFIRMED" if approve else "REJECTED"
-            order.approver, order.comment = approver, comment
+                order.policy = evaluation
+                order.warnings = quote.warnings
+                changes = evidence_changes(previous, order)
+                if changes:
+                    order.evidence_revision += 1
+            if not changes:
+                order.status = "CONFIRMED" if approve else "REJECTED"
+                order.approver, order.comment = approver, comment
             self._save_order(conn, order)
             self._reserve(conn, order)
-            audit.append(conn, f"human:{approver}", "APPROVE" if approve else "REJECT",
-                         f"Human {approver} {'approved' if approve else 'rejected'} the order.",
-                         order_id=order.id, quote_id=quote.id,
-                         data={"inputs": {"comment": comment},
-                               "rule_hits": [h.model_dump() for h in (evaluation.hits if approve else order.policy.hits)],
-                               "fit_scores": {o.product_id: o.fit for o in order.lines},
-                               "warnings": {o.product_id: [w.code for w in o.warnings] for o in order.lines},
-                               "live_calls": counter.live().model_dump()})
-            return order
+            data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision},
+                    "evidence_revision": order.evidence_revision,
+                    "rule_hits": [h.model_dump() for h in order.policy.hits],
+                    "fit_scores": {o.product_id: o.fit for o in order.lines},
+                    "warnings": {o.product_id: [w.code for w in o.warnings] for o in order.lines},
+                    "order_warnings": [w.code for w in order.warnings],
+                    "live_calls": counter.live().model_dump()}
+            if changes:
+                audit.append(conn, f"human:{approver}", "EVIDENCE_CHANGED",
+                             "Order evidence changed; review before approving: " + "; ".join(changes),
+                             order_id=order.id, quote_id=quote.id, data={**data, "changes": changes})
+            else:
+                audit.append(conn, f"human:{approver}", "APPROVE" if approve else "REJECT",
+                             f"Human {approver} {'approved' if approve else 'rejected'} the order.",
+                             order_id=order.id, quote_id=quote.id, data=data)
+        # Leave the writer transaction successfully so the pending revision and its audit survive the 409.
+        if changes:
+            raise DomainError("EVIDENCE_CHANGED", "Order evidence changed; review the refreshed order before approving.",
+                              data={"evidence_revision": order.evidence_revision, "changes": changes})
+        return order
 
     def cancel(self, order_id, actor="system", reason=""):
         """Core transition for a local confirmed order, before any known cutoff."""

@@ -893,9 +893,13 @@ paths:
   /v1/approvals/{order_id}/approve:
     post:
       summary: Approve
-      description: Re-evaluate the placing agent's policy. A revoked mandate returns
-        403 AGENT_NOT_REGISTERED with rule hits in data; the order remains pending
-        and can be rejected.
+      description: Approve only the reviewed evidence. Optionally send evidence_revision;
+        a stale revision returns 409 EVIDENCE_CHANGED without upstream calls. Refresh
+        stock and policy; changed decision evidence stays pending at a new revision
+        and returns 409 EVIDENCE_CHANGED with data {evidence_revision, changes}. Review
+        the refreshed order before approving again. Unchanged evidence confirms. A
+        revoked mandate returns 403 AGENT_NOT_REGISTERED with rule hits in data; the
+        order remains pending and can be rejected.
       operationId: approve_v1_approvals__order_id__approve_post
       parameters:
       - name: order_id
@@ -1188,6 +1192,15 @@ components:
           type: string
           title: Comment
           default: ''
+        evidence_revision:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Evidence Revision
+          description: Optional revision displayed to the approver. A stale revision
+            prevents approval with 409 EVIDENCE_CHANGED before any upstream call;
+            ignored for rejection.
       additionalProperties: false
       type: object
       required:
@@ -1480,6 +1493,17 @@ components:
           title: Excluded Count
           description: FTS matches removed by hard catalog filters, before shortlist
             truncation.
+        retrieval:
+          $ref: '#/components/schemas/Retrieval'
+          description: Deterministic retrieval mode and terms; older stored lookups
+            default to intent with no recorded terms.
+        matched_count:
+          type: integer
+          minimum: 0.0
+          title: Matched Count
+          description: All search matches passing hard constraints, before catalog-pool
+            truncation.
+          default: 0
         priced_count:
           type: integer
           minimum: 0.0
@@ -1769,6 +1793,19 @@ components:
             $ref: '#/components/schemas/OfferCard'
           type: array
           title: Lines
+        warnings:
+          items:
+            $ref: '#/components/schemas/Warning'
+          type: array
+          title: Warnings
+          description: Order-level risks retained from the quoted fulfilment plan.
+        evidence_revision:
+          type: integer
+          minimum: 1.0
+          title: Evidence Revision
+          description: Decision evidence revision; starts at 1 and increases when
+            approval refresh changes the facts requiring review.
+          default: 1
         policy:
           $ref: '#/components/schemas/PolicyResult'
         live_calls:
@@ -2391,6 +2428,26 @@ components:
       - on_hard_constraint_violation
       - 'on'
       title: RejectPolicy
+    Retrieval:
+      properties:
+        mode:
+          type: string
+          enum:
+          - terms
+          - intent
+          - intent_broadened
+          title: Mode
+          default: intent
+        terms_used:
+          items:
+            type: string
+          type: array
+          title: Terms Used
+          description: Search words or phrases actually tried; broadened terms are
+            lower-case and omit numbers, units and stop words.
+      additionalProperties: false
+      type: object
+      title: Retrieval
     RuleCount:
       properties:
         rule:
@@ -2538,7 +2595,8 @@ components:
         action:
           type: string
           title: Action
-          description: Original audit action, including replays and failed attempts.
+          description: Original audit action, including EVIDENCE_CHANGED, replays
+            and failed attempts.
         step:
           type: string
           enum:

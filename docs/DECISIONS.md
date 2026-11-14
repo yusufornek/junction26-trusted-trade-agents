@@ -2,6 +2,32 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The buyer grants its agent's authority as a signed W3C Verifiable Credential** (JWT, Ed25519);
+  the gateway verifies it on every step, the operator's policy can only tighten it, and the buyer revokes it with a
+  signed revocation (spec 12). **The audit chain's head hash is anchored on Polygon mainnet** in a plain
+  transaction (no smart contract), so anyone can check the log against a public record; Gökalp funds and runs the
+  anchoring wallet (spec 21).
+- 2026-11-14 — **The trust protocol ships in this submission:** Ed25519-signed quotes and order receipts with a
+  public key set and an offline verifier (spec 10), a hash-chained audit log with a signed head a buyer can keep
+  as a checkpoint (spec 11), and a UBL 2.1 Order / OrderResponse export validated against the official OASIS
+  schemas (spec 13). Orders state `commitment: gateway-simulated` so the promise is explicit. **Offer cards rank
+  by the total cost of the packs bought**, overbuy shown, with each ranking factor's contribution (spec 20).
+- 2026-11-14 — **Missing data never counts as proof.** An allergen exclusion passes a product only when the
+  catalog has an allergen declaration for it that does not list the allergen; an explicit free-from
+  declaration is shown as such. Products without allergen data and "may contain" products are excluded under
+  that exclusion. Unknown codes (allergens, claims, labels, units) are refused with the valid values. The same
+  rule applies to every other field the gateway relies on (spec 15).
+- 2026-11-14 — **Credentials establish the principal.** Each agent gets a secret key, the console operator a
+  token; approvals, policy changes and global views need the operator token, and every object belongs to the
+  agent that created it. The `X-Agent-Id` header has no authority (spec 19).
+- 2026-11-14 — **The buyer organisation's constraints bind every agent:** per-customer standing constraints
+  are unioned with each request, and every quote is bound to a stored request (spec 16). **Approval applies to
+  the evidence the approver saw** — changed evidence returns to the approver (spec 17). **An intent-only lookup
+  broadens deterministically** and reports how many products it screened (spec 18).
+- 2026-11-14 — **Delivery reliability and CO2 stay in the ranking** — both are organiser-provided per-product
+  data and the brief rewards them; each offer shows the factors' contributions, and missing values get a
+  neutral treatment. **The pitch keeps a 15-second recording** of A.I.mo answering the challenge sentence,
+  framed as discovery versus delegated purchase.
 - 2026-11-14 — **Ordering requires a mandate.** An agent without a mandate can look up offers and get quotes;
   `place_order` answers `403 AGENT_NOT_REGISTERED` and the attempt is audited. Registered agents
   (`hotel-chain-agent`, `web-console`) act for customer "1" with a rolling 24-hour autonomous limit of 5,000 EUR

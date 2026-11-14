@@ -23,7 +23,7 @@ def create_server(gateway, agent_id="mcp-agent"):
     # The agent identity is fixed when the server is launched for that agent, not self-declared per call.
     server = MCPServer("Valio Aimo Trusted Trade Agents", instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
-        "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. "
+        "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
         "Ordering requires a mandate; unregistered agents can look up offers and create quotes. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
         "Previews include mandate and daily limits; stock and policy may change, so placement is authoritative. "
@@ -35,7 +35,7 @@ def create_server(gateway, agent_id="mcp-agent"):
         products, _ = gateway.catalog.search(query, required_claims, exclude_allergens, limit)
         return products
 
-    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Hard filters run locally; Decisions gates suitable candidates for one price and one stock batch, up to shortlist.live_max (default 25), before ranking and truncating. Returns screened_count, priced_count, lookup_id, conversions, provenance, fit and stock. Also returns single/split/partial plans with total, coverage, uncovered and policy_preview for this server identity, including mandate and daily limits, without extra calls or commitments. Stock/policy can change before placement; the order result is authoritative. Soft preferences rank matching products above substitutes; no_match_reason explains empty hard-filter results. " + WARNINGS)
+    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Hard filters run locally; Decisions gates suitable candidates for one price and one stock batch, up to shortlist.live_max (default 25), before ranking and truncating. Search terms use AND retrieval (mode terms); without search_terms, intent words use AND (mode intent). Only an empty intent search broadens deterministically to OR meaningful words and hyphenated parts, most words matched first then FTS rank (mode intent_broadened). Hard constraints remain unchanged and fit screening uses the original intent. Returns retrieval {mode, terms_used}, matched_count before pool truncation, screened_count, priced_count, lookup_id, conversions, provenance, fit and stock. RETRIEVAL_BROADENED names the words tried; POOL_TRUNCATED discloses unscreened matches. Empty broadening names the tried words and suggests search_terms. Also returns single/split/partial plans with total, coverage, uncovered and policy_preview for this server identity, including mandate and daily limits, without extra calls or commitments. Stock/policy can change before placement; the order result is authoritative. Soft preferences rank matching products above substitutes; no_match_reason explains empty hard-filter results. " + WARNINGS)
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{agent_id}")
 
@@ -48,14 +48,14 @@ def create_server(gateway, agent_id="mcp-agent"):
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookups and quotes are open. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval happens in the REST inbox; no upstream order endpoint exists.")
+    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookups and quotes are open. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists.")
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
             return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Read current local order state, fixed-price lines, warnings and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
+    @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
         return gateway.orders.get_order(order_id)
 

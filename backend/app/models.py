@@ -152,6 +152,11 @@ class FulfilmentPlan(Model):
     policy_preview: PolicyResult = Field(description="Side-effect-free current policy evaluation for the caller, including mandate and daily limits. Stock and policy may change before placement; the order result is authoritative.")
 
 
+class Retrieval(Model):
+    mode: Literal["terms", "intent", "intent_broadened"] = "intent"
+    terms_used: list[str] = Field(default_factory=list, description="Search words or phrases actually tried; broadened terms are lower-case and omit numbers, units and stop words.")
+
+
 class LookupResult(Model):
     lookup_id: str = Field(description="Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.")
     need: NeedSpec
@@ -159,6 +164,8 @@ class LookupResult(Model):
     plans: list[FulfilmentPlan] = Field(default_factory=list, description="Single, split or partial plans from this lookup's returned priced offers only; no extra upstream calls.")
     no_match_reason: str | None = Field(default=None, description="Explains empty catalog results, including how many candidates each hard constraint removed.")
     excluded_count: int = Field(description="FTS matches removed by hard catalog filters, before shortlist truncation.")
+    retrieval: Retrieval = Field(default_factory=Retrieval, description="Deterministic retrieval mode and terms; older stored lookups default to intent with no recorded terms.")
+    matched_count: int = Field(default=0, ge=0, description="All search matches passing hard constraints, before catalog-pool truncation.")
     priced_count: int = Field(default=0, ge=0, description="Shortlisted products checked for live prices, including cached evidence.")
     screened_count: int = Field(default=0, ge=0, description="Catalog pool size submitted for Decisions screening.")
     live_calls: LiveCalls
@@ -229,6 +236,8 @@ class Order(Model):
     total: float
     currency: str
     lines: list[OfferCard]
+    warnings: list[Warning] = Field(default_factory=list, description="Order-level risks retained from the quoted fulfilment plan.")
+    evidence_revision: int = Field(default=1, ge=1, description="Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.")
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
@@ -252,6 +261,7 @@ class CancelRequest(Model):
 class ApprovalRequest(Model):
     approver: str = Field(min_length=1, description="Human approver name (MVP: one role, no authentication).")
     comment: str = ""
+    evidence_revision: int | None = Field(default=None, ge=1, description="Optional revision displayed to the approver. A stale revision prevents approval with 409 EVIDENCE_CHANGED before any upstream call; ignored for rejection.")
 
 
 class ApprovalItem(Model):
@@ -273,7 +283,7 @@ class AuditEntry(Model):
 class TimelineStep(Model):
     ts: datetime = Field(description="UTC audit event time; steps are oldest first, with audit ID breaking ties.")
     actor: str = Field(description="Recorded actor, such as agent:buyer, human:Ada or system.")
-    action: str = Field(description="Original audit action, including replays and failed attempts.")
+    action: str = Field(description="Original audit action, including EVIDENCE_CHANGED, replays and failed attempts.")
     step: Literal["lookup", "quote", "order", "decision", "cancellation", "system"] = Field(description="Human-facing stage of the order lifecycle.")
     summary: str = Field(description="Original human-readable audit summary.")
     data: dict[str, Any] = Field(description="Unmodified audit payload, including inputs, evidence and policy rule hits.")
