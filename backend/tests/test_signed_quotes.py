@@ -18,7 +18,7 @@ from app import audit
 from app.api import create_app
 from app.canonical import canonical_json
 from app.config import BACKEND
-from app.signing import quote_payload, receipt_payload, signature_digest
+from app.signing import quote_integrity, quote_payload, receipt_payload, signature_digest, verify_quote
 from conftest import agent_headers, quote_request
 
 
@@ -79,6 +79,59 @@ def test_review_outstanding_spec_payload_quote(gateway, need, upstream, tmp_path
     assert gateway.orders.get_quote(quote.id).signature == data["signature"]
     order = gateway.orders.place_order(quote.id, "outstanding-spec-promise")
     assert order.status == "CONFIRMED"
+
+
+@pytest.mark.parametrize("signature_format", ["versioned", "expanded", "basic"])
+@pytest.mark.parametrize("status", ["ACCEPTED", "EXPIRED"])
+def test_review_historical_signed_quote_shape(gateway, need, upstream, tmp_path, monkeypatch,
+                                            signature_format, status):
+    upstream.amount, upstream.model = 100, "Stock"
+    quote = make_quote(gateway, need)
+    data = quote.model_dump(mode="json")
+    for line in data["lines"]:
+        line.pop("allowed_lot_size")
+        line["availability"].pop("availability_known")
+    if signature_format == "versioned":
+        data["signature"] = gateway.signing.sign_quote(data)
+    else:
+        payload = specified_payload(data)
+        if signature_format == "expanded":
+            payload["integrity"] = quote_integrity(data)
+        data["signature"] = gateway.signing.sign(payload)
+    jwks = gateway.signing.jwks()
+    assert verify_quote(data, jwks)  # Valid evidence issued before spec 39 added defaults.
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
+    saved, keys = tmp_path / "historical-quote.json", tmp_path / "jwks.json"
+    keys.write_text(json.dumps(jwks))
+
+    def assert_preserved(actual):
+        assert actual["signature"] == data["signature"]
+        assert quote_integrity(actual) == quote_integrity(data)
+        assert verify_quote(actual, jwks)
+        saved.write_text(json.dumps(actual))
+        result = subprocess.run([sys.executable, str(BACKEND / "scripts/verify_quote.py"), str(saved),
+                                 "--jwks", str(keys), "--at", quote.created_at.isoformat()],
+                                cwd=tmp_path, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.get(f"/v1/quotes/{quote.id}")
+        assert response.status_code == 200
+        assert_preserved(response.json())
+        assert_preserved(gateway.orders.get_quote(quote.id).model_dump(mode="json"))
+        if status == "ACCEPTED":
+            assert gateway.orders.place_order(quote.id, "historical-shape").status == "CONFIRMED"
+        else:
+            monkeypatch.setattr(audit, "utcnow", lambda: quote.expires_at + timedelta(seconds=1))
+            gateway.orders.expire()
+        with gateway.db.connect() as conn:
+            stored = json.loads(conn.execute("SELECT data FROM quotes WHERE id=?", (quote.id,)).fetchone()[0])
+        assert stored["status"] == status
+        assert_preserved(stored)
+        response = client.get(f"/v1/quotes/{quote.id}")
+        assert response.status_code == 200
+        assert_preserved(response.json())
 
 
 def test_ac_1_quote_jwk_and_each_signed_field(gateway, need, upstream):

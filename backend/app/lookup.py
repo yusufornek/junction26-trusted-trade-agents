@@ -1,6 +1,6 @@
 import re
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from math import isclose
@@ -181,7 +181,9 @@ def reserved(conn, product_id, exclude_order=None):
 
 def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=None):
     codes = []
-    now = timestamp(raw.get("_fetched_at")) or audit.utcnow()
+    # Advance the supplier clock on cache hits without changing signed provenance.
+    fetched = timestamp(raw.get("_fetched_at"))
+    now = fetched + timedelta(seconds=raw.get("_cache_age", 0)) if fetched else audit.utcnow()
     cutoff = timestamp(raw.get("closingTime"), ZoneInfo("Europe/Helsinki"))
     if cutoff is None:
         codes.append("CUTOFF_UNKNOWN")
@@ -228,7 +230,7 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
         delivery = ", ".join(sorted({d.isoformat() for d in dates})) or "unknown date"
         warnings = [Warning(code=w.code, text=f"Order cut-off for delivery on {delivery} passed at {cutoff.isoformat()}")
                     if w.code == "CUTOFF_PASSED" else w for w in warnings]
-    return Availability(available_amount=None if unknown else amount, availability_known=not unknown,
+    return Availability(available_amount=None if unknown_on_time else amount, availability_known=not unknown_on_time,
                         logistic_model=raw.get("logisticModel"),
                         closing_time=cutoff, available_date=min(dates) if dates else None,
                         enough=quantity is not None and amount >= quantity, coverage=coverage), warnings

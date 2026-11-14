@@ -2,6 +2,9 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The gateway remembers purchase rhythms and suggests replenishment** (business teammate's
+  proposal + Gökalp): per-customer purchase memory, detected cadence and quantity, suggestions the buyer's agent can
+  prepare as a lookup or turn into a recurring order over MCP; suggestions never order by themselves (spec 41).
 - 2026-11-14 — **Follow the organiser's mock-API answers** (spec 39): whole sales units everywhere; availability
   ≥ 999999 = unknown but orderable (informational `AVAILABILITY_UNCONFIRMED`); empty availability = `NOT_AVAILABLE`
   (reject); `closingTime` = order cut-off for its delivery date; Valio calls paced at ≤ 5/s and a 429 pauses

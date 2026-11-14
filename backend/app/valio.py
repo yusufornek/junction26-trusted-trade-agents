@@ -157,6 +157,7 @@ class ValioClient:
                 cached = self.cache.get((endpoint, customer, day, pid))
                 if not fresh and cached:
                     result[pid] = copy.deepcopy(cached[1])
+                    result[pid]["_cache_age"] = max(0, clock - cached[0])
                 else:
                     missing.append(pid)
         if not missing:

@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_serializer, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -148,13 +148,21 @@ class Provenance(Model):
 
 
 class Availability(Model):
-    available_amount: float | None = Field(description="On-time sales units after local reservations; null when an upstream amount >= 999999 means unknown but orderable.")
-    availability_known: bool = Field(default=True, description="False for upstream amounts >= 999999, independently of logistic model; no local reservation is counted.")
+    available_amount: float | None = Field(description="On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.")
+    availability_known: bool = Field(default=True, description="False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.")
     logistic_model: str | None = None
     closing_time: datetime | None = None
     available_date: date | None = Field(default=None, description="Earliest unblocked upstream delivery date.")
     enough: bool
     coverage: float = Field(ge=0, le=1, description="Fraction of requested sales units covered by on-time stock.")
+
+    @model_serializer(mode="wrap")
+    def preserve_signed_field_presence(self, handler):
+        data = handler(self)
+        # Historical evidence must retain its signed shape through reads and saves.
+        if "availability_known" not in self.model_fields_set:
+            data.pop("availability_known", None)
+        return data
 
 
 class OfferCard(Model):
@@ -190,6 +198,13 @@ class OfferCard(Model):
     score: float = 0
     score_breakdown: dict[str, float] = Field(default_factory=dict, description="Weighted price, coverage, reliability, co2 and fit contributions; sums to score.")
     rank_label: Literal["best", "better", "good"] | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_signed_field_presence(self, handler):
+        data = handler(self)
+        if "allowed_lot_size" not in self.model_fields_set:
+            data.pop("allowed_lot_size", None)
+        return data
 
 
 class Overbuy(Model):

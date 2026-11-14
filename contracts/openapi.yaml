@@ -4696,13 +4696,14 @@ components:
           - type: number
           - type: 'null'
           title: Available Amount
-          description: On-time sales units after local reservations; null when an
-            upstream amount >= 999999 means unknown but orderable.
+          description: On-time sales units after local reservations; null when a usable
+            on-time upstream amount >= 999999 means unknown but orderable.
         availability_known:
           type: boolean
           title: Availability Known
-          description: False for upstream amounts >= 999999, independently of logistic
-            model; no local reservation is counted.
+          description: False for usable on-time upstream amounts >= 999999, independently
+            of logistic model; no local reservation is counted. Later unknown stock
+            does not exempt finite on-time stock from reservations.
           default: true
         logistic_model:
           anyOf:

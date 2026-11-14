@@ -309,12 +309,15 @@ Old stored lookups without preferences/plans remain readable, including through 
 - Availability sums unblocked lines arriving on/before `deliver_by`. Future lines are flagged
   `DATE_SHIFT`, never counted as on-time coverage. `closingTime` is the order cut-off for the accompanying
   `availableDate`; a past cut-off gives `CUTOFF_PASSED`, naming the delivery date and cut-off timestamp,
-  and still requires approval. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
+  and still requires approval. On cache hits, cut-offs use the fetched supplier time advanced by the
+  cache age (measured with a monotonic clock), falling back to local receipt time without a supplier clock;
+  the original fetched-at provenance is preserved. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
   are interpreted in Europe/Helsinki. Missing/different schedule `salesUnit` gives `UNIT_MISMATCH` and
-  that line contributes zero stock. An individual usable schedule amount >=999999 means stock is unknown
-  but any quantity may be ordered, independently of `logisticModel`: `available_amount: null`,
-  `availability_known: false`, informational `AVAILABILITY_UNCONFIRMED`, full coverage when on time,
-  and no local reservation. Finite amounts subtract reservations even for Terminal products.
+  that line contributes zero stock. An individual usable schedule amount >=999999 gives informational
+  `AVAILABILITY_UNCONFIRMED`, independently of `logisticModel`. When that line arrives on/before the deadline,
+  any quantity may be ordered: `available_amount: null`, `availability_known: false`, full coverage,
+  and no local reservation. Later unknown stock does not change finite on-time amounts or reservations.
+  Finite amounts subtract reservations even for Terminal products.
   Missing/unknown logistic models still give `STOCK_MODEL_UNKNOWN`. Stock-model zero stock without a date gives rejecting `NO_STOCK`.
   Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
@@ -552,6 +555,10 @@ Both earlier unversioned formats (the specified payload and the short-lived
 expanded payload with an integrity member) remain readable, verifiable offline
 and usable for placement until expiry, subject to current authority and policy.
 Their original signatures are preserved; they are never silently re-signed.
+Historical evidence omits `allowed_lot_size` and `availability_known` when those fields were absent
+from the signed record, including REST/MCP responses and accepted/expired status saves. Their runtime
+defaults still load as one whole sales unit and known availability; newly issued evidence includes both fields
+under the existing version-2 protected integrity digest.
 Unsigned legacy quotes remain readable and require re-quoting for a new order.
 Existing orders replay after ownership/identity checks
 without requiring a historical quote key to remain published. Their stored buyer
