@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, useAsync, when } from "../ui";
+import { Avatar, Ring } from "../charts";
+import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, pct, useAsync, when } from "../ui";
 
 export default function Approvals() {
   const { data, error, loading, reload } = useAsync(() => api.approvals(), [], 5000);
@@ -48,7 +49,10 @@ export default function Approvals() {
             onChange={(e) => setComment(e.target.value)}
           />
         </label>
-        <LiveDot label={`${data?.length ?? 0} waiting`} />
+        {/* Same height as a field, so the chip sits on the inputs' centre line rather than their bottom edge. */}
+        <div className="flex h-9 items-center">
+          <LiveDot label={`${data?.length ?? 0} waiting`} />
+        </div>
       </Card>
 
       {actionError ? <ErrorNote error={actionError} /> : null}
@@ -69,13 +73,17 @@ export default function Approvals() {
         data.map(({ order, quote }) => (
           <Card key={order.id} className="flex flex-col gap-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="text-[16px] font-semibold leading-snug">{order.lines[0]?.name ?? order.id}</h2>
-                <p className="label mt-0.5">
-                  requested by {order.agent_id} · {when(order.created_at)} · deliver by {quote.deliver_by}
-                </p>
+              <div className="flex min-w-0 gap-3">
+                <Avatar name={order.agent_id} size={38} />
+                <div className="min-w-0">
+                  <h2 className="text-[16px] font-semibold leading-snug">{order.lines[0]?.name ?? order.id}</h2>
+                  <p className="label mt-0.5">
+                    requested by {order.agent_id} · {when(order.created_at)} · deliver by {quote.deliver_by}
+                  </p>
+                </div>
               </div>
-              <div className="text-right">
+              {/* ml-auto keeps the amount on the right edge when it wraps under the title on a phone. */}
+              <div className="ml-auto text-right">
                 <div className="num text-[24px] font-semibold">{eur(order.total, order.currency)}</div>
                 <div className="label">
                   price locked · <Countdown to={order.expires_at} />
@@ -89,11 +97,20 @@ export default function Approvals() {
                   key={l.product_id}
                   className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-tile)] bg-page p-3 text-[13px]"
                 >
+                  {l.availability?.coverage != null ? (
+                    <Ring
+                      value={l.availability.coverage}
+                      size={30}
+                      tone={l.availability.coverage >= 1 ? "positive" : "warn"}
+                    >
+                      {pct(l.availability.coverage).replace("%", "")}
+                    </Ring>
+                  ) : null}
                   <span className="font-medium">
                     {num(l.quantity_sales_units ?? l.units_needed)} {l.sales_unit}
                   </span>
                   <span className="text-ink-muted">at {eur(l.unit_price, l.currency)} each</span>
-                  <span className="text-ink-soft">#{l.product_id}</span>
+                  <span className="text-ink-muted">#{l.product_id}</span>
                   <span className="ml-auto num font-medium">{eur(l.total, l.currency)}</span>
                   <div className="w-full">
                     <WarningChips warnings={l.warnings} />

@@ -2,9 +2,30 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The console has a Connect page (`/connect`)**: pick the tool the agent works in (Claude Desktop,
+  Claude Code, Cursor, VS Code, ChatGPT, another MCP client, REST), create a per-agent key shown once, copy that
+  tool's own setup, and see the agent's first call arrive — the user's request, modelled on Higgsfield's connect
+  flow. Keys come from the gateway (`/v1/connections`, contract in `docs/CONNECT-API.md`, backend by Gökalp); new
+  agents start approval-first (spec 40). Until the endpoints exist the page says so and shows `<YOUR_AGENT_KEY>`.
+- 2026-11-14 — **Console typeface is Schibsted Grotesk; status colours come from the Finnish forest floor**: spruce
+  `#2e8b62` confirmed, cloudberry `#c97716` pending, lingonberry `#c73b45` rejected, birch `#7d8a97` cancelled or
+  expired — the user found the system font and stock status colours generic. Schibsted Grotesk has tabular figures
+  for prices; text on its soft background stays above 4.5:1 and fills above 3:1. The rail widens with page names on
+  hover and the page moves over and narrows instead of being covered (the user's request); every route is measured
+  with the rail open and closed from 768 to 1440 px.
 - 2026-11-14 — **The gateway remembers purchase rhythms and suggests replenishment** (business teammate's
   proposal + Gökalp): per-customer purchase memory, detected cadence and quantity, suggestions the buyer's agent can
   prepare as a lookup or turn into a recurring order over MCP; suggestions never order by themselves (spec 41).
+- 2026-11-14 — **Console theme is Valio Aimo blue-and-white**, replacing the dark rail and near-black buttons —
+  the product is presented to Valio Aimo, whose identity is blue and white. Values come from valioaimo.fi's own
+  CSS: navy `#002f6d` (rail), Valio blue `#003388` (primary actions, charts, focus), Aimo brand `#005670`,
+  Aimo light `#d1dde3`, page `#f2f7f8`. Status colours keep their meaning and are never replaced by the brand:
+  green confirmed/covered, amber pending, coral rejected, grey cancelled/expired. Tokens live in
+  `frontend/src/index.css` only.
+- 2026-11-14 — **Frontend has a fixture mode for design review** (`npm run dev:mock`, port 5174): the whole
+  console renders from `frontend/src/mock.ts` without a gateway or operator token, with a visible "MOCK DATA"
+  badge. The flag is compiled out of production builds — reviewers (human or agent) can inspect every screen
+  in parallel without sharing the in-memory operator token or mutating the demo database.
 - 2026-11-14 — **Follow the organiser's mock-API answers** (spec 39): whole sales units everywhere; availability
   ≥ 999999 = unknown but orderable (informational `AVAILABILITY_UNCONFIRMED`); empty availability = `NOT_AVAILABLE`
   (reject); `closingTime` = order cut-off for its delivery date; Valio calls paced at ≤ 5/s and a 429 pauses
