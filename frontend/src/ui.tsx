@@ -153,8 +153,33 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
   );
 }
 
+/** What a person should read for the refusals the backend lists as worth a friendly message (FRONTEND-TODO);
+ *  the gateway's own message stays below it for whoever needs the detail. */
+const FRIENDLY: Record<string, string> = {
+  APPROVAL_LIMIT: "This order is above what you may approve. An organisation admin has to approve it.",
+  FOUR_EYES: "You connected or promoted this agent, so a second person has to approve its orders.",
+  AGENT_PAUSED: "This agent is paused. Resume it on the Governance page before it can buy again.",
+  OUTSIDE_GUARDRAIL: "That is outside a limit set above this agent. The limit and where it comes from are below.",
+  CONSTRAINTS_REQUIRED: "This kitchen needs its allergen and diet rules set before its first order.",
+  LAST_TENANT_ADMIN: "An organisation needs at least one admin.",
+  EVIDENCE_CHANGED: "Price or stock moved since the quote. Review the refreshed order before deciding.",
+  CUSTOMER_NOT_IN_MANDATE: "This agent may not buy for that customer.",
+  AGENT_NOT_REGISTERED: "This agent has no mandate yet, so it cannot buy.",
+  OPERATOR_REQUIRED: "Only the gateway operator can do this.",
+  UPSTREAM_BUSY: "The supplier is busy. Try again in a moment.",
+  UPSTREAM_RATE_LIMITED: "The supplier asked us to slow down. Try again in half a minute.",
+};
+
 export function ErrorNote({ error }: { error: unknown }) {
   const msg = error instanceof Error ? error.message : String(error);
+  const friendly = error instanceof ApiError ? FRIENDLY[error.code] : undefined;
+  if (friendly)
+    return (
+      <div className="card border-negative/30 bg-negative-soft p-4 text-[13px] text-negative">
+        <strong>{friendly}</strong>
+        {msg && msg !== friendly ? <div className="mt-1 text-[12px]">{msg}</div> : null}
+      </div>
+    );
   // Only blame reachability when it is the likely cause; a 409 or a 500 means the gateway did answer.
   const unreachable =
     error instanceof TypeError || (error instanceof ApiError && error.status >= 502 && error.status <= 504);

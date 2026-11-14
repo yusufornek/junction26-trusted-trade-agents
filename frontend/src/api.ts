@@ -184,6 +184,8 @@ export type Order = {
   live_calls: LiveCalls | null;
   evidence_revision: number;
   approver: string | null;
+  /** A single-restaurant profile lets the person behind the agent approve its own order; the gateway marks it. */
+  self_approved?: boolean;
   comment: string | null;
   cancelled_by?: string | null;
   cancel_reason?: string | null;
@@ -477,6 +479,13 @@ export async function call<T>(path: string, init?: RequestInit): Promise<T> {
     // The gateway returns {code, message, data} for domain errors.
     const message = body?.message ?? (`Gateway answered ${res.status}` + (text && !body ? `: ${text.slice(0, 120)}` : ""));
     throw new ApiError(body?.code ?? "HTTP_" + res.status, message, res.status, body?.data);
+  }
+  // Since spec 43 a human decision (approve, reject, cancel, autonomy, policy) first answers with a summary and a
+  // single-use token, deciding nothing. The console's button press is that person's confirmation, so the identical
+  // body goes back once with the token; without this the inbox showed "approved" while the order stayed pending.
+  if (body?.confirmation_required === true && body.confirmation_token && init?.body) {
+    const original = JSON.parse(String(init.body));
+    return call<T>(path, { ...init, body: JSON.stringify({ ...original, confirmation_token: body.confirmation_token }) });
   }
   return body as T;
 }

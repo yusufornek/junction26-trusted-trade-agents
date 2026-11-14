@@ -106,6 +106,7 @@ export default function OrderDetail() {
               placed by {o.agent_id} · {when(o.created_at)}
               {o.decided_by_kind ? ` · ${DECIDED_BY[o.decided_by_kind]}` : ""}
               {o.approver ? ` · signed off by ${o.approver}` : ""}
+              {o.self_approved ? " · approved by the person who runs the agent (no second person)" : ""}
             </p>
             {o.comment ? <p className="mt-2 text-[13px] text-ink-muted">“{o.comment}”</p> : null}
           </div>
