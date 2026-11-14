@@ -56,6 +56,65 @@ def organisations(gateway):
             "other": {"kind": "buyer_user", "role": "buyer_admin", "organisation_id": "other"}})
 
 
+@pytest.mark.parametrize("scope_change", ["organisation", "customer", "deleted", "role"])
+def test_review_autonomy_replay_rechecks_target_scope(gateway, need, upstream, scope_change):
+    organisations(gateway)
+    place(gateway, need)
+    body = {"level": "approval_required", "reason": "Pilot review"}
+    headers = {**agent_headers("hotel-agent"), "Idempotency-Key": "scope"}
+    url = f"/v1/agents/{AGENT}/autonomy"
+    with TestClient(create_app(gateway)) as client:
+        first = client.post(url, json=body, headers=headers)
+        assert first.status_code == 200 and first.json()["track_record"]["orders_placed"] == 1
+        policy = gateway.policy._editable(gateway.policy.get())
+        if scope_change == "organisation":
+            policy["identities"][AGENT]["organisation_id"] = "other"
+        elif scope_change == "customer":
+            policy["agents"][AGENT]["customer_ids"] = ["2"]
+        elif scope_change == "deleted":
+            del policy["agents"][AGENT]
+        else:
+            policy["identities"]["hotel-agent"]["role"] = "buyer_viewer"
+        update(gateway, **policy)
+        fresh = client.post(url, json=body, headers={**headers, "Idempotency-Key": "fresh"})
+        replay = client.post(url, json=body, headers=headers)
+        assert fresh.status_code == (403 if scope_change == "role" else 404)
+        assert (replay.status_code, replay.json()["code"]) == (fresh.status_code, fresh.json()["code"])
+        assert "track_record" not in replay.json()
+    assert len([e for e in gateway.audit() if e.action == "AUTONOMY_CHANGED"]) == 1
+
+
+def test_review_autonomy_key_binds_target(gateway):
+    body = {"level": "approval_required", "reason": "Review required"}
+    headers = {**OPERATOR_HEADERS, "Idempotency-Key": "target"}
+    with TestClient(create_app(gateway)) as client:
+        first = client.post(f"/v1/agents/{AGENT}/autonomy", json=body, headers=headers)
+        assert first.status_code == 200
+        assert client.post(f"/v1/agents/{AGENT}/autonomy", json=body, headers=headers).json() == first.json()
+        other = client.post("/v1/agents/hotel-chain-agent/autonomy", json=body, headers=headers)
+        assert other.status_code == 409 and other.json()["code"] == "IDEMPOTENCY_CONFLICT"
+        assert gateway.policy.get().agents["hotel-chain-agent"].autonomy == "autonomous_within_limits"
+
+
+def test_review_failed_autonomy_command_keeps_approval_required(gateway, need, upstream):
+    approval_first(gateway)
+    before = gateway.policy.runtime_path.read_bytes()
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("CREATE TRIGGER fail_command BEFORE INSERT ON commands "
+                     "WHEN NEW.command='change' BEGIN SELECT RAISE(ABORT,'command failed'); END")
+    with TestClient(create_app(gateway), raise_server_exceptions=False) as client:
+        response = client.post(f"/v1/agents/{AGENT}/autonomy",
+            json={"level": "autonomous_within_limits", "reason": "Pilot review"},
+            headers={**OPERATOR_HEADERS, "Idempotency-Key": "failed-promotion"})
+    assert response.status_code == 500
+    assert gateway.policy.runtime_path.read_bytes() == before
+    assert gateway.policy.get().agents[AGENT].autonomy is None
+    assert not [e for e in gateway.audit() if e.action == "AUTONOMY_CHANGED"]
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 0
+    assert place(gateway, need).status == "PENDING_APPROVAL"
+
+
 def test_ac_1_registered_agent_defaults_to_approval_required(gateway, need, upstream):
     approval_first(gateway)
     assert gateway.policy.get().autonomy.default == "approval_required"

@@ -60,6 +60,32 @@ def quote(gateway, need, token, qty=100):
     return gateway.orders.create_quote(quote_request(need, qty=qty, need_ref=lookup.lookup_id), AGENT, mandate=token)
 
 
+@pytest.mark.parametrize("command", ["quote", "lookup"])
+def test_review_bound_mandate_checked_on_headerless_command_replay(gateway, need, upstream, buyer, command):
+    claims = decode(issue(buyer, sub="external"))[1]
+    claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    token = sign_jwt(buyer, claims, kid="buyer-1")
+    if command == "quote":
+        # The VC is first presented at quote time, not on the bound lookup.
+        lookup = gateway.find_offers(need)
+        request = quote_request(need, need_ref=lookup.lookup_id, qty=1)
+        def call(mandate):
+            return gateway.orders.create_quote(request, mandate=mandate, command_key="bound-command")
+    else:
+        def call(mandate):
+            return gateway.find_offers(need, mandate=mandate, command_key="bound-command")
+    first = call(token)
+    revocation = sign_jwt(buyer, {"iss": ISSUER, "jti_revoked": [claims["jti"]],
+        "iat": int(audit.utcnow().timestamp())}, kid="buyer-1")
+    gateway.mandates.revoke(revocation, "agent:external")
+    before = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+    with pytest.raises(DomainError, match="MANDATE_INVALID") as denied:
+        call(None)
+    assert denied.value.data["check"] == "revoked"
+    assert before == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
+    assert first.agent_id == "external"
+
+
 def test_review_search_only_mandate_stats(gateway, buyer):
     token = issue(buyer)
     gateway.mandates.search("milk", [], [], 1, token=token, agent_id=AGENT)
@@ -225,6 +251,11 @@ def test_ac_4_effective_limits_only_tighten(gateway, need, upstream, buyer, poli
 def test_ac_5_signed_revocation_blocks_quote_replay_and_pending_approval(gateway, need, upstream, buyer):
     token = issue(buyer, order=500)
     q = quote(gateway, need, token)
+    keyed_body = quote_request(need, need_ref=q.need_ref).model_dump(mode="json")
+    with TestClient(create_app(gateway)) as client:
+        keyed_quote = client.post("/v1/quotes", json=keyed_body,
+            headers={**headers(token), "Idempotency-Key": "signed-quote"})
+        assert keyed_quote.status_code == 200
     order = gateway.orders.place_order(q.id, "pending", AGENT, mandate=token)
     assert order.status == "PENDING_APPROVAL"
     claims = {"iss": ISSUER, "jti_revoked": [decode(token)[1]["jti"]], "iat": int(audit.utcnow().timestamp())}
@@ -233,7 +264,8 @@ def test_ac_5_signed_revocation_blocks_quote_replay_and_pending_approval(gateway
         assert client.post("/v1/mandates/revocations", json={"jwt": wrong}).status_code == 422
         signed = sign_jwt(buyer, claims, kid="buyer-1", typ="JWT")
         assert client.post("/v1/mandates/revocations", json={"jwt": signed}).status_code == 200
-        for path, body, extra in (("/v1/quotes", quote_request(need, need_ref=q.need_ref).model_dump(mode="json"), headers(token)),
+        for path, body, extra in (("/v1/quotes", keyed_body, {"Idempotency-Key": "signed-quote"}),
+                                  ("/v1/quotes", quote_request(need, need_ref=q.need_ref).model_dump(mode="json"), headers(token)),
                                   ("/v1/orders", {"quote_id": q.id}, {"Idempotency-Key": "pending"}),
                                   (f"/v1/approvals/{order.id}/approve", {"approver": "Ada"}, OPERATOR_HEADERS)):
             result = client.post(path, json=body, headers=extra)

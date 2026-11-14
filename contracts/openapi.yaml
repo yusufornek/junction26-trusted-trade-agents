@@ -2,7 +2,11 @@ openapi: 3.1.0
 info:
   title: Valio Aimo Trusted Trade Agents
   description: MVP fixed-price gateway. REST and MCP share one core. Bearer credentials
-    establish agent ownership and operator authority. Commitments are gateway-simulated.
+    establish agent ownership and operator authority. Keyed writes bind the principal,
+    command route including all targets, and payload. Every exact replay rechecks
+    current authorization and scope before returning its saved result. Policy changes
+    commit with their audit and command result; runtime YAML is published only after
+    commit, with durable recovery from SQLite. Commitments are gateway-simulated.
   version: 0.1.0
 paths:
   /v1/meta:
@@ -427,9 +431,11 @@ paths:
       summary: Change Autonomy
       description: Operator or this agent's buyer_admin grants or removes autonomy.
         Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional
-        Idempotency-Key replays the first result without changing authority again;
-        changed payload returns 409 IDEMPOTENCY_CONFLICT. Readiness never grants authority
-        automatically. A stricter signed buyer mandate still wins.
+        Idempotency-Key binds this target and payload, rechecks current target scope,
+        and replays the first result without changing authority again; changed target
+        or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows
+        the enclosing command commit. Readiness never grants authority automatically.
+        A stricter signed buyer mandate still wins.
       operationId: change_autonomy_v1_agents__agent_id__autonomy_post
       security:
       - BearerAuth: []

@@ -1,8 +1,6 @@
-import os
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import yaml
 
@@ -27,8 +25,8 @@ class Policy:
         self.get()  # Validate configuration at startup.
 
     @staticmethod
-    def _load(path, defaults=None):
-        data = yaml.load(path.read_text(), Loader=PolicyLoader)
+    def _load(path, defaults=None, *, content=None):
+        data = yaml.load(path.read_text() if content is None else content, Loader=PolicyLoader)
         if defaults is not None:
             data.setdefault("shortlist", {})
             data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
@@ -50,7 +48,8 @@ class Policy:
         from .lookup import WARNING_TEXT
 
         defaults = self._load(self.path)
-        resource = self._load(self.runtime_path, defaults) if self.runtime_path.exists() else defaults
+        content = self.db.file_content(self.runtime_path) if self.db is not None else None
+        resource = self._load(self.runtime_path, defaults, content=content) if content is not None or self.runtime_path.exists() else defaults
         resource.known_warning_codes = sorted(WARNING_TEXT)
         return resource
 
@@ -79,18 +78,7 @@ class Policy:
         return changes
 
     def _replace(self, content):
-        self.runtime_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = None
-        try:
-            with NamedTemporaryFile(mode="w", dir=self.runtime_path.parent, delete=False) as file:
-                temporary = Path(file.name)
-                file.write(content)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary, self.runtime_path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        self.db.stage_file(self.runtime_path, content)
 
     def update(self, request, *, reset=False, actor=None):
         return self._update(request, reset=reset, actor=actor)
@@ -108,45 +96,33 @@ class Policy:
         return result[0]
 
     def _update(self, request, *, reset=False, actor=None, audit_action="POLICY_UPDATED", audit_data=None):
-        # Shared SQLite writer lock serializes policy updates across REST/MCP processes.
-        replaced, previous = False, None
-        try:
-            with self.db.connect(write=True) as conn:
-                if callable(request):
-                    request, audit_data = request()
-                    if request is None:
-                        # VC-only agents retain their signed authority; changing a level must
-                        # never mint a policy mandate that bypasses VC expiry or revocation.
-                        audit.append(conn, actor, audit_action, "Changed verifiable-mandate agent autonomy.", data=audit_data)
-                        return self.get()
-                previous = self.runtime_path.read_text() if self.runtime_path.exists() else None
-                before = self._editable(self.get())
-                after = self._editable(self._load(self.path) if reset else request.policy)
-                if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
-                    after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
-                for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy"):
-                    if not reset and section not in request.policy.model_fields_set:
-                        after[section] = before[section]
-                from .catalog import Catalog
-                catalog = Catalog(self.db)
-                for customer_id, customer in after["customers"].items():
-                    for field in ("required_claims", "exclude_allergens"):
-                        customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
-                resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
-                audit.append(conn, actor or f"human:{request.updated_by}", audit_action,
-                             "Restored default policy." if reset else "Updated procurement policy.",
-                             data={"diff": self._diff(before, after), "comment": getattr(request, "comment", None),
-                                   "reset": reset, "stated_name": request.updated_by, **(audit_data or {})})
-                self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
-                replaced = True
-        except BaseException:
-            # Restore the file if the audit transaction cannot commit.
-            if replaced:
-                if previous is None:
-                    self.runtime_path.unlink(missing_ok=True)
-                else:
-                    self._replace(previous)
-            raise
+        # File staging shares the outer command transaction, including its result insert.
+        with self.db.connect(write=True) as conn:
+            if callable(request):
+                request, audit_data = request()
+                if request is None:
+                    # VC-only agents retain their signed authority; changing a level must
+                    # never mint a policy mandate that bypasses VC expiry or revocation.
+                    audit.append(conn, actor, audit_action, "Changed verifiable-mandate agent autonomy.", data=audit_data)
+                    return self.get()
+            before = self._editable(self.get())
+            after = self._editable(self._load(self.path) if reset else request.policy)
+            if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
+                after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
+            for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy"):
+                if not reset and section not in request.policy.model_fields_set:
+                    after[section] = before[section]
+            from .catalog import Catalog
+            catalog = Catalog(self.db)
+            for customer_id, customer in after["customers"].items():
+                for field in ("required_claims", "exclude_allergens"):
+                    customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
+            resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
+            audit.append(conn, actor or f"human:{request.updated_by}", audit_action,
+                         "Restored default policy." if reset else "Updated procurement policy.",
+                         data={"diff": self._diff(before, after), "comment": getattr(request, "comment", None),
+                               "reset": reset, "stated_name": request.updated_by, **(audit_data or {})})
+            self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
         return self.get()
 
     def effective_need(self, need, policy=None):

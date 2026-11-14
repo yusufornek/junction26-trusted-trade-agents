@@ -321,6 +321,10 @@ class Orders:
                     _, _, used_mandate = self.mandates.authorize(conn, mandate, agent_id, order.customer_id or quote.customer_id,
                         products=[line.product_id for line in order.lines], bound=bound, policy=policy)
                     self.mandates.used(conn, used_mandate)
+                elif agent_id in policy.agents:
+                    # Historical orders may predate the shared command table. Apply
+                    # current customer scope even on that original replay path.
+                    self.policy.check_customer(agent_id, order.customer_id or quote.customer_id, policy)
                 audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
                              order_id=order.id, quote_id=order.quote_id,
                              data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
