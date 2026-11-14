@@ -1,5 +1,7 @@
 # Backend status for frontend planning (14.11, afternoon)
 
+The concrete to-do list for the console is in `docs/FRONTEND-TODO.md` (updated 14.11 evening).
+
 What the backend serves on `main` now, what lands next, and the data each part gives the console. Field-level
 contracts: `contracts/openapi.yaml`, `docs/FRONTEND.md`, and the spec named in each row (`docs/specs/`). Screens are
 the frontend owner's call; this page lists data and behaviour only.
