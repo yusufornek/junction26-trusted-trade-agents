@@ -30,6 +30,8 @@ export default function Repeat() {
   const agents = useAsync(() => repeatApi.agents(), []);
   const [picked, setPicked] = useState("");
   const [created, setCreated] = useState<RecurringOrder | null>(null);
+  // The gateway lets only the buying agent's own key pause; after one refusal the buttons are hidden for this sign-in.
+  const [pauseRefused, setPauseRefused] = useState(false);
   // Start on an agent whose mandate allows repeat orders, so "Repeat automatically" works without a detour.
   const agent = picked || agents.data?.find((a) => a.recurring)?.id || agents.data?.[0]?.id;
 
@@ -105,7 +107,15 @@ export default function Repeat() {
             <Empty>No recurring orders yet. Choose "Repeat automatically" on a suggestion to start one.</Empty>
           </Card>
         ) : (
-          recurring.data.map((r) => <RecurringCard key={r.id} r={r} onChanged={recurring.reload} />)
+          recurring.data.map((r) => (
+            <RecurringCard
+              key={r.id}
+              r={r}
+              onChanged={recurring.reload}
+              canPause={!pauseRefused}
+              onRefused={() => setPauseRefused(true)}
+            />
+          ))
         )}
       </section>
     </div>
@@ -290,9 +300,28 @@ const runWords = (run: RecurringRun, changes: number) =>
         ? "Same price, pack and delivery as the approved order. Ordered without asking anyone."
         : "Nothing changed against the approved order.";
 
-function RecurringCard({ r, onChanged }: { r: RecurringOrder; onChanged: () => void }) {
+/** Pause and resume refusals in plain words; ui.tsx's FRIENDLY map does not cover these codes. */
+const PAUSE_WORDS: Record<string, string> = {
+  RECURRING_FORBIDDEN: "Only the agent that buys this order can pause or resume it, using its own key.",
+  RECURRING_NOT_AUTHORIZED: "This agent's mandate no longer allows repeat orders, so it cannot pause or resume them.",
+  RECURRING_NOT_FOUND: "This recurring order no longer exists, or you cannot see it.",
+};
+
+function RecurringCard({
+  r,
+  onChanged,
+  canPause,
+  onRefused,
+}: {
+  r: RecurringOrder;
+  onChanged: () => void;
+  /** False once the gateway has refused this sign-in a pause or resume (403), so the button is left out. */
+  canPause: boolean;
+  onRefused: () => void;
+}) {
   const runs = useAsync(() => repeatApi.runs(r.id), [r.id], 10000);
   const { busy, error, act } = useAction();
+  const paused = r.status === "PAUSED";
   const allowed = r.permitted_deviations;
   const latest = [...(runs.data ?? [])].reverse().slice(0, 5);
 
@@ -312,14 +341,35 @@ function RecurringCard({ r, onChanged }: { r: RecurringOrder; onChanged: () => v
               : "Any change in price, pack or delivery goes to a person first."}
           </p>
         </div>
-        <button
-          className="btn-dark"
-          title="Buys today's order now, under the same checks as a scheduled run"
-          disabled={busy !== null || r.status !== "ACTIVE"}
-          onClick={() => act("run", () => repeatApi.runNow(r.id).then(runs.reload))}
-        >
-          {busy === "run" ? "Running…" : "Run now"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {canPause ? (
+            <button
+              className="btn-ghost"
+              title={paused ? "Scheduled runs start again from the next date" : "No scheduled run buys anything until you resume"}
+              disabled={busy !== null}
+              onClick={() =>
+                act("pause", () =>
+                  (paused ? repeatApi.resume : repeatApi.pause)(r.id)
+                    .then(onChanged)
+                    .catch((e) => {
+                      if (e instanceof ApiError && e.status === 403) onRefused();
+                      throw e instanceof ApiError && PAUSE_WORDS[e.code] ? new ApiError(e.code, PAUSE_WORDS[e.code], e.status) : e;
+                    }),
+                )
+              }
+            >
+              {busy === "pause" ? "Saving…" : paused ? "Resume" : "Pause"}
+            </button>
+          ) : null}
+          <button
+            className="btn-dark"
+            title="Buys today's order now, under the same checks as a scheduled run"
+            disabled={busy !== null || paused}
+            onClick={() => act("run", () => repeatApi.runNow(r.id).then(runs.reload))}
+          >
+            {busy === "run" ? "Running…" : "Run now"}
+          </button>
+        </div>
       </div>
 
       {error ? <ErrorNote error={error} /> : null}

@@ -81,6 +81,9 @@ export const repeatApi = {
   recurring: () => call<RecurringOrder[]>("/v1/recurring-orders"),
   runs: (id: string) => call<RecurringRun[]>(`/v1/recurring-orders/${id}/runs`),
   runNow: (id: string) => post<RecurringRun>(`/v1/recurring-orders/${id}/run-now`),
+  /** Only the buying agent's own credential may pause or resume (403 RECURRING_FORBIDDEN for people, 404 for the operator). */
+  pause: (id: string) => post<RecurringOrder>(`/v1/recurring-orders/${id}/pause`),
+  resume: (id: string) => post<RecurringOrder>(`/v1/recurring-orders/${id}/resume`),
   setBaseline: (id: string, orderId: string) =>
     post<RecurringOrder>(`/v1/recurring-orders/${id}/baseline`, { approved_order_id: orderId }),
   /** Agents in the policy, and whether their mandate allows repeat orders (`recurring` is not in api.ts's AgentMandate yet). */
@@ -296,11 +299,14 @@ export function mockRepeat(method: string, path: string, body: unknown): unknown
     return created;
   }
   if (path === "/v1/recurring-orders" && method === "GET") return [...mockRecurring];
-  if ((m = path.match(/^\/v1\/recurring-orders\/([^/]+)\/(runs|run-now|baseline)$/))) {
+  if ((m = path.match(/^\/v1\/recurring-orders\/([^/]+)\/(runs|run-now|baseline|pause|resume)$/))) {
     const row = mockRecurring.find((r) => r.id === m![1]);
     if (!row) throw new ApiError("RECURRING_NOT_FOUND", "Recurring order was not found", 404);
     const runs = (mockRuns[row.id] ??= []);
     if (m[2] === "runs") return [...runs];
+    if (m[2] === "pause" || m[2] === "resume") return Object.assign(row, { status: m[2] === "pause" ? "PAUSED" : "ACTIVE" });
+    // Like the gateway: a paused template refuses to run.
+    if (m[2] === "run-now" && row.status === "PAUSED") throw new ApiError("INVALID_TRANSITION", "Recurring order is paused", 409);
     if (m[2] === "baseline") return Object.assign(row, { baseline_revision: row.baseline_revision + 1, approved_order_id: (body as { approved_order_id: string }).approved_order_id });
     // Like the gateway: one run per template and local date, so a second "run now" today returns the first.
     const today = runs.find((r) => r.occurrence_key.endsWith(day(0).slice(0, 10))) ?? run(0, "CONFIRMED", snapshot(1010));

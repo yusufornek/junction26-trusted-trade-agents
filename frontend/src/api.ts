@@ -649,15 +649,16 @@ export const api = {
       body: JSON.stringify({ level, reason }),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
-  connections: () => call<Connection[]>("/v1/connections"),
+  // Tenant sign-ins get 403 on the operator routes; the tenant routes take the same bodies.
+  connections: () => call<Connection[]>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections"),
   createConnection: (body: { agent_id: string; client: ClientKind; customer_ids: string[]; label?: string }) =>
-    call<NewConnection>("/v1/connections", {
+    call<NewConnection>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections", {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
   revokeConnection: (id: string) =>
-    call<Connection>(`/v1/connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    call<Connection>(`${tenantScoped ? "/v1/tenant/connections" : "/v1/connections"}/${encodeURIComponent(id)}`, { method: "DELETE" }),
   revokeMandate: (jwt: string) =>
     call<Record<string, unknown>>("/v1/mandates/revocations", { method: "POST", body: JSON.stringify({ jwt }) }),
   stats: (since?: string) => call<Stats>("/v1/stats" + (since ? `?since=${encodeURIComponent(since)}` : "")),

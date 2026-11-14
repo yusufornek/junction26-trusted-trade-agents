@@ -35,7 +35,7 @@ const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
 /** What each role can open: organisation people get 403 on the operator's stats, policy and connection endpoints, so
  *  those pages are not offered to them. Valio staff and the operator token see everything. */
 const ROLE_PAGES: Record<string, string[]> = {
-  tenant_admin: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/changes", "/team", "/audit", "/trust"],
+  tenant_admin: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/changes", "/team", "/connect", "/audit", "/trust"],
   approver: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/audit", "/trust"],
   viewer: ["/orders", "/repeat", "/watch", "/audit", "/trust"],
   member: ["/orders", "/repeat", "/audit", "/trust"],
