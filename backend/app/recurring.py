@@ -2,6 +2,7 @@
 import json
 import logging
 import threading
+from copy import deepcopy
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -193,7 +194,7 @@ class Recurring:
             template = lookup.need.model_dump(mode="json")
         return order, quote, template, bool(basket)
 
-    def create(self, body, principal):
+    def create(self, body, principal, mandate=None):
         self.g.limiter.consume(principal.id, "mutation")
         order, quote, template, basket = self.approved(body.approved_order_id)
         if not reviewer(principal, quote.customer_id) and not (principal.kind == "agent" and principal.id == order.agent_id):
@@ -205,10 +206,66 @@ class Recurring:
                "delivery_offset_days": max(0, (quote.deliver_by - audit.utcnow().astimezone(ZoneInfo(body.cadence.timezone)).date()).days)}
         row["next_run_at"] = rule_for(row).after(body.cadence.start_at, inc=True).isoformat()
         with self.g.db.connect(write=True) as conn:
-            token = self.g.mandates.stored(conn, "order", order.id)
+            token = mandate or self.g.mandates.stored(conn, "order", order.id)
+            self.g.mandates.authorize(conn, token, order.agent_id, quote.customer_id,
+                                      products=[line.product_id for line in quote.lines])
             self.g.mandates.bind(conn, "recurring", row["id"], token)
             self.authority(conn, row)
             self.save(conn, row)
+        return row
+
+    def workflow_authority(self, principal, customer, mandate=None):
+        """MCP workflows require the caller's current recurring permission, even on reads."""
+        if principal.kind != "agent":
+            raise DomainError("RECURRING_FORBIDDEN", "A purchasing agent credential is required", 403)
+        with self.g.db.connect() as conn:
+            policy, _, token = self.g.mandates.authorize(conn, mandate, principal.id, customer)
+            grant = policy.agents.get(principal.id)
+            allowed = decode(token)[1]["vc"]["credentialSubject"].get("recurring") is True if token else bool(grant and grant.recurring)
+            if not allowed:
+                raise DomainError("RECURRING_NOT_AUTHORIZED", "Mandate must explicitly allow recurring execution", 403)
+
+    def list_for_agent(self, principal, mandate=None):
+        principal = self.g.memory.scoped(principal, mandate)
+        # Check even when there are no workflows yet.
+        if not principal.customer_ids:
+            raise DomainError("RECURRING_NOT_AUTHORIZED", "A recurring customer mandate is required", 403)
+        for customer in principal.customer_ids:
+            self.workflow_authority(principal, customer, mandate)
+        return [r for r in self.rows() if r["agent_id"] == principal.id and r["customer_id"] in principal.customer_ids]
+
+    def from_suggestion(self, pattern, need, agent, body, mandate=None):
+        """Use confirmed historical evidence as baseline; the first run revalidates it."""
+        principal = Principal(agent, customer_ids=(pattern["customer_id"],))
+        self.workflow_authority(principal, pattern["customer_id"], mandate)
+        cadence = Cadence(rrule=pattern["cadence_rrule"], timezone=body.timezone,
+                          start_at=datetime.combine(need.deliver_by, datetime.min.time()).replace(tzinfo=ZoneInfo(body.timezone)))
+        latest = pattern["_latest"]
+        baseline = deepcopy(latest["baseline"])
+        scale = pattern["typical_quantity"] / latest["quantity"]
+        baseline["lines"][0]["quantity"] *= scale
+        baseline["basket_cost"] *= scale
+        row = {"id": str(uuid4()), "agent_id": agent, "customer_id": pattern["customer_id"],
+               "template": need.model_dump(mode="json"), "basket": False,
+               "approved_order_id": latest["order_id"], "source_suggestion_id": pattern["id"],
+               "baseline_revision": 1, "baseline": baseline, "cadence": cadence.model_dump(mode="json"),
+               "permitted_deviations": body.permitted_deviations.model_dump(), "status": "ACTIVE",
+               "delivery_offset_days": 0, "next_run_at": cadence.start_at.isoformat()}
+        with self.g.db.connect(write=True) as conn:
+            self.g.mandates.bind(conn, "recurring", row["id"], mandate)
+            self.authority(conn, row)
+            self.save(conn, row)
+        return row
+
+    def pause(self, id, principal, mandate=None):
+        with self.g.db.connect(write=True) as conn:
+            row = self.get(id, principal)
+            self.workflow_authority(principal, row["customer_id"], mandate)
+            self.g.limiter.consume(principal.id, "mutation")
+            row["status"] = "PAUSED"
+            self.save(conn, row)
+            audit.append(conn, f"agent:{principal.id}", "RECURRING_STOPPED", "Buyer agent paused recurring execution.",
+                         data={"id": id, "customer_id": row["customer_id"], "reason": "paused"})
         return row
 
     def runs(self, id, principal=None):
@@ -235,6 +292,8 @@ class Recurring:
 
     def run(self, id, occurrence_at=None, principal=None):
         initial = self.get(id, principal)
+        if initial["status"] != "ACTIVE":
+            raise DomainError("INVALID_TRANSITION", "Recurring order is paused", 409)
         if principal and principal.kind == "buyer_user" and not reviewer(principal, initial["customer_id"]):
             raise DomainError("BUYER_APPROVER_REQUIRED", "Only a buyer approver may trigger a purchase", 403)
         when = occurrence_at or audit.utcnow()

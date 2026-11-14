@@ -91,12 +91,20 @@ def test_ac_4_lost_ack_retry_creates_one_supplier_order(gateway, need, upstream,
     assert pending.status == "PENDING_EXECUTION" and pending.execution.status == "unknown"
     assert pending.next_action == "RETRY_SAME_COMMAND"
     assert pending.commitment == "gateway-simulated"
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM purchase_memory WHERE json_extract(data,'$.order_id')=?", (pending.id,)).fetchone()[0] == 0
     final = gateway.orders.place_order(quote.id, "nf-lost-ack")
     assert final.id == pending.id and final.status == "CONFIRMED"
     assert final.commitment == "supplier-acknowledged"
     assert len(nordfood[0].state.orders) == 1 and nordfood[0].state.stock["NF-001"] == 4998
     with gateway.db.connect() as conn:
         assert conn.execute("SELECT count(*) FROM events WHERE aggregate_id=? AND type='order.confirmed'", (final.id,)).fetchone()[0] == 1
+        purchase = json.loads(conn.execute("SELECT data FROM purchase_memory WHERE json_extract(data,'$.order_id')=?", (final.id,)).fetchone()[0])
+        assert purchase["quantity"] == 24 and purchase["unit"] == "L"
+        assert purchase["total_paid"] == final.total
+    assert gateway.orders.place_order(quote.id, "nf-lost-ack").id == final.id
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM purchase_memory WHERE json_extract(data,'$.order_id')=?", (final.id,)).fetchone()[0] == 1
 
 
 def test_ac_5_sek_is_refused_without_named_fx_source(gateway, need, upstream, nordfood):

@@ -74,6 +74,8 @@ EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.res
 EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
+EVENT_ACTIONS.update({"SUGGESTION_" + action.upper(): "suggestion." + action
+                      for action in ("shown", "prepared", "made_recurring", "dismissed", "snoozed")})
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
@@ -84,6 +86,9 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
                 emit(conn, action, actor, ts, audit_id,
                      {**scoped_data, "customer_id": customer, "mandate_id": mandate, "jti_revoked": [mandate]})
         return
+    if action in {"PLACE_ORDER", "APPROVE", "CANCEL", "SUPPLIER_ACKNOWLEDGED"} and order_id:
+        from .purchase_memory import remember_order
+        remember_order(conn, order_id)
     event_type = EVENT_ACTIONS.get(action)
     if event_type is None:
         return
@@ -93,7 +98,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":
         aggregate_id = data.get("id") or data.get("proposal_id", aggregate_id)
-    if kind == "recurring":
+    if kind in {"recurring", "suggestion"}:
         aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
@@ -103,8 +108,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
-    if kind in {"proposal", "recurring"}:
-        context = {"customer_id": data["customer_id"]}
+    if kind in {"proposal", "recurring", "suggestion"}:
+        context = {"customer_id": data["customer_id"], "environment": data.get("environment", "live")}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}
