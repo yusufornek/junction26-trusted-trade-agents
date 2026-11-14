@@ -24,6 +24,7 @@ import {
   pct,
   dateOnly,
   RejectionReason,
+  ruleLabel,
   splitRejection,
   useAsync,
 } from "../ui";
@@ -481,7 +482,7 @@ export default function Buyer() {
                   <li key={h.rule + h.detail} className="flex gap-2">
                     <Zap size={14} className="mt-0.5 shrink-0 text-warn" />
                     <span>
-                      <strong>{h.rule}</strong> — <span className="text-ink-muted">{h.detail}</span>
+                      <strong title={h.rule}>{ruleLabel(h.rule)}</strong> — <span className="text-ink-muted">{h.detail}</span>
                     </span>
                   </li>
                 ))}
@@ -646,7 +647,10 @@ function PlanCard({
           <ul className="mb-auto flex flex-col gap-1 text-[12px] text-ink-muted">
             {plan.policy_preview.hits.map((h) => (
               <li key={h.rule + h.detail}>
-                <strong className="text-ink">{h.rule}</strong> — {h.detail}
+                <strong className="text-ink" title={h.rule}>
+                  {ruleLabel(h.rule)}
+                </strong>{" "}
+                — {h.detail}
               </li>
             ))}
           </ul>

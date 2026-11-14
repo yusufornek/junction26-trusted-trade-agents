@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { Avatar, Ring } from "../charts";
-import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, pct, useAsync, when } from "../ui";
+import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, pct, ruleLabel, useAsync, when } from "../ui";
 
 export default function Approvals() {
   const { data, error, loading, reload } = useAsync(() => api.approvals(), [], 5000);
@@ -125,7 +125,7 @@ export default function Approvals() {
                 <ul className="flex flex-col gap-1 text-[13px] text-ink">
                   {order.policy.hits.map((h) => (
                     <li key={h.rule}>
-                      <strong>{h.rule}</strong> — <span className="text-ink-muted">{h.detail}</span>
+                      <strong title={h.rule}>{ruleLabel(h.rule)}</strong> — <span className="text-ink-muted">{h.detail}</span>
                     </li>
                   ))}
                 </ul>

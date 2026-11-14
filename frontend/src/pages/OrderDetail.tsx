@@ -27,6 +27,7 @@ import {
   num,
   pct,
   RejectionReason,
+  ruleLabel,
   splitRejection,
   useAsync,
   when,
@@ -298,7 +299,9 @@ export default function OrderDetail() {
                     <ul className="flex flex-col gap-2 text-[13px]">
                       {flagged.map((h) => (
                         <li key={h.rule + h.detail} className="rounded-[var(--radius-tile)] bg-warn-soft p-2.5">
-                          <strong className="text-warn">{h.rule}</strong>
+                          <strong className="text-warn" title={h.rule}>
+                            {ruleLabel(h.rule)}
+                          </strong>
                           <div className="text-ink-muted">{h.detail}</div>
                         </li>
                       ))}

@@ -68,6 +68,35 @@ export function StatusChip({ status }: { status: OrderStatus | string }) {
   );
 }
 
+/** Plain words for the gateway's rule and warning codes, where the code itself reads poorly. */
+const RULE_LABELS: Record<string, string> = {
+  min_fit_probability: "Low fit score",
+  max_auto_total_eur: "Over the auto-approve limit",
+  max_auto_daily_total_eur: "Over the daily auto-approve limit",
+  hard_constraint_violation: "Requirement not met",
+  autonomy_level: "Agent still needs sign-off",
+  SIZE_UNKNOWN: "Unit can't be converted",
+  SIZE_MISMATCH: "Pack sizes disagree",
+  SIZE_UNCONFIRMED: "Pack size unconfirmed",
+  CUTOFF_UNKNOWN: "Order cut-off unknown",
+  CUTOFF_PASSED: "Order cut-off passed",
+  DATE_SHIFT: "Arrives after the date",
+  NO_STOCK: "Out of stock",
+  STOCK_MODEL_UNKNOWN: "Stock type unknown",
+  AVAILABILITY_UNCONFIRMED: "Stock unconfirmed",
+  AVAILABILITY_ERROR: "Stock check failed",
+  PRICE_ERROR: "No valid price",
+  OUTSIDE_PREFERENCE: "Outside preferences",
+  SALES_BLOCK: "Blocked for sale",
+  RETRIEVAL_BROADENED: "Search broadened",
+  POOL_TRUNCATED: "Partly screened",
+};
+
+/** What a person reads instead of a code; any other code in sentence case ("NOT_AVAILABLE" → "Not available").
+ *  Screens keep the code in a tooltip for whoever matches it against the policy file. */
+export const ruleLabel = (code: string) =>
+  RULE_LABELS[code] ?? code.charAt(0).toUpperCase() + code.slice(1).toLowerCase().replaceAll("_", " ");
+
 /** A rejected order lists every rule that fired, but only reject-listed codes and binding hard-constraint violations
  *  decided it (same test as the gateway's policy.py); the rest would only have asked for a human. Unknown policy: none. */
 export function splitRejection(hits: RuleHit[], policy: PolicyResource | null): [RuleHit[], RuleHit[]] {
@@ -85,8 +114,8 @@ export function RejectionReason({ hit }: { hit: RuleHit }) {
   return (
     <p className="rounded-[var(--radius-tile)] bg-negative-soft p-3 text-[13px] text-negative">
       <strong>Rejected:</strong> {line ? line[2] : hit.detail}
-      <span className="mt-0.5 block text-[12px]">
-        {hit.rule}
+      <span className="mt-0.5 block text-[12px]" title={hit.rule}>
+        {ruleLabel(hit.rule)}
         {line ? ` · product ${line[1]}` : ""}
       </span>
     </p>
@@ -100,7 +129,7 @@ export function WarningChips({ warnings }: { warnings: Warning[] }) {
       {warnings.map((w) => (
         <span key={w.code} className="chip bg-warn-soft text-warn" title={w.text}>
           <TriangleAlert size={11} strokeWidth={2.25} aria-hidden />
-          {w.code.replaceAll("_", " ").toLowerCase()}
+          {ruleLabel(w.code)}
         </span>
       ))}
     </div>
