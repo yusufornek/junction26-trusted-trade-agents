@@ -389,6 +389,20 @@ export type Connection = {
   credential_kind?: "api_key" | "oauth";
 };
 
+/** A sign-in an MCP client started (ChatGPT, claude.ai): what it asked for and what the operator may grant. */
+export type ConsentRequest = {
+  id: string;
+  client_name: string;
+  /** Where the answer is sent; shown so the person can see it is the client they started from. */
+  redirect_host: string;
+  resource: string;
+  scopes: string[];
+  expires_at: string;
+  status: string;
+  customer_ids: string[];
+  agents: string[];
+};
+
 /** The key is returned once, at creation; the gateway keeps only a hash. */
 export type NewConnection = Connection & {
   key: string;
@@ -515,6 +529,13 @@ export const api = {
       { method: "POST" },
     ),
   suppliers: () => call<Supplier[]>("/v1/suppliers"),
+  consentRequest: (id: string) => call<ConsentRequest>(`/v1/oauth/requests/${encodeURIComponent(id)}`),
+  /** redirect_url carries the one-time authorization code: navigate to it once, never store or log it. */
+  consentDecision: (id: string, body: { decision: "deny" } | { decision: "approve"; agent_id: string; customer_ids: string[] }) =>
+    call<{ status: "approved" | "denied"; redirect_url: string }>(`/v1/oauth/requests/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   order: (id: string) => call<Order>(`/v1/orders/${id}`),
   timeline: (id: string) => call<OrderTimeline>(`/v1/orders/${id}/timeline`),
   cancel: (id: string, cancelled_by: string, reason: string) =>

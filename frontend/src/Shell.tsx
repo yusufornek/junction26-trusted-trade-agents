@@ -44,6 +44,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/buyer": { title: "Buyer flow", sub: "Describe the need, compare offers, lock a price, order." },
   "/basket": { title: "Recipe basket", sub: "Turn a recipe and a number of portions into one priced basket." },
   "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
+  "/consent": { title: "Connect an assistant", sub: "An assistant asks to buy through this gateway. You decide as which agent, and for which customers." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },

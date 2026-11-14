@@ -2,6 +2,10 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The OAuth sign-in for ChatGPT and claude.ai uses the console's own consent page** (`/consent`,
+  `FRONTEND_CONSENT_URL` on the server) instead of the gateway's plain HTML page. Why: it is the first Luotsi screen a
+  person connecting an assistant sees; it reuses the console's operator sign-in, so the token never leaves the console.
+  Emptying the variable brings the gateway's page back.
 - 2026-11-14 — **The live server gets the synthetic purchase history without a demo reset.** `reset_demo.py` archives
   the whole database; only its `seed_anomaly_history` step ran on the live server, after a backup. Why: anomaly
   warnings and suggestions need history, and a reset would have removed the live orders, keys and OAuth grants.

@@ -585,6 +585,10 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     mandate.autonomy = body.level;
     return { agent_id: id, level: body.level, reason: body.reason, track_record: trackRecord(id, 30) };
   }
+  if (p.startsWith("/v1/oauth/requests/") && method === "GET") return { id: "req_demo", client_name: "ChatGPT", redirect_host: "chatgpt.com",
+    resource: `${location.origin}/mcp`, scopes: ["mcp"], expires_at: ahead(10), status: "pending", customer_ids: ["1", "42"],
+    agents: Object.keys(POLICY.agents ?? {}) };
+  if (p.startsWith("/v1/oauth/requests/") && method === "POST") return { status: body.decision === "approve" ? "approved" : "denied", redirect_url: "/connect" };
   if (p === "/v1/suppliers") return [
     { supplier_id: "valio", synthetic: false, capabilities: { currencies: ["EUR"], pricing: "sale-unit", stock: ["finite", "unknown"],
       execution: { mode: "simulated", atomicity: "atomic", partial_acceptance: false } } },
