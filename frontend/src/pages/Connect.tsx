@@ -234,7 +234,8 @@ function KeyReveal({ created }: { created: NewConnection }) {
       <div className="flex items-center gap-2 text-[13px] font-semibold text-positive">
         <Check size={15} /> Key created for {created.agent_id}
       </div>
-      <CopyBlock label="Agent key: copy it now, it will not be shown again" value={created.key} />
+      {/* Wrapped: a key shown only once should be readable whole on a phone, not half hidden in a scroll box. */}
+      <CopyBlock label="Agent key: copy it now, it will not be shown again" value={created.key} wrap />
       <p className="text-[12px] text-ink-muted">
         {created.mandate.autonomy === "autonomous_within_limits" ? (
           "This agent may confirm orders within its limits."

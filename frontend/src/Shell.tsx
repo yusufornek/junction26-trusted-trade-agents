@@ -170,13 +170,13 @@ export default function Shell() {
         </nav>
       </div>
 
-      {/* Phone: one bar with the page name and a menu that lists every destination by name. */}
+      {/* Phone: one bar with the brand and a menu that lists every destination by name. The page name stays in the
+          page's own heading right below; repeating it here said it twice. */}
       <div className="sticky top-0 z-30 md:hidden">
         <div className="flex items-center gap-3 bg-rail px-4 py-3 text-white">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white text-rail">
-            <LuotsiMark className="block h-5 w-auto" label="Luotsi" />
+          <span className="min-w-0 flex-1">
+            <LuotsiWordmark className="block h-5 w-auto text-white" />
           </span>
-          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{head.title}</span>
           <button
             onClick={() => navigate("/approvals")}
             className="relative grid size-10 place-items-center rounded-xl text-white/80 hover:bg-white/10"
@@ -200,7 +200,8 @@ export default function Shell() {
           </button>
         </div>
         {menuOpen ? (
-          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100vh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
+          // dvh, not vh: on iPhones vh includes the space under Safari's toolbar, which hid the last rows.
+          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100dvh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
             <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
               <Plus size={18} /> New request
             </button>
@@ -262,8 +263,11 @@ export default function Shell() {
             <h1 className="text-[28px] font-semibold leading-tight tracking-tight">{head.title}</h1>
             <p className="label mt-1">{head.sub}</p>
           </div>
-          {/* Only the dashboard reads the range; elsewhere it would be a control that does nothing. */}
-          <div className={`relative ${pathname === "/" ? "" : "hidden"}`}>
+          {/* Only the signed-in dashboard reads the range; elsewhere it would be a control that does nothing. */}
+          <div
+            className={`relative ${pathname === "/" && signedIn ? "" : "hidden"}`}
+            onKeyDown={(e) => e.key === "Escape" && setRangeOpen(false)}
+          >
             <button
               className={`flex h-9 items-center gap-2 rounded-full border bg-surface px-4 text-[13px] font-medium transition-colors hover:border-brand/30 hover:text-brand ${
                 rangeOpen ? "border-brand/30 text-brand" : "border-line"
@@ -275,22 +279,27 @@ export default function Shell() {
               <ChevronDown size={14} className={`transition-transform ${rangeOpen ? "rotate-180" : ""}`} />
             </button>
             {rangeOpen ? (
-              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,67,87,0.10)]">
-                {RANGES.map((r, i) => (
-                  <button
-                    key={r.label}
-                    className={`block w-full rounded-[10px] px-3 py-2 text-left text-[13px] transition-colors ${
-                      i === rangeIndex ? "bg-brand-soft font-semibold text-brand" : "text-ink-muted hover:bg-brand-soft/60 hover:text-ink"
-                    }`}
-                    onClick={() => {
-                      setRangeIndex(i);
-                      setRangeOpen(false);
-                    }}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
+              <>
+                {/* A tap anywhere else closes the menu: touch browsers do not focus buttons, so blur never fires. */}
+                <div className="fixed inset-0 z-10" onClick={() => setRangeOpen(false)} />
+                {/* As wide as its button: a wider menu reached past the screen edge once the header wrapped on phones. */}
+                <div className="absolute right-0 z-20 mt-2 w-max min-w-full overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,67,87,0.10)]">
+                  {RANGES.map((r, i) => (
+                    <button
+                      key={r.label}
+                      className={`block w-full rounded-[10px] px-3 py-2 text-left text-[13px] transition-colors ${
+                        i === rangeIndex ? "bg-brand-soft font-semibold text-brand" : "text-ink-muted hover:bg-brand-soft/60 hover:text-ink"
+                      }`}
+                      onClick={() => {
+                        setRangeIndex(i);
+                        setRangeOpen(false);
+                      }}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : null}
           </div>
         </header>

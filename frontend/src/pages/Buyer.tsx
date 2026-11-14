@@ -567,7 +567,7 @@ function PlanCard({
             </span>
             <Link
               to={`/products/${l.product_id}`}
-              className="min-w-0 flex-1 truncate text-ink-muted hover:underline"
+              className="min-w-0 flex-1 line-clamp-2 text-ink-muted hover:underline"
               title={offersById.get(l.product_id)?.name}
             >
               {offersById.get(l.product_id)?.name ?? `#${l.product_id}`}

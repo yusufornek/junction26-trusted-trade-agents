@@ -243,7 +243,8 @@ export default function OrderDetail() {
                     className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-tile)] border border-line p-2.5 text-[13px]"
                   >
                     {x.rank_label ? <span className="chip bg-chip text-ink-muted">{x.rank_label}</span> : null}
-                    <Link to={`/products/${x.product_id}`} className="min-w-0 flex-1 truncate hover:underline" title={x.name}>
+                    {/* Two lines, not one: cut to one line on a phone, sibling products read the same ("Valio Hyvä suomalainen…"). */}
+                    <Link to={`/products/${x.product_id}`} className="min-w-0 flex-1 line-clamp-2 hover:underline" title={x.name}>
                       {x.name}
                     </Link>
                     <span className="num text-ink-muted">{eur(x.purchase_total ?? x.total, x.currency ?? "EUR")}</span>
