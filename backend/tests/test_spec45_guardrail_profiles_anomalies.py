@@ -353,6 +353,9 @@ def test_keyed_approval_replay_rechecks_new_four_eyes_gate(http, gateway, need, 
 
 
 def test_profiled_order_core_approval_requires_authenticated_reviewer(http, gateway, need, upstream):
+    # Spec 46 R-4 adds independent supplier refreshes in the background scheduler.
+    # Isolate this request's zero-upstream-call assertion from those authorized scans.
+    gateway.recurring.close()
     tenant, owner = signup(http, "single_restaurant")
     agent = connection(http, owner, tenant)
     order = place(http, agent, quote(http, agent, tenant["customer_ids"][0], need, units=10)).json()

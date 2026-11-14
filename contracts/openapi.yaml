@@ -41635,6 +41635,812 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
+  /v1/stockout-watch/run:
+    post:
+      summary: Run Watch
+      operationId: run_watch_v1_stockout_watch_run_post
+      security:
+      - BearerAuth: []
+      - SessionCookie: []
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Required on mutating requests authenticated by the human session
+            cookie; returned by login.
+          title: X-Csrf-Token
+        description: Required on mutating requests authenticated by the human session
+          cookie; returned by login.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Run Watch V1 Stockout Watch Run Post
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '410':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gone
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+  /v1/stockout-watch/inbox:
+    get:
+      summary: Inbox
+      operationId: inbox_v1_stockout_watch_inbox_get
+      security:
+      - BearerAuth: []
+      - SessionCookie: []
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Required on mutating requests authenticated by the human session
+            cookie; returned by login.
+          title: X-Csrf-Token
+        description: Required on mutating requests authenticated by the human session
+          cookie; returned by login.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                title: Response Inbox V1 Stockout Watch Inbox Get
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '410':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gone
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+  /v1/proposals/suggest:
+    post:
+      summary: Suggest Campaign
+      operationId: suggest_campaign_v1_proposals_suggest_post
+      security:
+      - BearerAuth: []
+      - SessionCookie: []
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Required on mutating requests authenticated by the human session
+            cookie; returned by login.
+          title: X-Csrf-Token
+        description: Required on mutating requests authenticated by the human session
+          cookie; returned by login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuggestCampaign'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Suggest Campaign V1 Proposals Suggest Post
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '410':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gone
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '423':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Locked
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
   /v1/suggestions:
     get:
       tags:
@@ -68696,6 +69502,30 @@ components:
       title: CoveredQuantity
     CustomerConstraints:
       properties:
+        max_salt_g:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Max Salt G
+        max_sugar_g:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Max Sugar G
+        max_saturated_fat_g:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Max Saturated Fat G
+        min_protein_g:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Min Protein G
         substitution_profile:
           anyOf:
           - $ref: '#/components/schemas/SubstitutionProfile'
@@ -68813,6 +69643,11 @@ components:
       title: Deviations
     EffectiveConstraints:
       properties:
+        nutrient_limits:
+          additionalProperties:
+            type: number
+          type: object
+          title: Nutrient Limits
         required_claims:
           items:
             $ref: '#/components/schemas/ConstraintSource'
@@ -69178,6 +70013,18 @@ components:
       title: IdentityPolicy
     Ingredient:
       properties:
+        on_hand:
+          anyOf:
+          - $ref: '#/components/schemas/OnHand'
+          - type: 'null'
+        function:
+          anyOf:
+          - $ref: '#/components/schemas/FunctionalNeed'
+          - type: 'null'
+        substitute_for:
+          anyOf:
+          - $ref: '#/components/schemas/SubstituteFor'
+          - type: 'null'
         name:
           type: string
           maxLength: 4000
@@ -69232,6 +70079,18 @@ components:
         name:
           type: string
           title: Name
+        needed:
+          anyOf:
+          - $ref: '#/components/schemas/OnHand'
+          - type: 'null'
+        on_hand:
+          anyOf:
+          - $ref: '#/components/schemas/OnHand'
+          - type: 'null'
+        to_buy:
+          anyOf:
+          - $ref: '#/components/schemas/OnHand'
+          - type: 'null'
         requested:
           $ref: '#/components/schemas/IngredientQuantity'
         covered:
@@ -69280,6 +70139,12 @@ components:
           const: 1
           title: Version
           default: 1
+        focus_ingredient:
+          anyOf:
+          - type: string
+            maxLength: 4000
+          - type: 'null'
+          title: Focus Ingredient
         recipe_name:
           type: string
           maxLength: 4000
@@ -69323,6 +70188,12 @@ components:
       title: IngredientManifest
     IngredientOffers:
       properties:
+        excluded_products:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Excluded Products
         ingredient_index:
           type: integer
           title: Ingredient Index
@@ -69520,6 +70391,12 @@ components:
           title: Policy Version Id
           description: Immutable effective governance policy version used by this
             lookup.
+        excluded_products:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Excluded Products
         supplier_id:
           type: string
           title: Supplier Id
@@ -69994,6 +70871,23 @@ components:
       title: OAuthFailure
     OfferCard:
       properties:
+        trade_off:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Trade Off
+        arrives_in_time:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Arrives In Time
+        cannot_source_in_time:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Cannot Source In Time
         supplier_id:
           type: string
           title: Supplier Id
@@ -70219,6 +71113,28 @@ components:
       - availability
       - provenance
       title: OfferCard
+    OnHand:
+      properties:
+        value:
+          type: number
+          maximum: 1000000.0
+          minimum: 0.0
+          title: Value
+        unit:
+          type: string
+          enum:
+          - L
+          - KG
+          - G
+          - ML
+          - SALES_UNIT
+          title: Unit
+      additionalProperties: false
+      type: object
+      required:
+      - value
+      - unit
+      title: OnHand
     Order:
       properties:
         anomalies:
@@ -70997,6 +71913,11 @@ components:
       title: PriceEvidence
     Product:
       properties:
+        nutrition_per_100:
+          additionalProperties:
+            type: number
+          type: object
+          title: Nutrition Per 100
         supplier_id:
           type: string
           title: Supplier Id
@@ -72408,6 +73329,7 @@ components:
           items:
             type: string
             enum:
+            - stockout.predicted
             - order.approval_required
             - order.evidence_changed
             - order.confirmed
@@ -72482,6 +73404,7 @@ components:
           - items:
               type: string
               enum:
+              - stockout.predicted
               - order.approval_required
               - order.evidence_changed
               - order.confirmed
@@ -72604,6 +73527,28 @@ components:
       - pack_size_range
       - requires_approval
       title: SubstitutionProfile
+    SuggestCampaign:
+      properties:
+        customer_id:
+          type: string
+          maxLength: 4000
+          title: Customer Id
+        campaign_id:
+          type: string
+          maxLength: 4000
+          title: Campaign Id
+        max_products:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Max Products
+          default: 5
+      additionalProperties: false
+      type: object
+      required:
+      - customer_id
+      - campaign_id
+      title: SuggestCampaign
     SuggestionAction:
       properties:
         buyer_agent_id:

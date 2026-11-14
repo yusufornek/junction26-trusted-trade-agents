@@ -264,7 +264,7 @@ class Baskets:
         from .foundation import procurement_context, CORRELATION
         with self.db.connect(write=True) as conn:
             _, aggregate.mandate, _ = g.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=ids)
-            current = g.governance.check_operation(conn, agent_id, "lookup", request.customer_id, request.deliver_by, products=[products[pid] for pid in ids])
+            current = g.governance.check_operation(conn, agent_id, "lookup", request.customer_id, request.deliver_by, products=ids)
             if current.version_id != policy._governance.version_id:
                 raise DomainError("POLICY_CHANGED", "Policy changed while looking up this basket; submit a fresh lookup", 409)
             g.governance.snapshot(conn, current)
