@@ -9,6 +9,28 @@ from conftest import OPERATOR_HEADERS, TEST_KEYS
 from conftest import quote_request
 
 
+@pytest.mark.parametrize("index", range(30))
+@pytest.mark.parametrize("fraction", ["0.1", "0.2", "0.3", "3"])
+@pytest.mark.parametrize("sales_units", [False, True])
+def test_review_real_catalog_minimal_packs(need, real_pack_products, index, fraction, sales_units):
+    from decimal import Decimal
+    from app.lookup import offer_for, reconcile_size
+    from app.models import Quantity
+    product, unit = real_pack_products[index]
+    unit = "SALES_UNIT" if sales_units else unit
+    size = Decimal(str(reconcile_size(product, {}, unit)[0])).quantize(Decimal("0.000001"))
+    requested = size * Decimal(fraction)
+    request = need.model_copy(update={"quantity": Quantity(value=float(requested), unit=unit)})
+    offer = offer_for(product, request, {}, {})
+    units = Decimal(str(offer.units_needed))
+    step = Decimal(str(product.allowed_lot_size)) if product.sales_unit == "KG" else Decimal(1)
+    assert units * size >= requested
+    assert (units - step) * size < requested
+    if step == 1:
+        assert (units - 1) * size < requested
+    assert Decimal(str(offer.overbuy.amount)) == units * size - requested
+
+
 def test_review_portion_weight_preserves_package_weight(gateway, need, actual_product_rows):
     from app.catalog import extract
     from app.lookup import offer_for

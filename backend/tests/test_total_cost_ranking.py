@@ -2,7 +2,43 @@ import pytest
 
 from app.lookup import rank
 from app.models import Quantity
-from conftest import demo_catalog, raw_product, rebuild_catalog
+from conftest import replay_recorded_demo, raw_product, rebuild_catalog
+
+
+@pytest.mark.parametrize("count,ml,requested,size,units", [(12, 290, 34.8, 3.48, 10), (18, 300, 16.2, 5.4, 3)])
+@pytest.mark.parametrize("source", ["catalog", "name_multiplier", "name_count"])
+def test_review_decimal_multipack(gateway, need, upstream, tmp_path, count, ml, requested, size, units, source):
+    row = raw_product("pack", f"Milk {count}x{ml}ml" if source == "name_count" else f"Milk {ml}ml",
+                      volume=ml / 1000 if source == "catalog" else None,
+                      multiplier=1 if source == "name_count" else count)
+    if source == "catalog":
+        row["synkkaData"]["unitConversions"][0]["volume"] = {"value": ml, "unit": "MLT"}
+    rebuild_catalog(gateway, tmp_path, [row, raw_product("egg", "Egg vocabulary", egg=True)])
+    upstream.prices["pack"], upstream.sizes["pack"] = 10, size
+    result = gateway.find_offers(need.model_copy(update={"quantity": Quantity(value=requested, unit="L")}))
+    offer = result.offers[0]
+    assert (offer.size_per_sales_unit, offer.units_needed, offer.purchase_total, offer.overbuy.amount) == (size, units, units * 10, 0)
+    assert result.plans[0].lines[0].units == units
+    assert result.plans[0].uncovered.value == 0
+    from app.models import QuoteRequest
+    quote = gateway.orders.create_quote(QuoteRequest(customer_id=need.customer_id, deliver_by=need.deliver_by,
+        plan_ref={"lookup_id": result.lookup_id, "plan_index": 0}), "external")
+    assert (quote.lines[0].units_needed, quote.total) == (units, units * 10)
+
+
+def test_review_ac4_uses_real_catalog(gateway, need, upstream, tmp_path, respx_mock, monkeypatch):
+    import app.catalog as catalog
+    original = catalog.extract
+
+    def remove_eligibility(*args, **kwargs):
+        product = original(*args, **kwargs)
+        if product.gtin == "6408430000487":
+            product.claims = []
+        return product
+
+    monkeypatch.setattr(catalog, "extract", remove_eligibility)
+    with pytest.raises(AssertionError):
+        test_ac_4_mocked_demo_best_is_464306_at_1010(gateway, need, upstream, tmp_path, respx_mock)
 
 
 def test_review_unknown_sizes_compare_unit_prices(gateway, need, upstream, respx_mock, tmp_path):
@@ -71,9 +107,8 @@ def test_ac_3_score_breakdown_sums_to_score_and_repeated_ranking_is_stable(gatew
     assert [(o.product_id, o.score, o.rank_label) for o in result.offers] == before
 
 
-def test_ac_4_mocked_demo_best_is_464306_at_1010(gateway, need, upstream, tmp_path):
-    demo_catalog(gateway, tmp_path, upstream)
-    result = gateway.find_offers(need, actor="agent:web-console")
+def test_ac_4_mocked_demo_best_is_464306_at_1010(gateway, need, upstream, tmp_path, respx_mock):
+    result = replay_recorded_demo(gateway, need, respx_mock)
     best = result.offers[0]
     assert best.product_id == "464306" and best.rank_label == "best"
     assert best.purchase_total == 1010 and best.overbuy.amount == 0

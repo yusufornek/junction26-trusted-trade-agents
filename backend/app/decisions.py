@@ -39,6 +39,7 @@ class OpenAIDecisions:
         }
         if counter is not None:
             counter.decision_calls += 1
+            counter.screened_count += len(candidates)
         try:
             response = self.client.post("https://api.openai.com/v1/decisions", json=body,
                                         headers={"Authorization": f"Bearer {self.key}"})

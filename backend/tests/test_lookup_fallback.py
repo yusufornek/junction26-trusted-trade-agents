@@ -79,6 +79,26 @@ def replace_catalog(gateway, tmp_path, rows):
     build(gateway.db, source, tmp_path / "reliability.csv", tmp_path / "carbon.csv")
 
 
+@pytest.mark.parametrize("mode,screened", [("no_key", 0), ("failure", 40), ("partial_answers", 40)])
+def test_review_screened_count_tracks_submissions(gateway, need, upstream, tmp_path, respx_mock, mode, screened):
+    import httpx
+    replace_catalog(gateway, tmp_path, [raw_product(str(i), "Milk 5 dl lactose free") for i in range(43)]
+                    + [raw_product("egg", "Egg vocabulary", egg=True)])
+    if mode == "no_key":
+        gateway.decisions.key = ""
+    elif mode == "failure":
+        respx_mock.post("https://api.openai.com/v1/decisions").respond(503)
+    else:
+        respx_mock.post("https://api.openai.com/v1/decisions").respond(200, json={"answers": [
+            {"type": "predicate", "name": "fit_0", "probability": .91}]})
+    result = gateway.find_offers(need)
+    assert result.screened_count == screened
+    assert result.decision_calls == int(screened > 0)
+    assert f"{screened} of 43 matching products screened" in next(w.text for w in result.warnings if w.code == "POOL_TRUNCATED")
+    assert_audit(gateway, result)
+    assert gateway.audit()[-1].data["screened_by_decisions"] == screened
+
+
 def test_ac_1_intent_broadens_and_preserves_original_fit_question(gateway, need, upstream):
     result = gateway.find_offers(intent_need(need))
     assert result.offers and result.retrieval.mode == "intent_broadened"

@@ -101,7 +101,7 @@ def test_ac_6_no_decisions_uses_catalog_order(gateway, upstream, shortlist):
     gateway.decisions.key = ""
     result = gateway.find_offers(need)
     assert upstream.price_calls[0]["products"] == [str(i) for i in range(1, 11)]
-    assert result.priced_count == 10 and result.screened_count == 15
+    assert result.priced_count == 10 and result.screened_count == 0
     assert result.decision_calls == 0
     assert all(o.fit is None and "NO_FIT_SCORE" in {w.code for w in o.warnings} for o in result.offers)
 

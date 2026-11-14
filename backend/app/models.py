@@ -151,7 +151,7 @@ class OfferCard(Model):
     gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
     sales_unit: str
-    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit; null when conversion is unknown.")
+    size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Null when conversion is unknown.")
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
@@ -238,7 +238,7 @@ class LookupResult(Model):
     retrieval: Retrieval = Field(default_factory=Retrieval, description="Deterministic retrieval mode and terms; older stored lookups default to intent with no recorded terms.")
     matched_count: int = Field(default=0, ge=0, description="All search matches passing hard constraints, before catalog-pool truncation.")
     priced_count: int = Field(default=0, ge=0, description="Shortlisted products checked for live prices, including cached evidence.")
-    screened_count: int = Field(default=0, ge=0, description="Catalog pool size submitted for Decisions screening.")
+    screened_count: int = Field(default=0, ge=0, description="Candidates actually submitted to Decisions, including failed requests or missing answers; zero when screening is skipped.")
     live_calls: LiveCalls
     decision_calls: int
     warnings: list[Warning] = Field(default_factory=list)

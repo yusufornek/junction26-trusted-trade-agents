@@ -4730,7 +4730,8 @@ components:
           type: integer
           minimum: 0.0
           title: Screened Count
-          description: Catalog pool size submitted for Decisions screening.
+          description: Candidates actually submitted to Decisions, including failed
+            requests or missing answers; zero when screening is skipped.
           default: 0
         live_calls:
           $ref: '#/components/schemas/LiveCalls'
@@ -4859,7 +4860,9 @@ components:
           - type: number
           - type: 'null'
           title: Size Per Sales Unit
-          description: Quantity unit per sales unit; null when conversion is unknown.
+          description: Quantity unit per sales unit, quantized to six decimal places
+            before pack arithmetic; CASE content already includes its multiplier.
+            Null when conversion is unknown.
         size_unit:
           type: string
           enum:

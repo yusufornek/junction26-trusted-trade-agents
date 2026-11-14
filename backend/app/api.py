@@ -72,6 +72,10 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.exception_handler(HTTPException)
     async def http_error(request, error):
+        if error.status_code == 400:
+            refused = await parsing_auth_error(request)
+            if refused is not None:
+                return refused
         return await domain_error(request, DomainError("HTTP_ERROR", "Request could not be completed", error.status_code))
 
     @app.exception_handler(Exception)
@@ -84,8 +88,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
         finally:
             CORRELATION.reset(token)
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error(request, error):
+    async def parsing_auth_error(request):
         # JSON decoding can fail before FastAPI resolves dependencies. Apply the matched route's
         # existing credential/operator guards first, without duplicating its authorization policy.
         route = request.scope.get("route")
@@ -106,6 +109,14 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     require_operator(principal)
             except DomainError as auth_error:
                 return await domain_error(request, auth_error)
+        return None
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, error):
+        refused = await parsing_auth_error(request)
+        if refused is not None:
+            return refused
+        route = request.scope.get("route")
         # Omit input values from errors, retaining the field location and explanation.
         message = "; ".join(f"{'.'.join(str(v) for v in e['loc'])}: {e['msg']}" for e in error.errors())
         if getattr(route, "path", None) == "/v1/orders/{order_id}/cancel":

@@ -80,6 +80,9 @@ def test_review_malformed_json_authentication(client, gateway, method, path, ope
 def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     # This exhaustive authorization matrix isolates auth from spec 24's separately tested source throttle.
     client.app.state.gateway.source_limiter.capacity = 10000
+    for headers in ({}, {"Authorization": "Bearer unknown"}):
+        response = client.post("/v1/offers", content=b'\xff', headers={**headers, "Content-Type": "application/json"})
+        assert (response.status_code, response.json()["code"]) == (401, "UNAUTHENTICATED")
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
             if path in {"/health", "/.well-known/jwks.json", "/v1/meta"}:
@@ -135,9 +138,21 @@ def test_ac_3_operator_scope(client, gateway):
              ("get", "/v1/stats", None), ("get", "/v1/policy", None)]
     for method, path, body in calls:
         headers = agent_headers("agent-a")
-        for payload in ({"json": body}, {"content": "{", "headers": {**headers, "Content-Type": "application/json"}}):
+        for payload in ({"json": body}, *({"content": content, "headers": {**headers, "Content-Type": "application/json"}} for content in ("{", b'\xff'))):
             response = client.request(method, path, **({"headers": headers} | payload))
             assert response.status_code == 403 and response.json()["code"] == "OPERATOR_REQUIRED"
+
+
+@pytest.mark.parametrize("caller,status,code", [("missing", 401, "UNAUTHENTICATED"),
+    ("unknown", 401, "UNAUTHENTICATED"), ("agent", 403, "OPERATOR_REQUIRED"), ("operator", 400, "HTTP_ERROR")])
+def test_review_body_decoding_authentication(client, gateway, caller, status, code):
+    headers = {"missing": {}, "unknown": {"Authorization": "Bearer unknown"},
+               "agent": agent_headers("agent-a"), "operator": OPERATOR_HEADERS}[caller]
+    response = client.put("/v1/policy", content=b'\xff', headers={**headers, "Content-Type": "application/json"})
+    assert (response.status_code, response.json()["code"]) == (status, code)
+    if status == 401:
+        assert response.headers["www-authenticate"] == "Bearer"
+    assert not gateway.audit()
 
 
 def test_ac_4_object_ownership(client, gateway, need, upstream):

@@ -11,6 +11,7 @@ from pathlib import Path
 from .config import BACKEND, ROOT
 from .db import Database, DomainError
 from .models import Product
+from .quantities import pack_quantity
 
 
 def localized(items, language):
@@ -39,7 +40,7 @@ def csv_values(path, column):
 def name_sizes(name, unit):
     pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
     factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
-    return [float(match[2].replace(",", ".")) * factors[match[3].lower()]
+    return [float(pack_quantity(match[2].replace(",", "."), factor=factors[match[3].lower()]))
             for match in re.finditer(pattern, name, re.IGNORECASE) if match[3].lower() in factors]
 
 
@@ -51,6 +52,13 @@ def suspect_content(value, names, unit):
     # supports the structured content even if an earlier portion candidate disagrees.
     return (value <= 0 or value > 100 or (unit == "KG" and value < .001)
             or bool(named and all(max(value / size, size / value) >= 10 for size in named)))
+
+
+def case_suspect(value, multiplier, names, unit):
+    # Names can describe either the inner package or the whole CASE. Compare
+    # like packaging levels; a compatible source supports the CASE evidence.
+    return (suspect_content(value, names, unit) and
+            suspect_content(value / (multiplier or 1) if value is not None else None, names, unit))
 
 
 def extract(raw, reliability, carbon):
@@ -69,7 +77,7 @@ def extract(raw, reliability, carbon):
     def content(record, field, factors):
         value = record.get(field) or {}
         n = number(value.get("value"))
-        return n * factors[value["unit"]] if n is not None and value.get("unit") in factors else None
+        return float(pack_quantity(n, factor=factors[value["unit"]])) if n is not None and value.get("unit") in factors else None
 
     volumes, weights = {"LTR": 1, "MLT": .001, "CLT": .01}, {"KGM": 1, "GRM": .001}
     volume_l, weight_kg = content(base, "volume", volumes), content(base, "netWeight", weights)
@@ -80,8 +88,8 @@ def extract(raw, reliability, carbon):
     multiplier = next((number(u.get("sizeInBaseUnits")) for u in raw.get("units") or []
                        if u.get("unitId") == raw.get("salesUnit")), 1) or 1
     for value, unit in ((case_l, "L"), (case_kg, "KG")):
-        per_base = value / multiplier if value is not None else None
-        suspicion[unit] |= suspect_content(per_base, names, unit)
+        if value is not None:
+            suspicion[unit] = case_suspect(value, multiplier, names, unit)
     statuses, declaration = {}, False
     for group in ("allergen", "nonAllergen"):
         for entry in grouped.get(group, []):

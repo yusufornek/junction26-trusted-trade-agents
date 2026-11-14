@@ -23,6 +23,43 @@ from app.models import PolicyUpdateRequest, Quantity, QuoteLineRequest, QuoteReq
 from conftest import demo_catalog, quote_request, raw_product, rebuild_catalog
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_review_real_case_weight_once(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows, legacy):
+    row = next(r for r in actual_product_rows if str(r["id"]) == "470529")
+    rebuild_catalog(gateway, tmp_path, [row])
+    product = gateway.catalog.get("470529")
+    assert not product.weight_suspect
+    if legacy:
+        # Older builds persisted the false positive. Reconciliation must recover without a rebuild.
+        product.weight_suspect = product.size_suspect = True
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE products SET data=? WHERE id=?", (product.model_dump_json(), product.id))
+    request = need.model_copy(update={"search_terms": ["ribs"], "exclude_allergens": [],
+                                     "quantity": Quantity(value=100, unit="KG")})
+
+    def price(request):
+        body = upstream.price_response(request).json()
+        for item in body["products"]:
+            item.pop("comparisonPrice")
+        return httpx.Response(200, json=body)
+
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=price)
+    result = gateway.find_offers(request)
+    offer = result.offers[0]
+    assert (offer.size_per_sales_unit, offer.units_needed, offer.purchase_total) == (10, 10, 130)
+    assert offer.size_source == "catalog" and not offer.size_confirmed_by_price
+    assert "SIZE_UNCONFIRMED" in {w.code for w in offer.warnings}
+    plan = result.plans[0]
+    assert (plan.lines[0].units, plan.total, plan.coverage.value) == (10, 130, 100)
+    quote = gateway.orders.create_quote(quote_request(request, qty=plan.lines[0].units,
+        product_id=product.id, need_ref=result.lookup_id), "external")
+    order = gateway.orders.place_order(quote.id, f"case-{legacy}", "external")
+    assert order.status == "PENDING_APPROVAL"
+    approved = gateway.orders.approve(order.id, "Ada")
+    assert approved.status == "CONFIRMED" and approved.total == 130
+    assert approved.lines[0].units_needed == 10
+
+
 @pytest.mark.parametrize("field", ["max_candidates", "preferences.max_price_per_unit", "preferences.pack_size.min", "preferences.pack_size.max"])
 @pytest.mark.parametrize("value", [True, "5"])
 @pytest.mark.parametrize("transport", ["rest", "mcp"])
@@ -497,57 +534,5 @@ def test_demo_smoke_still_buys_464306_for_1010(gateway, need, upstream, tmp_path
 
 
 def test_ac_16_full_catalog_replays_recorded_demo(gateway, need, upstream, respx_mock):
-    """Offline replay of captured evidence; live acceptance remains a separate manual check."""
-    from pathlib import Path
-    from app.config import ROOT
-    from app.models import NeedSpec
-    capture = json.loads((Path(__file__).parent / "fixtures/demo_lookup_capture.json").read_text())
-    recorded = {o["product_id"]: o for o in capture["offers"]}
-    report = build(gateway.db)  # Real organiser catalog and its reliability/CO2 files, isolated fixture DB.
-    assert report["rows"] == 17546
-    actual = gateway.catalog.get("464306")
-    assert actual.gtin == "6408430000487" and actual.base_volume_l == 1
-    assert actual.name_en == recorded["464306"]["name"]
-    now = audit.utcnow()
-    body = {**capture["need"], "deliver_by": need.deliver_by.isoformat()}
-    request = NeedSpec.model_validate(body)
-
-    def decisions(request):
-        questions = json.loads(request.content)["questions"]
-        return httpx.Response(200, json={"answers": [
-            {"type": "predicate", "name": q["name"], "probability": recorded[q["name"][4:]]["fit"]}
-            for q in questions if q["name"][4:] in recorded]})
-
-    def price(request):
-        ids = json.loads(request.content)["products"]
-        rows = []
-        for pid in ids:
-            if pid not in recorded:
-                continue  # No invented price evidence for candidates absent from the capture.
-            offer = recorded[pid]
-            rows.append({"productId": pid, "quantity": 1, "error": False,
-                "netPriceFound": offer["net_price_found"],
-                "catalogPrice": {"value": offer["unit_price"], "currency": "EUR",
-                    "valueWithTax": offer["unit_price_with_tax"], "validFrom": now.isoformat(),
-                    "validTo": (now + timedelta(days=30)).isoformat()},
-                "comparisonPrice": {"value": offer["price_per_l_or_kg"]}, "comparisonUnit": "L"})
-        return httpx.Response(200, json={"currency": "EUR", "products": rows})
-
-    def availability(request):
-        ids = json.loads(request.content)["products"]
-        return httpx.Response(200, json={"timeNow": now.isoformat(), "products": [
-            {"productId": pid, "closingTime": (now + timedelta(hours=1)).isoformat(), "salesBlock": False,
-             "logisticModel": recorded[pid]["availability"]["logistic_model"], "scheduleLines": [
-                 {"availableAmount": recorded[pid]["availability"]["available_amount"],
-                  "availableDate": need.deliver_by.isoformat(), "salesUnit": recorded[pid]["sales_unit"], "salesBlock": False}]}
-            for pid in ids if pid in recorded]})
-
-    respx_mock.post("https://api.openai.com/v1/decisions").mock(side_effect=decisions)
-    respx_mock.post("https://valio.test/api/price").mock(side_effect=price)
-    respx_mock.post("https://valio.test/api/availability").mock(side_effect=availability)
-    result = gateway.find_offers(request, actor="agent:web-console")
-    assert result.matched_count > len(recorded) and result.screened_count == 40
-    best = result.offers[0]
-    assert (best.product_id, best.purchase_total, best.units_needed) == ("464306", 1010, 1000)
-    quote = gateway.orders.create_quote(quote_request(request, qty=1000, product_id="464306", need_ref=result.lookup_id), "web-console")
-    assert gateway.orders.place_order(quote.id, "full-catalog-demo", "web-console").status == "CONFIRMED"
+    from conftest import replay_recorded_demo
+    replay_recorded_demo(gateway, need, respx_mock)

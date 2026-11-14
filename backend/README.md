@@ -266,7 +266,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   Fit's ranking contribution is capped at the suitability floor so noise above it cannot reorder
   suitable products; response and approval checks retain the original probabilities.
   `matched_count` counts every search match passing hard constraints before the pool limit;
-  `screened_count` reports the catalog screening pool. When `matched_count > screened_count`,
+  `screened_count` reports candidates actually submitted to Decisions (zero without a key),
+  including failed requests and candidates without returned answers. When `matched_count > screened_count`,
   `POOL_TRUNCATED` reports both numbers and suggests narrowing the search. The `LOOKUP` audit records
   `retrieval`, `matched_count`, `screened_count` and `priced_count`. The two retrieval warnings are
   informational in the default policy. Older stored lookups default counts to zero and retrieval
@@ -278,7 +279,9 @@ Old stored lookups without preferences/plans remain readable, including through 
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
-  CASE sales content needs no base-unit multiplier. Catalog sizes >100 L, >100 kg, <1 g per base unit or
+  CASE sales content needs no base-unit multiplier; CASE and name evidence are compared at matching
+  packaging levels. Legacy CASE suspicion flags are recalculated from retained content and names.
+  Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
   `size_suspect` remains their aggregate. Both English and Finnish names supply size evidence at build.
@@ -319,7 +322,9 @@ Old stored lookups without preferences/plans remain readable, including through 
   Legacy runtime policies without `approval.ignored_warnings` acquire the new default evidence/reject codes
   on load. Explicit current-policy edits retain their configured warning lists across reloads.
 - `purchase_total` is units needed times net sales-unit price, rounded in decimal currency arithmetic;
-  requested quantity is divided by pack size in decimal arithmetic before ceiling to the sales-unit step.
+  `app.quantities.pack_quantity` converts sizes, factors, multipliers and quantities via `Decimal(str(value))`,
+  quantizes content to six decimal places, then ceilings the exact quotient to the sales-unit step.
+  Ingestion, size reconciliation, offers (including quote lines) and plans share this arithmetic.
   `overbuy {amount, unit}` shows whole-pack excess. Both are explained in offer text; `unit_price` remains
   per sales unit. The price factor uses purchase total when size is known; unknown-size offers compare
   their valid per-unit prices within a separate range, retaining `SIZE_UNKNOWN` and no rank label.

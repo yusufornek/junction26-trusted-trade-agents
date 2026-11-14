@@ -15,6 +15,7 @@ class RequestCounter:
     price: int = 0
     availability: int = 0
     decision_calls: int = 0
+    screened_count: int = 0
 
     def live(self):
         return LiveCalls(price=self.price, availability=self.availability)

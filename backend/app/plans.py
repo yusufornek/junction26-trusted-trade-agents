@@ -2,6 +2,7 @@
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Warning
+from .quantities import pack_quantity
 
 
 def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
@@ -18,10 +19,13 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
     steps = [Decimal(str(catalog.get(o.product_id).allowed_lot_size)) if o.sales_unit == "KG" else Decimal(1)
              for o in eligible]
     # Search in integer lot counts; convert back to sales quantities only at the boundary.
-    sizes = [Decimal(str(o.size_per_sales_unit)) * step for o, step in zip(eligible, steps)]
+    sizes = [pack_quantity(o.size_per_sales_unit) * step for o, step in zip(eligible, steps)]
     limits = [int((Decimal(str(o.availability.available_amount)) / step).to_integral_value(rounding=ROUND_FLOOR))
               for o, step in zip(eligible, steps)]
     prices = [Decimal(str(o.unit_price)) * step for o, step in zip(eligible, steps)]
+
+    def needed_lots(i, requested):
+        return int(pack_quantity(eligible[i].size_per_sales_unit, requested=requested, step=steps[i]) / steps[i])
 
     def line_cost(i, lots):
         # Same decimal currency rounding as offer_for, including fractional-cent unit prices.
@@ -60,7 +64,7 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
 
     singles = []
     for i, size in enumerate(sizes):
-        units = int((target / size).to_integral_value(rounding=ROUND_CEILING))
+        units = needed_lots(i, target)
         if units <= limits[i]:
             singles.append(((i, units),))
 
@@ -80,7 +84,7 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                       sorted(indices, key=lambda i: (prices[i] / sizes[i], i))):
             allocation, covered = (), Decimal(0)
             for i in order[:4]:
-                units = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+                units = min(limits[i], needed_lots(i, target - covered))
                 if units > 0:
                     allocation = (*allocation, (i, units))
                     covered += sizes[i] * units
@@ -100,7 +104,7 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                     return
                 if i in used:
                     continue
-                units = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+                units = min(limits[i], needed_lots(i, target - covered))
                 if units:
                     fill((*allocation, (i, units)), covered + sizes[i] * units)
 
@@ -150,7 +154,7 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
             if lower_bound(start, covered, paid, slots) >= best_cost:
                 return
             i = order[start]
-            maximum = min(limits[i], int(((target - covered) / sizes[i]).to_integral_value(rounding=ROUND_CEILING)))
+            maximum = min(limits[i], needed_lots(i, target - covered))
             for units in range(maximum, 0, -1):
                 if nodes_left <= 0:
                     return

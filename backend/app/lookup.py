@@ -1,7 +1,7 @@
 import re
 import json
 from datetime import date, datetime, timezone
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 from math import isclose
 from uuid import uuid4
@@ -10,7 +10,8 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number, suspect_content
+from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect
+from .quantities import pack_quantity
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
 from .valio import RequestCounter
@@ -87,8 +88,7 @@ def day(value):
 
 
 def round_quantity(quantity, product):
-    step = Decimal(str(product.allowed_lot_size if product.sales_unit == "KG" else 1))
-    return float((Decimal(str(quantity)) / step).to_integral_value(rounding=ROUND_CEILING) * step)
+    return float(pack_quantity(1, requested=quantity, step=product.allowed_lot_size if product.sales_unit == "KG" else 1))
 
 
 def size_for(product, price, requested_unit):
@@ -102,7 +102,7 @@ def reconcile_size(product, price, requested_unit):
     comparison = number((price.get("comparisonPrice") or {}).get("value"))
     ratio = None
     if not price.get("error") and price.get("comparisonUnit") == requested_unit and net and net > 0 and comparison and comparison > 0:
-        ratio = net / comparison
+        ratio = float(pack_quantity(Decimal(str(net)) / Decimal(str(comparison))))
     if product.sales_unit == requested_unit == "KG":
         # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
         # ("ca 2,4 kg") describes the item, not the sales unit.
@@ -116,13 +116,15 @@ def reconcile_size(product, price, requested_unit):
     # Recheck retained evidence even when an older build stored False after checking only English.
     # Keep each dimension independent so a bad volume does not discard a valid weight (or vice versa).
     names = [product.name_en, product.name_fi]
-    suspect = bool(suspect) or suspect_content(content, names, requested_unit) or suspect_content(
-        sales_content / (multiplier or 1) if sales_content is not None else None, names, requested_unit)
+    # Recompute CASE suspicion from retained evidence: old builds falsely flagged
+    # whole-case names after dividing their matching CASE weight by the multiplier.
+    suspect = (case_suspect(sales_content, multiplier, names, requested_unit) if sales_content is not None
+               else bool(suspect) or suspect_content(content, names, requested_unit))
     if not suspect and sales_content and sales_content > 0:
-        exact["catalog"] = sales_content  # CASE content already describes one sales unit.
+        exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
     if multiplier is not None and multiplier > 0:
         if "catalog" not in exact and not suspect and content and content > 0:
-            exact["catalog"] = content * multiplier
+            exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
         # Compute the name source too, even when structured catalog content exists.
         # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
         # An inner pack count written as "55x100g" / "72 x 32 g" applies only when the sales-unit
@@ -132,9 +134,10 @@ def reconcile_size(product, price, requested_unit):
         for name in (product.name_en, product.name_fi):
             for match in re.finditer(pattern, name, re.IGNORECASE):
                 count = int(match[1]) if match[1] else 1
-                value, unit = float(match[2].replace(",", ".")), match[3].lower()
+                value, unit = Decimal(match[2].replace(",", ".")), match[3].lower()
                 if unit in factors and value > 0:
-                    exact["name_parse"] = value * factors[unit] * (count if multiplier == 1 and count > 0 else multiplier)
+                    exact["name_parse"] = float(pack_quantity(value, factor=factors[unit],
+                        multiplier=count if multiplier == 1 and count > 0 else multiplier))
                     break
             if "name_parse" in exact:
                 break
@@ -206,7 +209,8 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
 def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, reserved_amount=0, sources=None):
     size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
-        round_quantity(Decimal(str(need.quantity.value)) / Decimal(str(size)), product) if size else None)
+        float(pack_quantity(size, requested=need.quantity.value,
+                            step=product.allowed_lot_size if product.sales_unit == "KG" else 1)) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount, product.sales_unit)
     warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}
@@ -258,7 +262,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
                 if (passes := allergen_evidence(product, a))[0] for evidence in [passes[1]]
                 for origin in origins("exclude_allergens", a)]
     total = float((Decimal(str(net)) * Decimal(str(quantity))).quantize(Decimal("0.01"))) if net is not None and quantity is not None else None
-    overbuy = max(Decimal(0), Decimal(str(size)) * Decimal(str(quantity)) - Decimal(str(need.quantity.value))) if size and quantity else None
+    overbuy = max(Decimal(0), pack_quantity(size) * Decimal(str(quantity)) - Decimal(str(need.quantity.value))) if size and quantity else None
     matched.append(f"Purchase total: {total:.2f} {currency}; overbuy: {float(overbuy):g} {need.quantity.unit}."
                    if total is not None and overbuy is not None else "Purchase total or overbuy: unknown.")
     return OfferCard(
@@ -380,7 +384,7 @@ class Lookup:
         matched_count = counts.get("matched_count", len(pool))
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
-        screened_count = len(pool)
+        screened_count = counter.screened_count
         if matched_count > screened_count:
             global_warnings.append(Warning(code="POOL_TRUNCATED", text=(
                 f"{screened_count:,} of {matched_count:,} matching products screened; add search terms to narrow.")))
@@ -448,7 +452,7 @@ class Lookup:
             conn.execute("INSERT INTO lookup_offers VALUES(?,?)", (result.lookup_id, json.dumps([o.model_dump(mode="json") for o in offers])))
             audit.append(conn, actor, "LOOKUP", f"Priced {len(candidates)} candidates, returned {len(result.offers)} offers and excluded {excluded} hard-filter failures.",
                          data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id, **mandate_evidence(result.mandate),
-                               "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": len(pool) if fits else 0,
+                                "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": screened_count,
                                "retrieval": result.retrieval.model_dump(), "matched_count": result.matched_count,
                                "priced_count": result.priced_count, "screened_count": result.screened_count,
                                "live_calls": counter.live().model_dump(),
