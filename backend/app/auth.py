@@ -3,8 +3,8 @@ from dataclasses import dataclass, asdict
 from hashlib import sha256
 from secrets import compare_digest
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, Header, Request
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 from starlette.responses import JSONResponse
 
 from .db import DomainError
@@ -19,9 +19,20 @@ class Principal:
     customer_ids: tuple[str, ...] = ()
     role: str = "agent"
     credential_ref: str | None = None
+    tenant_id: str | None = None
+    user_id: str | None = None
+    connection_id: str | None = None
+    scopes: tuple[str, ...] = ("*",)
+    audience: str = "legacy"
+
+    @property
+    def customers(self):
+        return self.customer_ids
 
     @property
     def id(self):
+        if self.user_id and self.user_id != "legacy-operator" and self.kind in {"tenant_user", "platform_admin"}:
+            return self.user_id
         return self.agent_id
 
     def public(self):
@@ -29,7 +40,7 @@ class Principal:
 
     @property
     def owner(self):
-        return None if self.operator else self.agent_id
+        return None if self.operator or self.kind == "tenant_user" else self.agent_id
 
 
 class Credentials:
@@ -72,7 +83,7 @@ class Credentials:
         digest = sha256(secret.encode()).digest()
         principal = None
         if self._operator is not None and compare_digest(digest, self._operator):
-            principal = Principal(self.operator_agent_id, operator=True, kind="operator", role="valio_operator")
+            principal = Principal(self.operator_agent_id, operator=True, kind="platform_admin", role="platform_admin", user_id="legacy-operator")
         # Do every comparison, including after a match.
         for agent_id, expected in self._agents:
             if compare_digest(digest, expected):
@@ -85,28 +96,24 @@ class Credentials:
             policy.agents[principal.id].customer_ids if policy and principal.id in policy.agents else [])
         return Principal(principal.id, principal.operator, identity.kind if identity and not principal.operator else principal.kind,
                          organisation, tuple(customers), identity.role if identity and not principal.operator else principal.role,
-                         ("operator:" if principal.operator else "agent:") + principal.id + ":key:1")
+                         ("operator:" if principal.operator else "agent:") + principal.id + ":key:1",
+                         user_id=principal.user_id)
 
 
 bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")
+session_cookie = APIKeyCookie(name="vtg_session", auto_error=False, scheme_name="SessionCookie",
+    description="Human session from POST /v1/auth/login. Mutations also require X-CSRF-Token from that response.")
 
 
 def resolve_credential(keys, secret, service):
-    policy = service.policy.get()
+    if keys.recognizes(secret):
+        return service.accounts.bind(keys.resolve(secret, service.policy.get()))
     try:
-        return keys.resolve(secret, policy)
+        keys.resolve(secret)  # Keep constant-time env-key comparisons below source admission.
     except DomainError as error:
         if error.status != 401:
             raise
-    principal = service.connections.resolve(secret)
-    # Issued connections have exactly the same policy-derived identity as env keys.
-    identity = policy.identities.get(principal.id)
-    organisation = identity.organisation_id if identity else None
-    customers = policy.organisations[organisation].customer_ids if organisation in policy.organisations else (
-        policy.agents[principal.id].customer_ids if principal.id in policy.agents else [])
-    return Principal(principal.id, kind=identity.kind if identity else "agent", organisation_id=organisation,
-                     customer_ids=tuple(customers), role=identity.role if identity else "agent",
-                     credential_ref=principal.credential_ref)
+    return service.accounts.bind(service.connections.resolve(secret))
 
 
 def check_source(service, source):
@@ -133,14 +140,24 @@ def admit_credential(service, keys, source, secret):
     return principal
 
 
-async def resolve_principal(request: Request, credential: HTTPAuthorizationCredentials | None = Depends(bearer)):
+async def resolve_principal(request: Request, credential: HTTPAuthorizationCredentials | None = Depends(bearer),
+                            cookie: str | None = Depends(session_cookie),
+                            csrf: str | None = Header(default=None, alias="X-CSRF-Token",
+                                description="Required on mutating requests authenticated by the human session cookie; returned by login.")):
     from .foundation import PRINCIPAL
     service = request.app.state.gateway
     source = request.client.host if request.client else "unknown"
     secret = credential.credentials if credential is not None else ""
-    principal = admit_credential(service, request.app.state.keys, source, secret)
+    if credential is None and request.cookies.get("vtg_session"):
+        principal = service.accounts.session(request.cookies["vtg_session"])
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            service.accounts.csrf(request.cookies["vtg_session"], request.headers.get("X-CSRF-Token", ""))
+    else:
+        principal = admit_credential(service, request.app.state.keys, source, secret)
+    service.accounts.guard(principal, request.url.path, request.method)
     request.state.principal = principal
     PRINCIPAL.set(principal)
+    service.accounts.guard_target(request, principal)
     path = request.url.path
     if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes")) or path in {"/v1/me", "/v1/approvals"}):
         service.limiter.consume(principal.id, "read")
@@ -154,7 +171,8 @@ def require_operator(principal: Principal = Depends(resolve_principal)):
 
 
 def require_reviewer(principal: Principal = Depends(resolve_principal)):
-    if not principal.operator and not (principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}):
+    if not principal.operator and not ((principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}) or
+            (principal.kind == "tenant_user" and principal.role in {"tenant_admin", "approver"})):
         raise DomainError("OPERATOR_REQUIRED", "A buyer approver or operator credential is required", 403)
     return principal
 
@@ -164,6 +182,20 @@ def check_owner(obj, agent_id, code):
     if agent_id is not None and obj.agent_id != agent_id:
         raise DomainError(code, "Object was not found", 404)
     return obj
+
+
+def check_scope(principal, resource, permission, action=None):
+    if not principal or not principal.connection_id or "*" in principal.scopes:
+        return
+    accepted = {permission, resource, f"{resource}:{permission}"}
+    if action:
+        accepted.add(f"{resource}:{action}")
+    if permission == "write":
+        accepted.add(f"{resource}:manage")
+        if resource == "approvals":
+            accepted.add("approvals:decide")
+    if not accepted & set(principal.scopes):
+        raise DomainError("INSUFFICIENT_SCOPE", "Connection does not allow this operation", 403)
 
 
 class MCPBearerMiddleware:
@@ -185,12 +217,17 @@ class MCPBearerMiddleware:
                 scheme, _, token = value.partition(" ")
                 secret = token if scheme.lower() == "bearer" else ""
                 principal = admit_credential(self.gateway, self.keys, source, secret)
+                if principal.connection_id and principal.audience != "buyer":
+                    raise DomainError("WRONG_AUDIENCE", "This key is bound to a different resource audience", 401)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
-                response_headers.update({"WWW-Authenticate": "Bearer"} if error.status == 401 else {"Retry-After": str(error.data["retry_after_seconds"])})
+                if error.status == 401:
+                    response_headers["WWW-Authenticate"] = "Bearer"
+                elif error.data.get("retry_after_seconds"):
+                    response_headers["Retry-After"] = str(error.data["retry_after_seconds"])
                 await JSONResponse(problem(error, scope.get("path")), status_code=error.status,
                                    media_type="application/problem+json", headers=response_headers)(scope, receive, send)
                 CORRELATION.reset(correlation_token)

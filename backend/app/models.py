@@ -3,7 +3,7 @@ import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_serializer, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PrivateAttr, computed_field, field_validator, model_serializer, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -552,6 +552,8 @@ class Order(Model):
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
+    approver_user_id: str | None = None
+    approver_role: str | None = None
     approval_side: Literal["buyer", "valio_operator"] | None = Field(default=None, description="Organisation side that signed the human decision; null before review or on legacy orders.")
     comment: str | None = None
     cancelled_by: str | None = Field(default=None, description="Human name or placing agent ID responsible for cancellation.")
@@ -592,6 +594,7 @@ class Order(Model):
 
 
 class CancelRequest(Model):
+    confirmation_token: str | None = Field(default=None, repr=False, exclude=True)
     cancelled_by: str = Field(min_length=1, description="Non-blank human name responsible for cancellation.")
     reason: str = ""
 
@@ -604,8 +607,9 @@ class CancelRequest(Model):
 
 
 class ApprovalRequest(Model):
-    approver: str = Field(min_length=1, description="Human approver name (MVP: one role, no authentication).")
+    approver: str = Field(min_length=1, description="Display name stated by the approver; authenticated user id and role are recorded separately.")
     comment: str = ""
+    confirmation_token: str | None = Field(default=None, repr=False, exclude=True, description="Single-use REST confirmation returned by the first decision call; expires in five minutes.")
     evidence_revision: int | None = Field(default=None, ge=1, description="Optional revision displayed to the approver. A stale revision prevents approval with 409 EVIDENCE_CHANGED before any upstream call; ignored for rejection.")
 
 
@@ -615,6 +619,7 @@ class ApprovalItem(Model):
 
 
 class AuditEntry(Model):
+    tenant_id: str | None = None
     id: int
     prev_hash: str = ""
     hash: str = ""
@@ -799,14 +804,19 @@ class AgentMandate(Model):
         return self
 
 
-ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest"]
+ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest", "curl", "python", "typescript", "openai_agents_sdk", "anthropic_api", "langchain", "a2a"]
 
 
 class ConnectionRequest(Model):
     agent_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
-    client: ClientKind
+    client: ClientKind = "rest"
     customer_ids: list[str] = Field(min_length=1)
     label: str | None = None
+    type: Literal["mcp", "rest", "a2a", "webhook", "tool_pack"] = "mcp"
+    audience: Literal["buyer", "tenant", "operator"] = "buyer"
+    scopes: list[str] = Field(default_factory=lambda: ["*"])
+    expires_at: AwareDatetime | None = None
+    tenant_id: str | None = None
 
 
 class Connection(Model):
@@ -817,6 +827,13 @@ class Connection(Model):
     created_at: datetime
     last_used_at: datetime | None = None
     revoked_at: datetime | None = None
+    tenant_id: str | None = None
+    created_by: str | None = None
+    expires_at: datetime | None = None
+    type: str = "mcp"
+    audience: str = "buyer"
+    scopes: list[str] = Field(default_factory=lambda: ["*"])
+    customer_ids: list[str] = Field(default_factory=list)
 
 
 class NewConnection(Connection):
@@ -898,6 +915,7 @@ class AgentTrackRecord(Model):
 
 
 class AutonomyChange(Model):
+    confirmation_token: str | None = Field(default=None, repr=False, exclude=True)
     level: AutonomyLevel
     reason: str = Field(min_length=1)
 
@@ -957,12 +975,14 @@ class PolicyDocument(Model):
 
 
 class PolicyResource(PolicyDocument):
+    _tenant_daily_ceiling: float | None = PrivateAttr(default=None)
     updated_at: datetime | None = Field(default=None, description="Last runtime update in UTC; null for committed defaults.")
     updated_by: str | None = Field(default=None, description="Human responsible for the last runtime update.")
     known_warning_codes: list[str] = Field(default_factory=list, description="All warning codes the lookup engine can emit; server supplied.")
 
 
 class PolicyResetRequest(Model):
+    confirmation_token: str | None = Field(default=None, repr=False, exclude=True)
     updated_by: str = Field(min_length=1, description="Name of the human changing the policy.")
 
     @model_validator(mode="after")

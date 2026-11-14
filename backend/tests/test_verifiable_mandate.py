@@ -295,9 +295,11 @@ def test_ac_2_invalid_checks_are_named_audited_on_every_step(gateway, need, upst
 
 
 def test_ac_3_customer_binding(gateway, need, upstream, buyer):
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT OR IGNORE INTO tenant_customers VALUES('3','hotel-aurora')")
     token = issue(buyer)
     with TestClient(create_app(gateway), headers=headers(token)) as client:
-        other = need.model_copy(update={"customer_id": "2"})
+        other = need.model_copy(update={"customer_id": "3"})
         result = client.post("/v1/offers", json=other.model_dump(mode="json"))
         assert result.status_code == 403 and result.json()["data"]["check"] == "customer"
         result = client.post("/v1/quotes", json=quote_request(other, qty=1, need_ref="missing").model_dump(mode="json"))

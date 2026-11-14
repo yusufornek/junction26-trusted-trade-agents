@@ -163,7 +163,7 @@ class PurchaseMemory:
     def scoped(self, principal, mandate=None):
         if principal.operator:
             return principal
-        if principal.kind not in {"agent", "buyer_user"}:
+        if principal.kind not in {"agent", "buyer_user", "tenant_user"}:
             raise DomainError("BUYER_REQUIRED", "Purchase memory requires a buyer credential", 403)
         if principal.kind == "agent":
             check_suspension(self.g.db, principal.id)
@@ -232,7 +232,7 @@ class PurchaseMemory:
             if requested and requested != principal.id:
                 raise DomainError("BUYER_AGENT_REQUIRED", "Use your own agent identity", 403)
             return principal.id
-        if not principal.operator and principal.role not in {"buyer_admin", "buyer_approver"}:
+        if not principal.operator and principal.role not in {"buyer_admin", "buyer_approver", "tenant_admin", "approver"}:
             raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
         identity = self.g.policy.get().identities.get(requested)
         if not requested or not principal.operator and (not identity or identity.kind != "agent" or identity.organisation_id != principal.organisation_id):
@@ -252,9 +252,14 @@ class PurchaseMemory:
 
     def act(self, id, action, principal, body=None, mandate=None):
         self.g.limiter.consume(principal.id, "mutation")
+        if action in {"prepared", "made_recurring"} and principal.kind == "agent" and principal.tenant_id and not principal.customer_ids and mandate is None:
+            with self.g.db.connect() as conn:
+                historical = conn.execute("SELECT 1 FROM purchase_memory WHERE json_extract(data,'$.agent_id')=? LIMIT 1", (principal.id,)).fetchone()
+            if historical:
+                raise DomainError("CUSTOMER_NOT_IN_MANDATE", "The credential no longer permits purchasing for any customer", 403)
         with self.g.db.connect(write=True) as conn:
             pattern = self.get(id, principal, mandate)
-            if principal.kind == "buyer_user" and principal.role == "buyer_viewer":
+            if principal.kind in {"buyer_user", "tenant_user"} and principal.role in {"buyer_viewer", "viewer"}:
                 raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
             result = self.public(pattern)
             if action in {"prepared", "made_recurring"}:

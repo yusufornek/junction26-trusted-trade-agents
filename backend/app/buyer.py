@@ -13,6 +13,7 @@ from .autonomy import buyer_scope
 from .db import DomainError
 from .mandates import decode
 from .models import ApprovalRequest, Order
+from .tenant_api import DecisionPreview, confirm_rest
 
 
 def check_suspension(db, agent_id):
@@ -31,10 +32,10 @@ class Buyer:
         self.gateway, self.db = gateway, gateway.db
 
     def scope(self, principal, *, admin=False):
-        if not principal.operator and (principal.kind != "buyer_user" or principal.role not in {
-                "buyer_viewer", "buyer_approver", "buyer_admin"}):
+        if not principal.operator and (principal.kind not in {"buyer_user", "tenant_user"} or principal.role not in {
+                "buyer_viewer", "buyer_approver", "buyer_admin", "viewer", "approver", "tenant_admin"}):
             raise DomainError("OPERATOR_REQUIRED", "A buyer user credential is required", 403)
-        if admin and (principal.operator or principal.role != "buyer_admin"):
+        if admin and (principal.operator or principal.role not in {"buyer_admin", "tenant_admin"}):
             raise DomainError("BUYER_ADMIN_REQUIRED", "A buyer administrator credential is required", 403)
         policy = self.gateway.policy.get()
         customers = sorted(set(principal.customer_ids)) if not principal.operator else sorted(
@@ -265,19 +266,23 @@ def revoke(jti: str, request: Request, principal: Principal = Depends(resolve_pr
     return buyer.revoke(jti, principal, command_key=idempotency_key)
 
 
-@router.post("/approvals/{order_id}/approve", response_model=dict, summary="Approve the current evidence revision within buyer scope")
+@router.post("/approvals/{order_id}/approve", response_model=dict | DecisionPreview, summary="Confirm then approve the current evidence revision within buyer scope")
 def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(resolve_principal),
             idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
     buyer = request.app.state.gateway.buyer
     buyer.scope(principal)
-    return buyer.envelope(principal, order=request.app.state.gateway.orders.approve(
-        order_id, body.approver, body.comment, body.evidence_revision, command_key=idempotency_key))
+    result = confirm_rest(request.app.state.gateway, principal, "approve", order_id,
+        body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+        lambda: request.app.state.gateway.orders.approve(order_id, body.approver, body.comment, body.evidence_revision, command_key=idempotency_key))
+    return result if isinstance(result, DecisionPreview) else buyer.envelope(principal, order=result)
 
 
-@router.post("/approvals/{order_id}/reject", response_model=dict)
+@router.post("/approvals/{order_id}/reject", response_model=dict | DecisionPreview)
 def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(resolve_principal),
            idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
     buyer = request.app.state.gateway.buyer
     buyer.scope(principal)
-    return buyer.envelope(principal, order=request.app.state.gateway.orders.reject(
-        order_id, body.approver, body.comment, command_key=idempotency_key))
+    result = confirm_rest(request.app.state.gateway, principal, "reject", order_id,
+        body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+        lambda: request.app.state.gateway.orders.reject(order_id, body.approver, body.comment, command_key=idempotency_key))
+    return result if isinstance(result, DecisionPreview) else buyer.envelope(principal, order=result)

@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS audit_anchors (
 
 class Database:
     def __init__(self, path: Path):
+        self._tenant_columns = None
         self.on_commit = None
         self._connection = ContextVar("sqlite_connection", default=None)
         self._staged_files = ContextVar("sqlite_staged_files", default=None)
@@ -166,6 +167,15 @@ class Database:
                 # denial rather than silently restoring revoked authority.
                 conn.execute("INSERT INTO mandate_revocations SELECT '',issuer,mandate_id,at FROM legacy_mandate_revocations")
                 conn.execute("DROP TABLE legacy_mandate_revocations")
+            from .tenancy import migrate as migrate_tenants
+            migrate_tenants(conn)
+            self._tenant_columns = {}
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+                name = row[0]
+                columns = [r[1] for r in conn.execute(f'PRAGMA table_info("{name}")')]
+                from .tenancy import SHARED
+                if "tenant_id" in columns and name not in SHARED:
+                    self._tenant_columns[name] = columns
 
     def file_content(self, path):
         """Committed policy, or the caller's own staged transaction snapshot.
@@ -294,9 +304,11 @@ class Database:
         try:
             if writer_lock is not None:
                 fcntl.flock(writer_lock, fcntl.LOCK_EX)
-            conn = sqlite3.connect(self.path, timeout=30)
+            from .tenancy import TenantConnection
+            conn = sqlite3.connect(self.path, timeout=30, factory=TenantConnection)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
+            conn.install_scope(self._tenant_columns)
         except BaseException:
             try:
                 if conn is not None:

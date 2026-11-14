@@ -15,6 +15,10 @@ class Limiter:
         self.buckets = {}
 
     def limits(self, principal):
+        from .foundation import PRINCIPAL
+        p = PRINCIPAL.get()
+        if p and p.connection_id == principal:
+            principal = p.id
         policy = self.policy.get()
         agent = policy.agents.get(principal)
         return agent.rate_limits if agent and agent.rate_limits is not None else policy.rate_limits
@@ -33,6 +37,10 @@ class Limiter:
         return state
 
     def consume(self, principal, category):
+        from .foundation import PRINCIPAL
+        p = PRINCIPAL.get()
+        if p and p.connection_id and principal == p.id:
+            principal = p.connection_id
         config = getattr(self.limits(principal), category)
         with self.lock:
             state = self._bucket(principal, category, config)
@@ -50,6 +58,10 @@ class Limiter:
                           {"retry_after_seconds": retry})
 
     def snapshot(self, principal):
+        from .foundation import PRINCIPAL
+        p = PRINCIPAL.get()
+        if p and p.connection_id and principal == p.id:
+            principal = p.connection_id
         limits = self.limits(principal)
         with self.lock:
             return {name: {**getattr(limits, name).model_dump(),

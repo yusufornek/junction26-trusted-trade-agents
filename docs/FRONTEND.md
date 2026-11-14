@@ -80,3 +80,110 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 Needs the repo-root `.env.local` (VALIO_API_KEY, OPENAI_API_KEY — ask Gökalp). CORS allows `http://localhost:*`.
 Sample data: `backend/demo/run_buyer_agent.sh` (Claude as buyer agent) or quotes/orders via `/docs`.
 Need another field or endpoint? Ask the backend side — it is quick to add.
+
+## Accounts and connections (spec 43)
+
+This section describes backend data and behaviour; the frontend owner designs the screens.
+Part 1 implements accounts, tenant isolation and REST audiences. OAuth and the tenant/operator MCP,
+A2A, webhook and tool-pack audiences are part 2 and are not implemented yet. Read `available` and
+`oauth_available` from the connection catalog rather than assuming that every catalog entry is live.
+
+**Sign-in and session.** `POST /v1/auth/login` takes `{email,password}` and returns
+`{csrf_token,user,role,tenant_id,tenant,customer_ids,permissions}`. The server sets `vtg_session`
+(`HttpOnly`, `SameSite=Lax`, `Secure` except on localhost). Use `credentials: 'include'` and keep the
+CSRF token in memory or sessionStorage (clear it on sign-out). Send `X-CSRF-Token` on every cookie-authenticated POST, PUT, PATCH and DELETE.
+`GET /v1/auth/session` returns the same account data without the CSRF token; it reads the current
+role on every request. `POST /v1/auth/logout` requires CSRF and ends the current session. Retain the CSRF token in sessionStorage across a page
+reload; sign in again if it was lost. Bearer keys remain available and do not require CSRF.
+Use the session `role`, not a role cached on a connection, to choose available actions.
+
+**Invites and password set.** Inviting returns `{user_id,link,token,expires_at}` once. An invite lasts
+seven days. Submit `{password}` (10–1024 characters) to `POST /v1/auth/invites/{token}/accept`, then
+sign in normally. Resending invalidates the old link. Password reset links last one day; submit
+`{password}` to `POST /v1/auth/password-resets/{token}/accept`. A successful reset ends existing
+sessions. Used/expired links return `410 LINK_EXPIRED`; link secrets are redacted in errors/logs.
+The gateway returns links for the admin to share; it does not send email.
+
+**Tenant team.** A `tenant_admin` uses the following `/v1/tenant/users` endpoints:
+
+| Method and suffix | Data / behaviour |
+|---|---|
+| `GET /` | People: id, tenant_id, email, role, status (`invited`, `active`, `disabled`, `removed`), last_sign_in, invited_by, created_at, disabled_at |
+| `POST /` | `{email,role}` → single-use invite; roles: tenant_admin, approver, viewer |
+| `GET /{user_id}` | One person in the same tenant |
+| `PATCH /{user_id}` | `{role?,disabled?}`; `disabled:false` re-enables |
+| `DELETE /{user_id}` | Remove person; history remains |
+| `POST /{user_id}/resend-invite` | Replace pending invite, return new link once |
+| `POST /{user_id}/cancel-invite` | Invalidate pending invite and disable the pending account |
+| `POST /{user_id}/password-reset` | Return a reset link once |
+
+`GET /v1/tenant/roles` returns `{role,permissions[]}` entries for display. The last active tenant
+admin cannot be demoted, disabled or removed (`409 LAST_TENANT_ADMIN`). Disabling/removing another
+person ends their sessions and revokes every connection they created, including buyer keys.
+Role changes take effect on the next request. Foreign users/objects return 404.
+
+**Platform management.** Only `platform_admin` uses `/v1/operator/tenants`: GET lists tenants;
+POST `{name,customer_ids}` creates one; PATCH `/{tenant_id}` accepts `{name?,customer_ids?,disabled?}`.
+The PATCH customer list replaces that tenant's assignments and explicitly moves numbers from their
+previous tenant. Each number has one owner. Disabling ends sessions and revokes connections.
+`POST /v1/operator/tenants/{tenant_id}/users` invites the first tenant admin (`{email,role:'tenant_admin'}`).
+`/v1/operator/users` exposes the same people endpoints as above for Valio staff; its role is platform_admin.
+
+**Agents and authority.** Tenant admins list/create agents at `/v1/tenant/agents` (POST
+`{agent_id,name}`), PATCH `/{agent_id}` with `{name?,disabled?}`, and issue/list mandates at
+`/{agent_id}/mandates`. Issue body: `{customer_id,max_auto_total_eur?,max_auto_daily_total_eur?,autonomy?,valid_days?}`;
+the signed VC-JWT is returned on issue. DELETE `/{agent_id}/mandates/{mandate_id}` revokes it.
+Customer numbers must belong to the tenant. New agents start approval-first; creation alone does not
+give purchasing authority. A connection grants a minimal approval-first policy mandate as in spec 42.
+`GET /v1/tenant/agents/{agent_id}/track-record` and POST `/{agent_id}/autonomy` retain spec 40's
+readiness and grant/withdraw behaviour; only the tenant admin can change autonomy.
+
+**Connect tabs.** Public `GET /v1/connect/catalog?audience=buyer|tenant|operator` gives connection
+types, clients, credential methods, documentation links and current availability. The shared client
+registry also feeds instructions. Tenant admins use `/v1/tenant/connections`, platform admins can
+use `/v1/operator/connections` and set `tenant_id` in the create body. POST takes
+`{type,agent_id,client,customer_ids,scopes?,audience?,expires_at?,label?,tenant_id?}`. An optional
+`Idempotency-Key` makes creation replayable, but a replay has `key:null`. API keys have form
+`vtg_live_<connection_id>_<secret>` (or `vtg_sbx_...`) and are shown only on creation/rotation.
+GET list and GET `/{connection_id}` return prefix, tenant, agent, audience, type, allowed customers,
+scopes, creator and timestamps, never the secret. `GET /{connection_id}/instructions?client=...&audience=...`
+returns ordered `steps`, `snippet`, `language`, `secret_placeholder`, URLs and MCP-derived tool schemas.
+The named key placeholder is `VTG_CONNECTION_KEY`; the server cannot redisplay a lost secret.
+POST `/{connection_id}/rotate` takes `{overlap_hours:0..24}` and returns a new key and
+`old_key_valid_until`. DELETE `/{connection_id}` revokes immediately. Rotation/revocation do not
+change the agent's mandate. Each connection has an independent rate bucket.
+
+**REST permissions and decisions.** `/v1/tenant/orders` and its detail/receipt/UBL/timeline/evidence routes,
+`/v1/tenant/audit`, `/v1/tenant/spend` and `/v1/tenant/suggestions` are tenant-scoped reads for
+viewer, approver and tenant_admin. Approver/admin use `/v1/tenant/approvals` and POST
+`/{order_id}/approve` or `/reject`; the body is `{approver,comment?,evidence_revision?,confirmation_token?}`.
+They can also POST `/v1/tenant/orders/{order_id}/cancel`. Only tenant_admin manages people,
+agents, connections, mandates and `/v1/tenant/policy`. The tenant policy PUT accepts an
+`{approval:{...},reject:{on:[...]},confirmation_token?}` overlay which can only tighten platform ceilings.
+Platform admins use the corresponding `/v1/operator/orders`, `/approvals`, `/stats`, `/audit`,
+`/policy`, `/suppliers`, `/health` routes across tenants. Existing operator paths remain available.
+Buyer-agent credentials use `/v1` procurement routes; they cannot use tenant/operator audiences.
+Tenant/operator connection keys carry their creating human's user id and enforce the human's live role.
+Cross-audience human keys return 401; agent credentials at human audiences return 403.
+
+For human approve/reject/cancel and policy/autonomy changes, first submit the action without a
+confirmation token. The response has `{confirmation_required:true,confirmation_token,expires_at,summary}`
+and makes no business decision. Display that summary and resubmit the identical body plus the token
+after the human confirms. Tokens are single-use, user/tenant/action/payload/evidence-bound, valid five
+minutes. Orders record `approver_user_id` and `approver_role`. `409 EVIDENCE_CHANGED` requires reading
+fresh evidence and starting a new confirmation. `409 CONFIRMATION_INVALID` requires starting again.
+Existing `OPERATOR_TOKEN` callers keep their platform-admin identity; human decisions on the existing
+paths also require this confirmation handshake.
+
+**OAuth consent contract (part 2).** The planned frontend flow reads
+`GET /v1/oauth/requests/{id}` to show the client name and redirect host, tenant agents, allowed
+customers and requested scopes, then calls `POST /v1/oauth/requests/{id}/decision` to approve or deny.
+These endpoints and `FRONTEND_CONSENT_URL` are not available in part 1. Do not render a working
+consent button until the part 2 contract lands; use catalog availability for current choices.
+
+All failures use the existing RFC 9457 problem shape (`code`, `next_action`, `detail`, correlation id).
+Relevant codes: `401 UNAUTHENTICATED`/`WRONG_AUDIENCE`, `403 CSRF_REQUIRED`, `HUMAN_REQUIRED`,
+`TENANT_ADMIN_REQUIRED`, `OPERATOR_REQUIRED`, `INSUFFICIENT_SCOPE`, `CUSTOMER_NOT_IN_MANDATE`,
+`POLICY_CEILING`; `404 *_NOT_FOUND`; `409 LAST_TENANT_ADMIN`, `EMAIL_EXISTS`, `AGENT_EXISTS`,
+`CUSTOMER_ASSIGNED`, `CONFIRMATION_INVALID`, `EVIDENCE_CHANGED`; `410 LINK_EXPIRED`;
+`429 LOGIN_THROTTLED`/`RATE_LIMITED` with `Retry-After`. Login throttles email and client address.
