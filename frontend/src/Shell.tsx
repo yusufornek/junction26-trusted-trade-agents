@@ -64,6 +64,10 @@ export default function Shell() {
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<unknown>(null);
   const [rangeIndex, setRangeIndex] = useState(1);
+  // The range counts back from page load. Counted from Date.now() on every render, `since` changed each time the
+  // shell re-rendered (the 10 s approvals poll, opening a menu), so the dashboard refetched behind a spinner, the page
+  // shrank to the spinner's height and the browser scrolled back to the top.
+  const [loadedAt] = useState(Date.now);
   const [rangeOpen, setRangeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -97,7 +101,7 @@ export default function Shell() {
       ? { title: "Product", sub: "Catalog facts the agent judged this product on." }
       : { title: "Order", sub: "Commitment detail" });
   const range = RANGES[rangeIndex];
-  const since = range.days ? new Date(Date.now() - range.days * 86400000).toISOString() : undefined;
+  const since = range.days ? new Date(loadedAt - range.days * 86400000).toISOString() : undefined;
   const waiting = approvals.data?.length ?? 0;
 
   return (
