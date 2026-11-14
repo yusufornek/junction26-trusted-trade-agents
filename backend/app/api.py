@@ -34,7 +34,7 @@ from starlette.routing import Route
 logger = logging.getLogger(__name__)
 
 
-def create_app(gateway=None, *, settings=None, keys=None):
+def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
@@ -57,6 +57,18 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
                     pass
+        if not serve_mcp:
+            worker = asyncio.create_task(deliver_notifications())
+            service.recurring.start()
+            try:
+                yield
+            finally:
+                stop.set()
+                await worker
+                service.recurring.close()
+                if gateway is None:
+                    service.close()
+            return
         from .mcp_server import create_server
         app.state.mcp_server = create_server(service, agent_id=None)
         app.state.mcp_server.keys = keys
@@ -65,7 +77,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
         public = service.settings.public_url
         security = TransportSecuritySettings(allowed_hosts=["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]", "[::1]:*"] +
             ([urlsplit(public).netloc] if public else []),
-            allowed_origins=["http://localhost", "http://localhost:*", "http://127.0.0.1", "http://127.0.0.1:*", "http://[::1]", "http://[::1]:*"] + ([public] if public else []))
+            allowed_origins=[f"{scheme}://{host}{port}" for scheme in ("http", "https")
+                for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
         worker = asyncio.create_task(deliver_notifications())
@@ -86,6 +99,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    app.state.mcp_served = serve_mcp
+    from .connections import router as connections_router
+    app.include_router(connections_router)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)
@@ -99,7 +115,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
     install_discovery(app)
     from .developer_docs import install_routes as install_developer_docs
     install_developer_docs(app)
-    app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+    if serve_mcp:
+        app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
     app.include_router(recurring_router)
     app.include_router(proposals_router)
     from .purchase_memory import router as memory_router
@@ -400,10 +417,10 @@ def create_app(gateway=None, *, settings=None, keys=None):
     @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
     def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None, mandate=Depends(presented_mandate)):
         return svc(request).orders.cancel(order_id,
             actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
-            stated_name=body.cancelled_by if principal.operator else None, command_key=idempotency_key)
+            stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):

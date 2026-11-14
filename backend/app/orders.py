@@ -105,6 +105,7 @@ class Orders:
             # A changed revision is already persisted and audited atomically, with its actual calls.
             # Do not add a second failed event that would double-count the same refresh in the timeline.
             if error.code == "EVIDENCE_CHANGED" and error.data.get("changes"):
+                error.audited = True
                 raise
             if error.code in {"EXPIRED_QUOTE", "EXPIRED_ORDER"}:
                 self.expire()
@@ -113,6 +114,7 @@ class Orders:
                              order_id=inputs.get("order_id"), quote_id=inputs.get("quote_id"),
                              data={"inputs": inputs, "error": error.code, "live_calls": counter.live().model_dump(),
                                    **({"stated_name": inputs["stated_name"]} if "stated_name" in inputs else {}), **error.data})
+                error.audited = True
                 if any(h.get("rule") == "hard_constraint_violation" for h in error.data.get("rule_hits", [])):
                     if inputs.get("order_id"):
                         order = self._order(conn, inputs["order_id"])
@@ -246,9 +248,14 @@ class Orders:
             basket = stored_basket(conn, lookup.lookup_id)
         if request.basket_ref:
             if basket is None:
-                raise DomainError("BASKET_NOT_FOUND", "Basket lookup was not found", 404)
-            requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units_needed)
-                               for line in basket.basket.lines]
+                if not lookup.basket or not lookup.plans:
+                    raise DomainError("BASKET_NOT_FOUND", "Basket lookup was not found", 404)
+                plan = lookup.plans[0]
+                requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units)
+                                   for line in plan.lines]
+            else:
+                requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units_needed)
+                                   for line in basket.basket.lines]
             if not requested_lines:
                 raise DomainError("EMPTY_BASKET", "No purchasable basket lines; revise uncovered ingredients", 422)
         if request.plan_ref:
@@ -322,6 +329,8 @@ class Orders:
                 "brand": p.brand, "claims": sorted(p.claims), "allergens": p.allergen_status,
                 "allergen_declaration": p.has_allergen_declaration} for p in products.values()}
 
+            if basket or lookup.basket:
+                quote.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
@@ -423,6 +432,8 @@ class Orders:
             if order.context and quote.need_ref:
                 _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=quote.supplier_id)
+                if quote.basket_ref:
+                    order.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
             order.correlation_id = CORRELATION.get() or quote.correlation_id
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
@@ -589,6 +600,8 @@ class Orders:
             check_owner(order, agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)
             events = audit.read_timeline(conn, order.id, quote.id, quote.need_ref)
+            from .visibility import audit_visible
+            events = [event for event in events if audit_visible(event.model_dump(), order.agent_id)]
         stages = {"LOOKUP": "lookup", "CREATE_QUOTE": "quote", "PLACE_ORDER": "order",
                   "ORDER_REPLAY": "order", "APPROVE": "decision", "REJECT": "decision",
                   "EVIDENCE_CHANGED": "decision",
@@ -698,6 +711,8 @@ class Orders:
                     _, effective = self.policy.effective_need(legacy_need, policy=policy)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective,
                     order.mandate, supplier_id=order.supplier_id, snapshot=policy_snapshot)
+                if quote.basket_ref or (self.lookup_need(conn, quote.need_ref).basket if quote.need_ref else None):
+                    order.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
                 order.warnings = quote.warnings
                 changes = evidence_changes(previous, order)
                 if not changes and order.basket_ref and any(not line.availability.enough for line in order.lines):
@@ -741,20 +756,23 @@ class Orders:
                               data={"evidence_revision": order.evidence_revision, "changes": changes})
         return order
 
-    def cancel(self, order_id, actor="system", reason="", *, stated_name=None):
+    def cancel(self, order_id, actor="system", reason="", *, stated_name=None, mandate=None):
         """Core transition for a local confirmed order, before any known cutoff."""
         inputs = {"order_id": order_id, "reason": reason}
         if stated_name is not None:
             inputs["stated_name"] = stated_name
         return self._run("CANCEL", actor, inputs,
-                         lambda counter: self._cancel(order_id, actor, reason, inputs, counter))
+                         lambda counter: self._cancel(order_id, actor, reason, inputs, counter, mandate))
 
-    def _cancel(self, order_id, actor, reason, inputs, counter):
+    def _cancel(self, order_id, actor, reason, inputs, counter, mandate=None):
         with self.db.connect(write=True) as conn:
             order = self._order(conn, order_id)
             inputs["quote_id"] = order.quote_id
             if actor.startswith("agent:") and order.agent_id != actor.removeprefix("agent:"):
                 raise DomainError("ORDER_NOT_FOUND", "Order was not found", 404)
+            if actor.startswith("agent:"):
+                self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), order.customer_id,
+                    products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
             if order.status != "CONFIRMED":
                 raise DomainError("INVALID_TRANSITION", "Only CONFIRMED orders can be cancelled")
             cutoffs = [o.availability.closing_time for o in order.lines if o.availability.closing_time]

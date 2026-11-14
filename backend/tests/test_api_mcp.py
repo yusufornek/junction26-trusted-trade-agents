@@ -177,10 +177,10 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/suggestions", "/v1/suggestions/{id}/prepare",
                                     "/v1/suggestions/{id}/make-recurring", "/v1/suggestions/{id}/dismiss",
                                     "/v1/suggestions/{id}/snooze", "/v1/buyer/memory-preferences",
-                                    "/v1/buyer/memory"}
+                                    "/v1/buyer/memory", "/v1/connections", "/v1/connections/{connection_id}"}
     for path in schema["paths"].values():
         for operation in path.values():
-            content = operation["responses"]["200"]["content"]
+            content = operation["responses"].get("200", operation["responses"].get("201"))["content"]
             assert content and all(media["schema"] for media in content.values())
     # Route inventory includes spec 10, 11 and 13 trust and UBL endpoints.
     models = schema["components"]["schemas"]
@@ -188,3 +188,14 @@ def test_contract_all_routes_have_response_schema():
     assert "preferences" in models["NeedSpec"]["properties"]
     assert {"lines", "plan_ref"} <= models["QuoteRequest"]["properties"].keys()
     assert "authoritative" in models["FulfilmentPlan"]["properties"]["policy_preview"]["description"]
+
+
+def test_recurring_scheduler_lifecycle_without_mcp(gateway, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gateway.recurring, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(gateway.recurring, "close", lambda: calls.append("close"))
+    with TestClient(create_app(gateway, serve_mcp=False)) as client:
+        assert calls == ["start"]
+        assert client.get("/health").status_code == 200
+        assert client.post("/mcp").status_code == 404
+    assert calls == ["start", "close"]

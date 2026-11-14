@@ -416,6 +416,9 @@ class Lookup:
         self.mandates = mandates
 
     def get(self, lookup_id, agent_id=None):
+        return self._get(lookup_id, agent_id)
+
+    def _get(self, lookup_id, agent_id=None):
         with self.db.connect() as conn:
             row = conn.execute("SELECT data FROM lookups WHERE id=?", (lookup_id,)).fetchone()
         if not row:
@@ -440,9 +443,10 @@ class Lookup:
                              data={"inputs": need.model_dump(mode="json"), "error": error.code,
                                    "live_calls": counter.live().model_dump(),
                                    "decision_calls": counter.decision_calls, **error.data})
+                error.audited = True
             raise
 
-    def _find_offers(self, need, actor, mandate, counter):
+    def prepare(self, need, actor, mandate, counter):
         adapter = self.suppliers.get(need.supplier_id)
         catalog = adapter.catalog
         # Check authority before catalog screening, Decisions or any Valio call.
@@ -501,13 +505,20 @@ class Lookup:
             preferred = next((p for p in pool if p.id == need.substitute_for.product_id), None)
             if preferred and all(p.id != preferred.id for p in candidates):
                 candidates = [preferred, *candidates[:max(0, policy.shortlist.live_max - 1)]]
+        return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool)
+
+    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None):
+        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter)
+        adapter = self.suppliers.get(need.supplier_id)
+        catalog = adapter.catalog
         ids = [p.id for p in candidates]
         if need.substitute_for and need.substitute_for.product_id not in ids:
             ids.append(need.substitute_for.product_id)
         price, stock = {}, {}
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
-                target.update(adapter.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
+                target.update(evidence[endpoint] if evidence is not None else
+                              adapter.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError as error:
                 if (error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED", "SUPPLIER_UNAVAILABLE"}
                         or error.code == "VALIO_UNAVAILABLE" and (

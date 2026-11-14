@@ -14,6 +14,7 @@ from .auth import Principal, resolve_principal
 from .canonical import canonical_json
 from .db import DomainError
 from .models import Order, Quote
+from .visibility import audit_visible
 
 
 class EvidenceFile(BaseModel):
@@ -68,7 +69,8 @@ def authorize_order(gateway, order_id, principal):
 def build_bundle(gateway, order_id, principal):
     authorize_order(gateway, order_id, principal)
     gateway.orders.expire()
-    gateway.limiter.consume(principal.id, "read")
+    from .commands import charge
+    charge(gateway, principal.id, "read")
     with gateway.db.connect() as conn:
         if not conn.in_transaction:
             conn.execute("BEGIN")
@@ -83,7 +85,7 @@ def build_bundle(gateway, order_id, principal):
             related = (row["order_id"] == order.id or row["quote_id"] == quote.id or
                        (row["action"] == "LOOKUP" and quote.need_ref and data.get("lookup_id") == quote.need_ref))
             link = {"seq": row["id"], "prev_hash": row["prev_hash"], "hash": row["hash"]}
-            if related:
+            if related and audit_visible(row, order.agent_id):
                 link["entry"] = audit.entry_payload(row)
             links.append(link)
         checkpoint = {"entries": len(links), "head_hash": links[-1]["hash"] if links else audit.GENESIS,
@@ -150,7 +152,7 @@ def evidence(order_id: str, request: Request, format: Literal["zip", "json"] = "
     if snapshot is None:
         manifest, files = build_bundle(gateway, order_id, principal)
     else:
-        authorize_order(gateway, order_id, principal)
+        order = authorize_order(gateway, order_id, principal)
         gateway.limiter.consume(principal.id, "read")
         with gateway.db.connect() as conn:
             stored = conn.execute("SELECT bundle FROM evidence_snapshots WHERE id=? AND order_id=?", (snapshot, order_id)).fetchone()
@@ -158,6 +160,11 @@ def evidence(order_id: str, request: Request, format: Literal["zip", "json"] = "
             raise DomainError("ORDER_NOT_FOUND", "Evidence snapshot was not found", 404)
         with ZipFile(io.BytesIO(stored[0])) as archive:
             files = {name: archive.read(name) for name in archive.namelist()}
+        if any("entry" in link and not audit_visible(link["entry"], order.agent_id)
+               for link in json.loads(files["audit.json"])):
+            # Keep safe immutable links stable. Never republish an old disclosure
+            # or silently rewrite signed bytes under an existing snapshot digest.
+            raise DomainError("ORDER_NOT_FOUND", "Evidence snapshot was not found; request current evidence", 404)
         manifest = json.loads(files["manifest.json"])
     if artifact is not None:
         if artifact not in files:

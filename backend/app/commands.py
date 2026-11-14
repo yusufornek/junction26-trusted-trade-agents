@@ -5,12 +5,44 @@ import time
 from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
+from contextvars import ContextVar
 
 from pydantic import BaseModel
 
 from .canonical import canonical_json
 from .db import DomainError
 from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TRACE, correlation_id, trace_id
+
+
+ADMISSION = ContextVar("command_admission", default=None)
+
+
+def charge(gateway, identity, category):
+    credit = ADMISSION.get()
+    if credit and credit["identity"] == identity and credit["category"] == category and not credit["used"]:
+        credit["used"] = True
+    else:
+        gateway.limiter.consume(identity, category)
+
+
+def failure_audit(gateway, route, arguments, identity, error):
+    if getattr(error, "audited", False) or error.code == "RATE_LIMITED":
+        return
+    from . import audit
+    action = {"gateway.find_offers": "LOOKUP", "orders.create_quote": "CREATE_QUOTE",
+              "orders.place_order": "PLACE_ORDER", "orders.cancel": "CANCEL", "orders.approve": "APPROVE",
+              "orders.reject": "REJECT", "a2a.command": "A2A_COMMAND"}.get(route)
+    if action is None:
+        return
+    principal = PRINCIPAL.get()
+    actor = f"agent:{identity}"
+    if route in {"orders.approve", "orders.reject"} and principal:
+        actor = "human:operator" if principal.operator else f"human:buyer_approver:{principal.credential_ref}"
+    with gateway.db.connect(write=True) as conn:
+        audit.append(conn, actor, action + "_FAILED", error.message,
+                     order_id=arguments.get("order_id"), quote_id=arguments.get("quote_id"),
+                     data={"error": error.code, **error.data, "live_calls": {"price": 0, "availability": 0}})
+    error.audited = True
 
 
 def json_value(value):
@@ -74,7 +106,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     agent = principal.id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
     if route == "autonomy.change":
         gateway.autonomy._target(conn, arguments["agent_id"], principal or arguments["principal"], change=True)
-    elif route == "policy.update":
+    elif route in {"policy.update", "connections.create"}:
         if principal is not None:
             require_operator(principal)
     elif route == "mandates.revoke":
@@ -140,6 +172,9 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             actor = arguments["actor"]
             check_owner(order, actor.removeprefix("agent:") if actor.startswith("agent:") else owner,
                         "ORDER_NOT_FOUND")
+            if actor.startswith("agent:"):
+                gateway.mandates.authorize(conn, arguments.get("mandate"), actor.removeprefix("agent:"), order.customer_id,
+                    products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
         else:
             authorize_review(gateway.policy.get(), principal, order)
             if route == "orders.approve":
@@ -153,14 +188,30 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                           "orders.reject", "gateway.find_offers", "baskets.find_basket_offers", "policy.update", "mandates.revoke", "autonomy.change",
                            "buyer.control", "buyer.revoke",
-                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"})
+                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"})
 
 
-def fingerprint(scope, route, arguments):
+def omit_policy_defaults(route, values):
+    if route == "policy.update":
+        # This field was added after command records existed. Omission and
+        # its default are the same payload; retain all other payload fields.
+        from .models import ApprovalPolicy
+        approval = values.get("request", {}).get("policy", {}).get("approval", {})
+        if approval.get("max_auto_daily_total_eur") == ApprovalPolicy.model_fields["max_auto_daily_total_eur"].default:
+            approval.pop("max_auto_daily_total_eur")
+    return values
+
+
+def fingerprint(scope, route, arguments, *, policy_defaults=False):
     # agent_id may identify a route target (autonomy), so it is never discarded.
     # Principal metadata and presented credentials are authority, not request payload.
-    payload = {"principal": scope, "route": route, "arguments": json_value({k: v for k, v in arguments.items()
-               if k not in {"principal", "actor", "operator", "mandate", "idempotency_key"}})}
+    excluded = {"principal", "actor", "operator", "mandate", "idempotency_key"}
+    if route == "connections.create":
+        excluded.update({"origin", "mcp_served"})
+    values = json_value({k: v for k, v in arguments.items() if k not in excluded})
+    if not policy_defaults:
+        omit_policy_defaults(route, values)
+    payload = {"principal": scope, "route": route, "arguments": values}
     if route == "policy.update" and not arguments.get("reset"):
         policy = arguments["request"].policy
         payload["policy_presence"] = {"sections": sorted(policy.model_fields_set),
@@ -171,6 +222,21 @@ def fingerprint(scope, route, arguments):
 def matches_command(previous, digest, name, route, arguments, saved):
     if previous["digest"] in {digest, digest.removeprefix("v2:")}:
         return True
+    if route == "policy.update" and previous["command"] == name:
+        # Also accept records issued while the new default was serialized.
+        if previous["digest"] == fingerprint(previous["principal"], route, arguments, policy_defaults=True):
+            return True
+        if not previous["digest"].startswith("v2:"):
+            # Lane D's v2 records predate the field-presence discriminator.
+            # New prefixed records must still distinguish omitted policy sections.
+            values = json_value({k: v for k, v in arguments.items()
+                                 if k not in {"principal", "actor", "operator", "mandate", "idempotency_key"}})
+            for include_defaults in (True, False):
+                if not include_defaults:
+                    omit_policy_defaults(route, values)
+                payload = {"principal": previous["principal"], "route": route, "arguments": values}
+                if previous["digest"] == sha256(canonical_json(payload)).hexdigest():
+                    return True
     if saved.get("fingerprint_version") is not None:
         return False
     # Earlier command envelopes remain replayable. Their other path parameters
@@ -186,6 +252,9 @@ def matches_command(previous, digest, name, route, arguments, saved):
                                              "shortlist": sorted(policy.shortlist.model_fields_set)}
     compatible = {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
     compatible.add("v2:" + sha256(canonical_json(lane_versioned)).hexdigest())
+    for value in (legacy, lane_legacy):
+        omit_policy_defaults(route, value["arguments"])
+        compatible.add(sha256(canonical_json(value)).hexdigest())
     return (previous["digest"] in compatible
             and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
 
@@ -193,7 +262,7 @@ def matches_command(previous, digest, name, route, arguments, saved):
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets", "lookup") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets", "lookup", "connections") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")
@@ -223,6 +292,7 @@ def install(gateway, target, name, category):
 
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
+        prepared_token = None
         try:
             def preflight():
                 if category != "read" and (principal is None or principal.kind == "agent"):
@@ -234,8 +304,17 @@ def install(gateway, target, name, category):
                     if route not in KEYED_ROUTES:
                         raise DomainError("VALIDATION_ERROR", "This read operation does not accept an idempotency key", 422)
             command_checks(gateway, route, arguments, principal, preflight)
+            # Verify receivers before taking the shared command writer lock.
+            prepared_credit = None
+            if key is not None and route in {"webhooks.create", "webhooks.update"}:
+                with gateway.db.connect() as conn:
+                    previous = conn.execute("SELECT 1 FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
+                if previous is None:
+                    command_checks(gateway, route, arguments, principal, lambda: charge(gateway, identity, category))
+                    prepared_token = gateway.webhooks.prepare(route, arguments, principal)
+                    prepared_credit = ADMISSION.set({"identity": identity, "category": category, "used": False})
             if key is None:
-                command_checks(gateway, route, arguments, principal, lambda: gateway.limiter.consume(identity, category))
+                command_checks(gateway, route, arguments, principal, lambda: charge(gateway, identity, category))
                 return linked(operation(*args, **kwargs))
             # SQLite serialises command lookup, domain changes and saved results as one commit.
             error = None
@@ -249,7 +328,7 @@ def install(gateway, target, name, category):
                         (storage_key, key, identity)).fetchone()
                 try:
                     command_checks(gateway, route, arguments, principal,
-                                   lambda: gateway.limiter.consume(identity, "read" if previous or legacy else category))
+                                   lambda: charge(gateway, identity, "read" if previous or legacy else category))
                     if previous:
                         saved = json.loads(previous["result"])
                         def check_replay():
@@ -284,14 +363,24 @@ def install(gateway, target, name, category):
                              "status": caught.status, "data": caught.data}})))
                 else:
                     if not previous and error is None:
+                        saved_value = json_value(result)
+                        if route == "connections.create":
+                            saved_value["key"] = None
                         conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
                                      (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
-                                                                         "value": json_value(result), "fingerprint_version": 2})))
+                                                                         "value": saved_value, "fingerprint_version": 2})))
 
             if error:
                 raise error
             return result
+        except DomainError as error:
+            failure_audit(gateway, route, arguments, identity, error)
+            raise
         finally:
+            if prepared_token is not None:
+                gateway.webhooks.prepared.reset(prepared_token)
+            if 'prepared_credit' in locals() and prepared_credit is not None:
+                ADMISSION.reset(prepared_credit)
             gateway.valio.flush_rate_limit_audits(gateway.db)
             TRACE.reset(trace_token)
             CORRELATION.reset(tokens[0])

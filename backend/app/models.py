@@ -305,7 +305,7 @@ class Shortage(Model):
 
 class FulfilmentPlan(Model):
     kind: Literal["single", "split", "partial"]
-    lines: list[PlanLine] = Field(min_length=1, max_length=4)
+    lines: list[PlanLine] = Field(min_length=1, max_length=10)
     total: float = Field(ge=0, description="Sum of fixed net EUR line totals at lookup time.")
     coverage: CoveredQuantity = Field(description="Sum of line covers in the need's unit; whole packs may over-cover.")
     uncovered: CoveredQuantity = Field(description="Requested quantity still missing by the deadline; zero for a complete plan.")
@@ -324,6 +324,8 @@ class LookupResult(Model):
     supplier_id: str = "valio"
     environment: Literal["live", "sandbox"] = "live"
     synthetic: bool = False
+    basket: dict | None = Field(default=None, exclude_if=lambda v: v is None,
+                                description="Ingredient basket and per-line request bindings; absent on historical single needs.")
     links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -362,21 +364,23 @@ class Ingredient(Model):
     search_terms: list[str] | None = None
     required_claims: list[str] = Field(default_factory=list)
     exclude_allergens: list[str] = Field(default_factory=list)
-    substitutions_allowed: bool
+    substitutions_allowed: bool = False
     density_kg_per_l: float | None = Field(default=None, gt=0, strict=True)
 
 
 class IngredientManifest(Model):
     version: Literal[1] = 1
     recipe_name: str = Field(min_length=1)
-    servings: int = Field(gt=0, le=1_000_000, strict=True, description="Base servings for the supplied quantities.")
+    servings: float = Field(gt=0, le=1_000_000, strict=True, description="Servings represented by the quantities unless base_servings is supplied; then the target servings.")
+    base_servings: float | None = Field(default=None, gt=0, le=1_000_000, strict=True, exclude_if=lambda v: v is None,
+                                      description="Optional explicit base for per-serving manifests; quantities scale by target/base_servings.")
     ingredients: list[Ingredient] = Field(min_length=1, max_length=50)
     yield_note: str | None = None
 
 
 class BasketLookupRequest(RequestScope):
     manifest: IngredientManifest
-    servings: int | None = Field(default=None, gt=0, le=1_000_000, strict=True,
+    servings: float | None = Field(default=None, gt=0, le=1_000_000, strict=True,
                                  description="Target servings; omission preserves manifest.servings.")
 
 
@@ -386,6 +390,10 @@ class IngredientCoverage(Model):
     requested: IngredientQuantity
     covered: float = Field(ge=0, le=1, description="Fraction of this scaled ingredient covered on time.")
     product_id: str | None = None
+    coverage: float | None = Field(default=None, ge=0, le=1, exclude_if=lambda v: v is None)
+    quantity: IngredientQuantity | None = Field(default=None, exclude_if=lambda v: v is None)
+    purchasable_quantity: float | None = Field(default=None, exclude_if=lambda v: v is None)
+    overbuy: Overbuy | None = None
 
 
 class UncoveredIngredient(Model):
@@ -721,6 +729,7 @@ class Health(Model):
 
 
 class ApprovalPolicy(Model):
+    max_auto_daily_total_eur: float = Field(default=5000, ge=0, description="Default rolling 24-hour autonomous EUR ceiling for newly connected agents.")
     max_auto_total_eur: float = Field(ge=0, description="Net EUR ceiling for automatic confirmation.")
     min_fit_probability: float = Field(ge=0, le=1, description="Minimum fit probability for automatic confirmation.")
     warnings_need_approval: list[str] = Field(description="Known warning codes requiring human review.")
@@ -788,6 +797,33 @@ class AgentMandate(Model):
         if any(not customer.strip() for customer in self.customer_ids):
             raise ValueError("customer_ids must contain non-blank customer identifiers")
         return self
+
+
+ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest"]
+
+
+class ConnectionRequest(Model):
+    agent_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
+    client: ClientKind
+    customer_ids: list[str] = Field(min_length=1)
+    label: str | None = None
+
+
+class Connection(Model):
+    connection_id: str
+    agent_id: str
+    client: ClientKind
+    key_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class NewConnection(Connection):
+    key: str | None = Field(repr=False, description="Secret returned only on initial creation; null on an idempotent replay.")
+    mcp_url: str | None = Field(description="Public origin plus /mcp when served. Without GATEWAY_PUBLIC_URL, only loopback request origins are advertised; otherwise null (use REST).")
+    rest_base_url: str
+    mandate: AgentMandate
 
 
 class BuyerJWK(Model):

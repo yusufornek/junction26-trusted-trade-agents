@@ -1,0 +1,60 @@
+name: Deploy
+
+# Every push to main ships to the demo server. A failed image build leaves the running
+# containers untouched (Compose only recreates after a successful build); a failed health
+# check turns the run red so nobody assumes a broken deploy is live.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The team pushes often: only the newest commit needs to reach the server.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SITE_URL: https://trustedtrade.vps.webdock.cloud
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Sync the checkout to the server
+        # deploy/.env lives only on the server (secrets); excluded paths are never deleted there.
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude '.github' --exclude '.claude' \
+            --exclude 'node_modules' --exclude '.venv' --exclude '__pycache__' \
+            --exclude 'frontend/dist' --exclude 'backend/var' \
+            --exclude '.env' --exclude '.env.*' --exclude 'deploy/.env' \
+            --exclude 'data/product_data.json' \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            ./ "admin@${{ secrets.DEPLOY_HOST }}:app/"
+
+      - name: Build and restart
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "admin@${{ secrets.DEPLOY_HOST }}" \
+            'cd app && GATEWAY_PUBLIC_URL=${{ env.SITE_URL }} docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build --remove-orphans && docker image prune -f'
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 36); do
+            if curl -fsS --max-time 5 "$SITE_URL/health"; then echo; exit 0; fi
+            sleep 5
+          done
+          echo "Gateway did not become healthy at $SITE_URL" >&2
+          exit 1

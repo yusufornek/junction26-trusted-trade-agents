@@ -1,4 +1,14 @@
 version: 1
+organisations:
+  hospital:
+    customer_ids: [hospital]
+identities:
+  sandbox-agent:
+    organisation_id: hospital
+  hospital-approver:
+    kind: buyer_user
+    role: buyer_approver
+    organisation_id: hospital
 customers:
   hospital:
     exclude_allergens: [AM, AE]

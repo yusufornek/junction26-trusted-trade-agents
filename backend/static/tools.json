@@ -315,7 +315,7 @@
               "items": {
                 "$ref": "#/$defs/PlanLine"
               },
-              "maxItems": 4,
+              "maxItems": 10,
               "minItems": 1,
               "title": "Lines",
               "type": "array"
@@ -1402,6 +1402,20 @@
           "default": false,
           "title": "Synthetic",
           "type": "boolean"
+        },
+        "basket": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ingredient basket and per-line request bindings; absent on historical single needs.",
+          "title": "Basket"
         },
         "links": {
           "additionalProperties": true,
@@ -2728,7 +2742,7 @@
               "items": {
                 "$ref": "#/$defs/PlanLine"
               },
-              "maxItems": 4,
+              "maxItems": 10,
               "minItems": 1,
               "title": "Lines",
               "type": "array"
@@ -3816,6 +3830,20 @@
           "title": "Synthetic",
           "type": "boolean"
         },
+        "basket": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ingredient basket and per-line request bindings; absent on historical single needs.",
+          "title": "Basket"
+        },
         "links": {
           "additionalProperties": true,
           "title": "Links",
@@ -3975,7 +4003,7 @@
     }
   },
   "find_basket_offers": {
-    "description": "Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs sum exact quantities before pack rounding. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; simulation reserves all lines or none.  Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Alternatively, explicit manifest.base_servings gives the base and manifest.servings the target; request.servings overrides that target. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs sum exact quantities before pack rounding. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; simulation reserves all lines or none.  Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "BasketLookupRequest": {
@@ -4001,7 +4029,7 @@
                 {
                   "exclusiveMinimum": 0,
                   "maximum": 1000000,
-                  "type": "integer"
+                  "type": "number"
                 },
                 {
                   "type": "null"
@@ -4061,6 +4089,7 @@
               "type": "array"
             },
             "substitutions_allowed": {
+              "default": false,
               "title": "Substitutions Allowed",
               "type": "boolean"
             },
@@ -4080,8 +4109,7 @@
           },
           "required": [
             "name",
-            "quantity",
-            "substitutions_allowed"
+            "quantity"
           ],
           "title": "Ingredient",
           "type": "object"
@@ -4101,11 +4129,26 @@
               "type": "string"
             },
             "servings": {
-              "description": "Base servings for the supplied quantities.",
+              "description": "Servings represented by the quantities unless base_servings is supplied; then the target servings.",
               "exclusiveMinimum": 0,
               "maximum": 1000000,
               "title": "Servings",
-              "type": "integer"
+              "type": "number"
+            },
+            "base_servings": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional explicit base for per-serving manifests; quantities scale by target/base_servings.",
+              "title": "Base Servings"
             },
             "ingredients": {
               "items": {
@@ -4399,6 +4442,7 @@
               "type": "array"
             },
             "substitutions_allowed": {
+              "default": false,
               "title": "Substitutions Allowed",
               "type": "boolean"
             },
@@ -4418,8 +4462,7 @@
           },
           "required": [
             "name",
-            "quantity",
-            "substitutions_allowed"
+            "quantity"
           ],
           "title": "Ingredient",
           "type": "object"
@@ -4456,6 +4499,54 @@
               ],
               "default": null,
               "title": "Product Id"
+            },
+            "coverage": {
+              "anyOf": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Coverage"
+            },
+            "quantity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IngredientQuantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "purchasable_quantity": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Purchasable Quantity"
+            },
+            "overbuy": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Overbuy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -4482,11 +4573,26 @@
               "type": "string"
             },
             "servings": {
-              "description": "Base servings for the supplied quantities.",
+              "description": "Servings represented by the quantities unless base_servings is supplied; then the target servings.",
               "exclusiveMinimum": 0,
               "maximum": 1000000,
               "title": "Servings",
-              "type": "integer"
+              "type": "number"
+            },
+            "base_servings": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional explicit base for per-serving manifests; quantities scale by target/base_servings.",
+              "title": "Base Servings"
             },
             "ingredients": {
               "items": {
@@ -10571,7 +10677,7 @@
     }
   },
   "cancel_order": {
-    "description": "Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.",
+    "description": "Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Rechecks current customer scope, suspension and the original order-bound buyer mandate on fresh attempts and exact replays; a presented VC cannot replace revoked bound authority. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.",
     "inputSchema": {
       "properties": {
         "order_id": {

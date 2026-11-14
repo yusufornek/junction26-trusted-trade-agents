@@ -1,12 +1,56 @@
 # Trusted Trade Agents backend MVP
 
+## Agent connections (spec 42)
+
+The console's Connect page uses operator-only `POST /v1/connections` with a required
+`Idempotency-Key` and `{agent_id, client, customer_ids, label?}`. Agent IDs use
+`^[a-z0-9][a-z0-9-]{1,47}$`; clients are `claude_desktop`, `claude_code`, `cursor`,
+`vscode`, `chatgpt`, `mcp_other`, or `rest`. The client choice records the setup tool;
+it grants no additional authority. Customer IDs must already occur in customer policy,
+an agent mandate or an organisation's scope. Empty customer lists are refused.
+
+Creation returns `201` with the console's `NewConnection` fields and a high-entropy
+`vak_` key. Copy the key immediately: only its SHA-256 digest and first eight characters
+are retained. Exact idempotent replays return the same connection with `key: null`;
+changed payloads return `409 IDEMPOTENCY_CONFLICT`. No key is recorded in the command
+ledger or audit. `GET /v1/connections` lists public `Connection` records newest first,
+including revoked connections. `DELETE /v1/connections/{connection_id}` revokes a key
+immediately for REST and MCP; repeated deletion preserves the first revocation timestamp.
+Creation/revocation are audited by `human:operator`. Agent history and mandates remain.
+Previously used signed buyer mandates also identify existing agents: issuing another key
+returns their effective limits/autonomy without creating fallback policy authority.
+Expired or revoked VC history remains identity evidence only; requests still revalidate
+the VC. If a prior connection has lost its policy mandate and has no signed authority,
+issuance returns `403 AGENT_NOT_REGISTERED` until authority is explicitly restored.
+
+A new agent receives an `approval_required` mandate for the selected customers and
+`approval.max_auto_daily_total_eur` (default 5,000 EUR). Existing agents retain their
+mandate and autonomy. Issued keys resolve through the same principal/policy path as
+`AGENT_KEYS`; environment keys continue to work. `last_used_at` updates on authentication,
+at most once per minute per key. Operator credentials are required for all three
+connection-management endpoints; agent keys cannot issue or revoke credentials.
+
+The gateway serves Streamable HTTP MCP at exactly `/mcp`, with its session manager in
+the gateway lifespan and an authenticated principal for each request. Bearer keys are
+required even for ping and tool listing; tools audit as `agent:<agent_id>`. No agent is
+bound at gateway startup. `GATEWAY_PUBLIC_URL` supplies the public origin for `mcp_url`
+(`<origin>/mcp`) and `rest_base_url` (`<origin>/v1`). Without it, REST uses the request
+origin; MCP advertises only loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). External
+request hosts receive `mcp_url: null` and use REST until a public origin is configured.
+`create_app(..., serve_mcp=False)` disables MCP, returns `mcp_url: null`, and removes
+the MCP catalog entry and server-card route.
+Run one gateway process per database; do not start a second MCP process on its database.
+The `chatgpt` client value records a preference only: OAuth sign-in is not implemented
+by this connection API. Tests run offline against isolated databases and in-process MCP:
+`.venv/bin/python -m pytest tests/test_spec42_agent_connections.py -q`.
+
 ## Buyer view and portable evidence (specs 28–29)
 
 `GET /v1/buyer/{agents,mandates,spend,orders,approvals,activity}` accepts `buyer_user`
 credentials with roles `buyer_viewer`, `buyer_approver`, or `buyer_admin`; the operator
 may read all customers. Responses include `organisation_id` and `customer_ids`.
-Identities and organisations are configured in policy; credentials still come from
-`AGENT_KEYS`. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
+Identities and organisations are configured in policy; credentials come from
+`AGENT_KEYS` or operator-issued connections. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
 or `/reject` (the existing `/v1/approvals` routes also accept them). Approval retains
 the evidence-revision rule and records `human:buyer_approver:<credential ref>`, the
 organisation and `approval_side=buyer`. Viewers cannot review.
@@ -72,8 +116,8 @@ In separate terminals, starting in `backend/`:
 # MCP stdio; stdout is reserved for protocol messages
 .venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent
 
-# MCP Streamable HTTP: http://127.0.0.1:8001/mcp
-.venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent --http --host 127.0.0.1 --port 8001
+# Gateway Streamable HTTP is already available at http://127.0.0.1:8000/mcp.
+# Use the standalone --http entry only with a separate DB_PATH, never the gateway DB.
 
 # Entire offline suite, with Valio/OpenAI mocked using respx
 .venv/bin/python -m pytest tests -q
@@ -108,8 +152,8 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
-Tools: `get_agent_context`, `search_products`, `find_offers`, `find_basket_offers`, `create_quote`, `place_order`, `get_order_status`, `get_order_receipt`, `cancel_order`, `get_order_ubl`, `get_order_evidence`, `list_proposals`.
-`cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
+Tools: `get_agent_context`, `get_replenishment_suggestions`, `prepare_suggestion`, `create_recurring_from_suggestion`, `list_recurring_orders`, `create_recurring_order`, `run_recurring_order_now`, `pause_recurring_order`, `list_proposals`, `search_products`, `find_offers`, `find_basket_offers`, `create_quote`, `place_order`, `get_order_status`, `get_order_receipt`, `get_order_evidence`, `get_order_ubl`, `cancel_order`.
+`cancel_order(order_id, reason="")` cancels only confirmed orders placed by the authenticated HTTP agent or stdio `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
 reservations, preserves fixed prices, and records the actor and reason without upstream calls.
 The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the installed 2.x API.
@@ -496,7 +540,7 @@ The command preserves existing values, uses `secrets.token_urlsafe(32)` for new 
 only added names. A second run changes nothing. The default target is repo-root `.env.local`;
 `AGENT_KEYS` is a comma-separated list of `agent-id:secret`, and `OPERATOR_TOKEN` is required to start
 the REST API. Process environment values take precedence. The server retains SHA-256 digests for
-constant-time comparisons; credentials belong only in the local env file, never policy or audit data.
+constant-time comparisons; environment credentials belong only in the local env file, never policy or audit data.
 Restart after provisioning or rotating credentials. Never share the operator token with buyer agents.
 
 An agent sends its own secret on every REST call. For example, with its key in `AGENT_SECRET`:
@@ -902,11 +946,15 @@ requires its existing `Idempotency-Key`; quote, cancel, approve and reject also 
 Buyer suspension, resumption and local mandate revocation use the same command boundary and header.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same principal, command route (including every target/path parameter) and payload.
+The added policy approval daily limit is omitted from command fingerprints at its default
+(5,000 EUR). Commands saved before that field existed, and commands saved with its
+default serialized, both replay; a changed non-default limit still conflicts.
 The shared replay guard rechecks current authorization before exposing any saved result: ownership,
 customer mandates, buyer organisation/role, trusted revocation issuer and operator permissions as applicable.
 Revoked/invalid credentials are rejected again at the transport boundary. Quote/order/approval guards
-also reverify their bound buyer VC. Cancellation and rejection retain their original authorization rules;
-they do not require a still-valid purchasing VC. New keyed commands cannot register without a replay guard.
+also reverify their bound buyer VC. Agent cancellation rechecks original order authority on fresh calls
+and replays. Operator cancellation and human rejection retain reviewer and ownership permissions.
+New keyed commands cannot register without a replay guard.
 Lookup, basket, quote, order and review command checks use their normal failure handlers on cached
 replays as well as fresh requests. Each denied attempt commits one corresponding `*_FAILED` audit
 with the caller, inputs and zero live-call counts; replay guards never repeat the business operation.
@@ -914,7 +962,7 @@ Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
 audit. Spec 06 R-2's existing-order exception remains: removing a policy-row mandate alone does not deny
 the original order retry; ownership and any signed buyer credential still apply, and an existing row's
-changed customer scope is enforced. Rejection/cancellation still need no purchasing credential.
+changed customer scope is enforced. Human rejection needs no purchasing credential.
 Autonomy replay never repeats a promotion/demotion, and rechecks the target's current organisation,
 customers and existence. Changing the autonomy target under the same key returns `409 IDEMPOTENCY_CONFLICT`.
 Buyer control replays likewise recheck the administrator role and the target's current organisation/customer
@@ -1083,16 +1131,25 @@ with HTTP 2xx and `{"challenge":"…"}` containing exactly the same challenge. O
 subscription enabled. HTTPS and public addresses are required. Each attempt resolves DNS again,
 rejects any nonpublic answer, and pins the connection to a checked address while retaining the
 original Host and TLS SNI. Redirects are never followed and environment proxies are disabled.
+Challenge responses must be uncompressed JSON, at most 16 KiB, with a five-second overall deadline
+checked during streaming as well as HTTP timeouts. Challenge I/O runs before the database writer is acquired,
+including keyed registration/update and A2A push registration. Delivery responses close after status
+headers without reading their bodies.
 Only explicit `WEBHOOK_SANDBOX=true` permits `http://localhost` resolved to loopback.
 
 `GET /v1/webhook-subscriptions` lists owned subscriptions. `PATCH /v1/webhook-subscriptions/{id}`
 changes the destination, customer/event filters or enabled state; changed destinations and re-enabling
-require a new challenge. `DELETE` disables and retains history. All writes accept `Idempotency-Key`.
+require a new challenge. `DELETE` disables and retains history, atomically marking pending deliveries `skipped`.
+Dispatch also retires disabled backlog from earlier releases. Only enabled subscriptions enter the batch,
+round-robin by subscription. The generic outbox selects enabled consumers with installed handlers.
+All writes accept `Idempotency-Key`.
 Keys bind the principal, command route, subscription/delivery targets and payload. Exact replays
 recheck current ownership, customer scope and reviewer authority before returning the saved result,
 without repeating the challenge or redelivery. Previously stored command envelopes remain replayable.
 An approver audience requires an operator or buyer approver/admin credential. Customer scope is checked
-at subscription time and again at delivery against the current policy.
+at subscription time and again at delivery against the current policy. Recorded aggregate ownership also
+applies: two agents sharing a customer never share procurement events. Buyer subscriptions require an
+explicit agent organisation assignment. Unowned historical records remain operator-only.
 
 Supported event types: `order.approval_required`, `order.evidence_changed`, `order.confirmed`,
 `order.rejected`, `order.cancelled`, `order.expired`, `mandate.revoked`, `proposal.received`.
@@ -1149,6 +1206,45 @@ The page submits approval only through the existing authenticated POST with `evi
 No credential appears in the link. Fetch/display the review with the reviewer Bearer credential;
 the approval form requests that credential for its POST.
 
+## Buyer reporting and portable evidence (review corrections)
+
+Buyer activity resolves each procurement event's agent from its order, quote, lookup or task and applies
+the same organisation/customer scope as the order view. Customer-number overlap grants no ownership;
+agents without an organisation assignment remain operator-only in buyer views. Historical aggregates
+without context still load and resolve by their stored agent. Evidence bundles keep foreign denied
+attempts as hash-only chain links; timelines omit those payloads. Safe immutable snapshots remain available;
+old snapshots containing a foreign denied payload return 404 and must be regenerated from the current endpoint.
+The original audit and stored orders/quotes/lookups remain intact.
+The spending view expires pending orders before its snapshot and verifies issuer trust, signature,
+validity and revocation before selecting a VC limit; invalid credentials leave the policy limit in effect.
+
+## Ingredient baskets (spec 32; shared with A2A)
+
+`POST /v1/basket-lookups` and MCP `find_basket_offers(request)` accept
+`{customer_id, deliver_by, manifest:{version:1, recipe_name, servings, base_servings:1, ingredients:[...]}}`.
+With explicit `base_servings`, quantities describe that many portions and scale by the target divided by
+`base_servings`. Without it, `manifest.servings` is the base and optional request-level `servings` is the
+target; omission keeps the supplied quantities. The scaled manifest records the quantities for its servings. Units are G, KG, ML, L and SALES_UNIT. Each ingredient supplies name, quantity, optional
+search terms, claims/allergen exclusions and `substitutions_allowed`. Strict catalog search and hard
+constraints remain in force; unrelated ingredient substitutes are never silently introduced. Explicit
+`density_kg_per_l` permits mass/volume conversion; missing conversion evidence leaves an ingredient uncovered.
+Standing constraints apply per ingredient. Distinct candidate SKUs share one price batch and one stock
+batch; overlapping ingredients share a purchase line. Uncovered ingredients require partial-basket review.
+The result includes ranked ingredient offers, scaled quantities, coverage, overbuy, total and policy preview.
+
+Quote with `basket_ref:{basket_lookup_id}` instead of lines/plan_ref. The signed quote preserves per-SKU
+request constraints for current-policy revalidation at placement/approval. One simulated order commits all
+reservations in one transaction; its context states that atomicity applies to the local gateway, with no
+supplier transmission. Historical single-need lookups, signatures and order records retain their stored shape.
+
+Agent-side example (lasagne for 200; `AGENT_TOKEN` holds an issued agent key):
+
+```sh
+.venv/bin/python demo/run_recipe_order.py --remote --customer 1 --deliver-by YYYY-MM-DD
+# Override the agent's decomposition with --manifest /path/to/manifest.json.
+.venv/bin/python -m pytest tests/test_basket_recipe.py -q
+```
+
 ## A2A service (spec 34)
 
 The REST API also serves public `GET /.well-known/agent-card.json` and authenticated
@@ -1169,10 +1265,16 @@ SDK clients send a user Message with a stable `messageId` and one structured dat
 `message.contextId`, a new message ID, and `{version:1, command:"select_plan", plan_index:0}`, then
 `{version:1, command:"place_order"}`. Quote and order use the message ID as their shared command
 idempotency key. Repeating an identical message returns the same task; changed content with the
-same ID conflicts. Retryable failures retain the task and resume on the same message ID.
+same ID conflicts. Exact replays use read cost and reauthorize the original command binding against current
+scope, suspension and bound VC. Refusals retain failure audits without repeating purchases. Fresh commands
+pay admission cost before any task/message/event is persisted, including invalid request details; admitted
+core commands are not charged twice. Admission throttles return recovery data without creating a task.
+Retryable failures after admission retain the task and resume on the same message ID.
 Protobuf Value represents numbers as doubles, so integral numbers are restored to integers before
 the shared strict validators; strings and booleans are never coerced.
 
+A successful replacement lookup clears selected-plan/quote references and artifacts, including basket
+references when changing back to a single need. Placement also rejects stale bindings from older releases.
 Tasks retain principal/context and request, offers, selected-plan, quote, order and evidence references.
 Artifacts contain both a structured data part and a text summary. `WORKING` is durable before supplier
 I/O; plan selection/missing input gives `INPUT_REQUIRED`; purchasing approval gives `AUTH_REQUIRED`;
@@ -1198,7 +1300,8 @@ is terminal: cancel its confirmed order using a **new** message without taskId,
 runs. `SubscribeToTask` replays the outbox-backed task events and follows pending human approval until a
 terminal state; an input-required task closes so the client can supply its next message. Resume with
 `Last-Event-ID` from update metadata's `event_id`, or `X-A2A-After-Revision` from `aggregate_revision`.
-Without a cursor it replays all retained revisions. Consumers can deduplicate by event ID/revision.
+Without a cursor it replays all retained revisions. Subscriptions drain through the current aggregate revision
+before closing, including approval committed between polling reads. Consumers can deduplicate by event ID/revision.
 
 All 1.0 push configuration methods are installed: `CreateTaskPushNotificationConfig`,
 `GetTaskPushNotificationConfig`, `ListTaskPushNotificationConfigs`, `DeleteTaskPushNotificationConfig`.
@@ -1226,7 +1329,8 @@ Reference split-order client (no operator credential, approval remains external)
 Start the API from `backend/` with `.venv/bin/python -m uvicorn app.api:app --port 8000`.
 The same process now serves authenticated, stateless Streamable HTTP at `/mcp`, sharing the
 REST gateway, principal, budgets and idempotency state. Standalone MCP stdio and port 8001
-remain available. The machine identity is `fi.valioaimo/trusted-trade-agents`, version `0.1.0`;
+remain available with a separate database; never open the gateway's live database in a
+second process. The machine identity is `fi.valioaimo/trusted-trade-agents`, version `0.1.0`;
 the display title remains Valio Aimo Trusted Trade Agents. Tools are listed at runtime,
 including `get_agent_context` (the same advisory snapshot as authenticated `GET /v1/me`) and
 `get_order_evidence` (the portable evidence manifest and authenticated download links).
@@ -1270,7 +1374,8 @@ pending orders, retains mutation keys on retries and verifies the Ed25519 receip
 public JWKS. It cannot approve its own order. This kit does not call sandbox reset
 or credential issuance: use a separate deployment/storage/credentials and set
 `GATEWAY_ENVIRONMENT=sandbox`; spec 26 now provisions isolated fixture adapters, storage and sandbox-only credentials.
-Opaque credentials are expired by issuer removal/rotation; a refused key returns 401 with
+Environment credentials expire by issuer removal/rotation; connection keys expire by revocation.
+A refused key returns 401 with
 replacement guidance. Offline verification of a saved order is also available:
 
 ```bash

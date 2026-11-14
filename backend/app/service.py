@@ -81,6 +81,9 @@ class Gateway:
         self.memory = PurchaseMemory(self)
         self.limiter = Limiter(self.policy, self.db)
         self.source_limiter = SourceLimiter()
+        from .connections import Connections
+        self.connections = Connections(self)
+        install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")
         for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl", "get_order_receipt"):

@@ -91,6 +91,24 @@ class Credentials:
 bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")
 
 
+def resolve_credential(keys, secret, service):
+    policy = service.policy.get()
+    try:
+        return keys.resolve(secret, policy)
+    except DomainError as error:
+        if error.status != 401:
+            raise
+    principal = service.connections.resolve(secret)
+    # Issued connections have exactly the same policy-derived identity as env keys.
+    identity = policy.identities.get(principal.id)
+    organisation = identity.organisation_id if identity else None
+    customers = policy.organisations[organisation].customer_ids if organisation in policy.organisations else (
+        policy.agents[principal.id].customer_ids if principal.id in policy.agents else [])
+    return Principal(principal.id, kind=identity.kind if identity else "agent", organisation_id=organisation,
+                     customer_ids=tuple(customers), role=identity.role if identity else "agent",
+                     credential_ref=principal.credential_ref)
+
+
 def check_source(service, source):
     try:
         service.source_limiter.check(source)
@@ -104,9 +122,12 @@ def check_source(service, source):
 
 def admit_credential(service, keys, source, secret):
     """Unknown credentials spend source tokens; known credentials retain principal limits."""
-    if not keys.recognizes(secret):
+    known = keys.recognizes(secret)
+    if not known:
         check_source(service, source)
-    principal = keys.resolve(secret, service.policy.get())
+    principal = resolve_credential(keys, secret, service)
+    if not known:
+        service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
         raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
     return principal

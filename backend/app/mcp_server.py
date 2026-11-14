@@ -235,7 +235,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{current_agent()}", mandate=PRESENTED_MANDATE.get())
 
-    @server.tool(description="Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs sum exact quantities before pack rounding. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; simulation reserves all lines or none. " + MANDATE_HELP)
+    @server.tool(description="Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Alternatively, explicit manifest.base_servings gives the base and manifest.servings the target; request.servings overrides that target. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs sum exact quantities before pack rounding. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; simulation reserves all lines or none. " + MANDATE_HELP)
     def find_basket_offers(request: BasketLookupRequest) -> BasketLookupResult:
         return gateway.baskets.find_basket_offers(request, actor=f"agent:{current_agent()}", mandate=PRESENTED_MANDATE.get())
 
@@ -275,10 +275,10 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     def get_order_ubl(order_id: str, document: Literal["order", "response"] = "order") -> str:
         return gateway.orders.get_order_ubl(order_id, document, current_agent())
 
-    @server.tool(description="Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
+    @server.tool(description="Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Rechecks current customer scope, suspension and the original order-bound buyer mandate on fresh attempts and exact replays; a presented VC cannot replace revoked bound authority. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
     def cancel_order(order_id: str, reason: str = "", idempotency_key: str | None = None) -> Order:
         try:
-            return gateway.orders.cancel(order_id, actor=f"agent:{current_agent()}", reason=reason, command_key=idempotency_key)
+            return gateway.orders.cancel(order_id, actor=f"agent:{current_agent()}", reason=reason, mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             # Expected refusals must retain their public code instead of becoming SDK crash errors.
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error

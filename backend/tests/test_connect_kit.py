@@ -5,8 +5,10 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -186,8 +188,13 @@ def test_ac_6_published_walkthrough_executes_against_in_process_gateway(sandbox,
         bridge_dir = Path(scratch) / "bridge"
         bridge_dir.mkdir()
         stop = threading.Event()
+        # Use pytest's interpreter even when this checkout has no local venv.
+        # A short shell shebang also avoids macOS truncating long worktree paths.
+        python = Path(scratch) / "python"
+        python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        python.chmod(0o755)
         fake = Path(scratch) / "curl"
-        fake.write_text('#!' + str(BACKEND / '.venv/bin/python') + '\n' + '''import os, sys, json, time, uuid
+        fake.write_text('#!/usr/bin/env python\n' + '''import os, sys, json, time, uuid
 from pathlib import Path
 root = Path(os.environ["CONNECT_BRIDGE"])
 request = root / str(uuid.uuid4())
@@ -240,7 +247,7 @@ sys.exit(22 if status >= 400 else 0)
                     errors.append(error)
             thread = threading.Thread(target=bridge, daemon=True)
             thread.start()
-            env = {**os.environ, "PATH": scratch + os.pathsep + str(BACKEND / ".venv/bin") + os.pathsep + os.environ["PATH"],
+            env = {**os.environ, "PATH": scratch + os.pathsep + os.environ["PATH"],
                    "CONNECT_BRIDGE": str(bridge_dir), "GATEWAY_URL": "http://testserver", "AGENT_TOKEN": "test-secret-external",
                    "DELIVER_BY": str(need.deliver_by), "TMPDIR": str(tmp_path)}
             result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, text=True, capture_output=True, timeout=30)

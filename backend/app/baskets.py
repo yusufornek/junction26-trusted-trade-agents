@@ -8,7 +8,7 @@ from .auth import check_owner
 from .db import DomainError
 from .lookup import broadened_terms, offer_for, rank, reconcile_size, reserved, warning
 from .mandates import decode
-from .models import (BasketLookupResult, IngredientManifest, LookupResult, NeedSpec, Quantity,
+from .models import (BasketLookupRequest, BasketLookupResult, IngredientManifest, LookupResult, NeedSpec, Quantity,
                      OfferCard, QuoteLineRequest)
 from .quantities import pack_quantity, sales_step
 from .valio import RequestCounter
@@ -25,7 +25,24 @@ def bound_need(conn, lookup, product_id):
         if product_id not in basket.line_needs:
             raise DomainError("BASKET_LINE_MISMATCH", "Product is not a selected line of the stored basket", 422)
         return basket.line_needs[product_id]
-    return lookup.need
+    return line_need(lookup, product_id)
+
+
+def line_need(lookup, product_id):
+    """Read ingredient bindings from historical lane-D lookup records as well."""
+    raw = (lookup.basket or {}).get("line_needs", {}).get(product_id)
+    if lookup.basket and raw is None:
+        raise DomainError("BASKET_LINE_MISMATCH", "Product is not a selected line of the stored basket", 422)
+    return NeedSpec.model_validate(raw, context={"stored": True}) if raw else lookup.need
+
+
+# Compatibility entry points share the same command and ownership boundary.
+BasketRequest = BasketLookupRequest
+BasketResult = BasketLookupResult
+
+
+def find_basket_offers(gateway, request, agent_id, mandate=None):
+    return gateway.baskets.find_basket_offers(request, actor=f"agent:{agent_id}", mandate=mandate).model_dump(mode="json")
 
 
 class Baskets:
@@ -61,9 +78,11 @@ class Baskets:
         with self.db.connect() as conn:
             policy, record, mandate = g.mandates.authorize(conn, mandate, agent_id, request.customer_id)
         categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories") if mandate else None
-        factor = Decimal(request.servings or request.manifest.servings) / Decimal(request.manifest.servings)
+        factor = Decimal(str(request.servings or request.manifest.servings)) / Decimal(str(request.manifest.base_servings or request.manifest.servings))
         data = request.manifest.model_dump()
         data["servings"] = request.servings or request.manifest.servings
+        if data.get("base_servings") is not None:
+            data["base_servings"] = data["servings"]
         for ingredient in data["ingredients"]:
             ingredient["quantity"]["value"] = float(Decimal(str(ingredient["quantity"]["value"])) * factor)
         scaled = IngredientManifest.model_validate(data)
@@ -168,7 +187,9 @@ class Baskets:
         for i, ingredient in enumerate(scaled.ingredients):
             pid, fraction = allocations.get(i, (None, 0))
             coverages.append({"ingredient_index": i, "name": ingredient.name, "requested": ingredient.quantity,
-                              "covered": fraction, "product_id": pid})
+                              "covered": fraction, "product_id": pid, "coverage": fraction,
+                              "quantity": ingredient.quantity, "purchasable_quantity": results[i].get("purchasable_quantity"),
+                              "overbuy": results[i].get("overbuy")})
         total = float(sum((Decimal(str(o.total)) for o in lines), Decimal(0)))
         warnings = [warning("PARTIAL_BASKET")] if uncovered else []
         preview = g.policy.evaluate(total, lines, agent_id=agent_id, customer_id=request.customer_id,

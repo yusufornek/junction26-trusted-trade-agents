@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "recipe_name": "Five ingredients",
+  "servings": 1,
+  "base_servings": 1,
+  "ingredients": [
+    {
+      "name": "alpha",
+      "quantity": {
+        "value": 0.6,
+        "unit": "L"
+      },
+      "search_terms": [
+        "alpha"
+      ],
+      "substitutions_allowed": false
+    },
+    {
+      "name": "bravo",
+      "quantity": {
+        "value": 0.6,
+        "unit": "L"
+      },
+      "search_terms": [
+        "bravo"
+      ],
+      "substitutions_allowed": false
+    },
+    {
+      "name": "charlie",
+      "quantity": {
+        "value": 0.6,
+        "unit": "L"
+      },
+      "search_terms": [
+        "charlie"
+      ],
+      "substitutions_allowed": false
+    },
+    {
+      "name": "delta",
+      "quantity": {
+        "value": 0.6,
+        "unit": "L"
+      },
+      "search_terms": [
+        "delta"
+      ],
+      "substitutions_allowed": false
+    },
+    {
+      "name": "echo",
+      "quantity": {
+        "value": 0.6,
+        "unit": "L"
+      },
+      "search_terms": [
+        "echo"
+      ],
+      "substitutions_allowed": false
+    }
+  ]
+}
