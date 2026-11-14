@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import secrets
 from tempfile import TemporaryDirectory
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -43,8 +44,8 @@ class FixtureSupplierAdapter:
                     "comparisonPrice": {"value": p["price"] / p["size"]}, "comparisonUnit": p["unit"],
                     "error": False, "_fetched_at": now.isoformat(), "_source": "fixture:sandbox"}
             else:
-                result[pid] = {"closingTime": (now + timedelta(hours=2)).isoformat(), "logisticModel": "Stock",
-                    "scheduleLines": [{"availableAmount": p["stock"], "availableDate": deliver_by.isoformat(),
+                result[pid] = {"closingTime": (now + timedelta(hours=p.get("cutoff_hours", 2))).isoformat(), "logisticModel": "Stock",
+                    "scheduleLines": [{"availableAmount": p["stock"], "availableDate": (now.astimezone(ZoneInfo("Europe/Helsinki")).date() + timedelta(days=p["available_in_days"])).isoformat() if "available_in_days" in p else deliver_by.isoformat(),
                                        "salesUnit": "ST"}], "_fetched_at": now.isoformat(), "_source": "fixture:sandbox"}
         return result
 
@@ -85,6 +86,9 @@ def raw_catalog_product(p):
             "allowedLotSize": 1, "units": [{"unitId": "ST", "sizeInBaseUnits": 1}],
             "synkkaData": {"names": [{"language": "en", "value": p["name"]}], "brand": p.get("brand", "Fixture"),
                 "classifications": classifications, "unitConversions": [content],
+                "nutritionalContent": [{"id": {"salt_g": "SALTEQ", "sugar_g": "SUGAR-", "saturated_fat_g": "FASAT", "protein_g": "PRO-"}[key],
+                    "value": value, "unit": "GRM", "basisQuantity": 100, "basisQuantityUnit": "MLT" if p["unit"] == "L" else "GRM"}
+                    for key, value in p.get("nutrition_per_100", {}).items()],
                 **({"densityKgPerL": p["density_kg_per_l"]} if "density_kg_per_l" in p else {})}}
 
 
@@ -100,7 +104,8 @@ def scenario_gateway(name, *, directory=None):
         defaults["approval"].update(scenario.get("approval", {}))
         defaults["agents"]["sandbox-agent"] = {"customer_ids": list(dict.fromkeys(["hospital", "recipe", *defaults["customers"]])),
             "autonomy": "autonomous_within_limits", "max_auto_daily_total_eur": 100000,
-            "recurring": bool(scenario.get("purchase_history"))}
+            "recurring": bool(scenario.get("purchase_history") or scenario.get("recurring"))}
+        defaults["agents"].update(scenario.get("agents", {}))
         defaults["organisations"] = scenario.get("organisations", {"hospital": {"customer_ids": ["hospital"]}})
         defaults["identities"] = scenario.get("identities", {"hospital-approver": {"kind": "buyer_user", "role": "buyer_approver", "organisation_id": "hospital"}})
         (root / "defaults.yaml").write_text(yaml.safe_dump(defaults))

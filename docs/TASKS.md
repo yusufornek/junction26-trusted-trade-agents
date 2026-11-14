@@ -49,3 +49,5 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 43 | Frontend: agent register, effective-policy view with sources, policy editor + change-request review, simulation result, pause buttons, alerts, governance report — data contract in FRONTEND.md "Agent governance (spec 44)" | frontend teammate | todo |
 | 44 | Guardrail profiles, approver threshold, four-eyes, anomaly detection + fixes, optional Timestral forecast (spec 45) | Gökalp + Codex | in progress | Anomaly R-5–R-8 and anomaly audit R-9 implemented; AC-5–AC-10 in backend/tests/test_spec45_anomalies.py. Profiles/accounts follow separately. |
 | 45 | Frontend: sign-up with business profile, preset review, anomaly cards with proposed fixes, APPROVAL_LIMIT / FOUR_EYES messages — data contract in FRONTEND.md "Guardrail profiles and anomalies (spec 45)" | frontend teammate | todo |
+
+| 46 | Five brief scenarios end to end (spec 46) | Backend (Codex) | done | AC-1–8 and five offline MCP demos pass; final acceptance/interface run: 14 passed. Existing grant test and deferred generated-artifact check documented in the spec. |

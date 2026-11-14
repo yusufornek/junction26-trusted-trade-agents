@@ -107,7 +107,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":
         aggregate_id = data.get("id") or data.get("proposal_id", aggregate_id)
-    if kind in {"recurring", "suggestion"}:
+    if kind in {"recurring", "suggestion", "stockout"}:
         aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
@@ -117,7 +117,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
-    if kind in {"proposal", "recurring", "suggestion"}:
+    if kind in {"proposal", "recurring", "suggestion", "stockout"}:
         context = {"customer_id": data["customer_id"], "environment": data.get("environment", ENVIRONMENT.get())}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),

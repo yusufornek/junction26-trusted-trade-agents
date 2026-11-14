@@ -80,6 +80,8 @@ class Gateway:
         self.proposals = Proposals(self)
         from .purchase_memory import PurchaseMemory
         self.memory = PurchaseMemory(self)
+        from .brief_scenarios_watch import StockoutWatch
+        self.stockout_watch = StockoutWatch(self)
         from .anomaly_service import Anomalies
         from .forecast_timestral import load_forecaster
         self.anomalies = Anomalies(self, load_forecaster(self.settings.forecast_enabled, self.settings.forecast_model_path))

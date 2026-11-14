@@ -160,7 +160,8 @@ class Policy:
         catalog = self.suppliers.get(need.supplier_id).catalog if hasattr(self, "suppliers") else Catalog(self.db)
         policy = policy or self.get()
         customer = policy.customers.get(need.customer_id)
-        effective, updates = EffectiveConstraints(), {}
+        from .brief_scenarios import NUTRIENTS
+        effective, updates = EffectiveConstraints(nutrient_limits={key: getattr(customer, key) for key in NUTRIENTS if customer and getattr(customer, key) is not None}), {}
         for field in ("required_claims", "exclude_allergens"):
             entries = []
             for source, values in (("request", getattr(need, field)),
@@ -233,6 +234,9 @@ class Policy:
         from .substitution import apply_profile
         for line in lines:
             apply_profile(line, policy, customer_id)
+            if line.substitution is not None:
+                hits.append(RuleHit(rule="SUBSTITUTION_REQUIRED", detail=f"{line.product_id}: substitutes require human approval"))
+                approval = True
         if customer and customer.clinical_review == "required":
             hits.append(RuleHit(rule="CLINICAL_REVIEW", detail="Clinical review by a buyer approver is required."))
             approval = True

@@ -272,7 +272,8 @@ class Orders:
             step = sales_step(p)
             if line.quantity_sales_units < p.minimum_order_quantity or Decimal(str(line.quantity_sales_units)) % step:
                 raise DomainError("INVALID_LOT_SIZE", f"{p.id}: sales quantity must be at least {p.minimum_order_quantity:g} and a multiple of {step}", 422)
-        ids = list(products)
+        from .brief_scenarios import quote_baselines
+        ids = list(dict.fromkeys([*products, *quote_baselines(self.db, lookup, products)]))
         if lookup.need.substitute_for and lookup.need.substitute_for.product_id not in ids:
             ids.append(lookup.need.substitute_for.product_id)
         price = adapter.fetch("price", request.customer_id, request.deliver_by, ids, counter, fresh=True)
@@ -297,6 +298,8 @@ class Orders:
                                   sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id, supplier_id=supplier_id), sources=effective)
                 from .substitution import annotate, functional_categories
                 annotate(offer, need, catalog, policy, price)
+                from .brief_scenarios import quote_annotations
+                quote_annotations(offer, need, catalog, price, stock)
                 categories = functional_categories(catalog, need)
                 if categories is not None and p.category not in categories:
                     violations.append(f"{p.id}: functional product type does not match (customer_policy)")
@@ -670,6 +673,8 @@ class Orders:
             line.availability, warnings = availability_for(raw, deliver_by, line.units_needed,
                                                            reserved(conn, line.product_id, exclude_order, line.supplier_id), line.sales_unit)
             line.warnings = [w for w in line.warnings if w.code not in stock_codes] + warnings
+            from .brief_scenarios import refresh_timing
+            refresh_timing(line, raw, deliver_by)
             from .lookup import timestamp
             line.provenance["availability"].fetched_at = timestamp(raw.get("_fetched_at")) or audit.utcnow()
             line.provenance["availability"].valid_to = line.availability.closing_time

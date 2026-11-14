@@ -35,7 +35,7 @@ from .db import DomainError
 from .models import InputTexts
 from .signing import unb64
 
-EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
+EventType = Literal["stockout.predicted", "order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
                     "suggestion.shown", "suggestion.prepared", "suggestion.made_recurring",
                     "suggestion.dismissed", "suggestion.snoozed"]

@@ -438,6 +438,7 @@ class Recurring:
 
     def due(self, now=None):
         now = now or audit.utcnow()
+        self.g.stockout_watch.tick(now)
         for candidate in self.rows():
             try:
                 if candidate["status"] != "ACTIVE" or datetime.fromisoformat(candidate["next_run_at"]) > now:

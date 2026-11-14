@@ -141,6 +141,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
     app.include_router(recurring_router)
     app.include_router(proposals_router)
+    from .brief_scenarios_watch import router as stockout_router
+    from .brief_scenarios_selling import router as selling_router
+    app.include_router(stockout_router)
+    app.include_router(selling_router)
     from .purchase_memory import router as memory_router
     app.include_router(memory_router)
     from .anomaly_service import router as anomalies_router
