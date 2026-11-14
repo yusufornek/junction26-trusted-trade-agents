@@ -187,10 +187,17 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     throw new AuthenticationError();
   }
   const text = await res.text();
-  const body = text ? JSON.parse(text) : null;
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // A crash or a proxy failure answers in plain text ("Internal Server Error"), not {code, message}.
+    if (res.ok) throw new ApiError("BAD_RESPONSE", "The gateway sent a response that is not JSON.", res.status);
+  }
   if (!res.ok) {
     // The gateway returns {code, message, data} for domain errors.
-    throw new ApiError(body?.code ?? "HTTP_" + res.status, body?.message ?? res.statusText, res.status, body?.data);
+    const message = body?.message ?? (`Gateway answered ${res.status}` + (text && !body ? `: ${text.slice(0, 120)}` : ""));
+    throw new ApiError(body?.code ?? "HTTP_" + res.status, message, res.status, body?.data);
   }
   return body as T;
 }

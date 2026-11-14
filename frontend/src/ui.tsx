@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { OrderStatus, Warning } from "./api";
+import { ApiError, type OrderStatus, type Warning } from "./api";
 
 export const eur = (n: number | null | undefined, currency = "EUR") =>
   n == null ? "—" : new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(n);
@@ -94,12 +94,22 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
 
 export function ErrorNote({ error }: { error: unknown }) {
   const msg = error instanceof Error ? error.message : String(error);
+  // Only blame reachability when it is the likely cause; a 409 or a 500 means the gateway did answer.
+  const unreachable =
+    error instanceof TypeError || (error instanceof ApiError && error.status >= 502 && error.status <= 504);
+  const crashed = error instanceof ApiError && error.status === 500;
   return (
     <div className="card border-negative/30 bg-negative-soft p-4 text-[13px] text-negative">
       {msg}
-      <div className="mt-1 text-[12px] opacity-70">
-        Is the gateway running? <code>uvicorn app.api:app --port 8000</code>
-      </div>
+      {unreachable ? (
+        <div className="mt-1 text-[12px] opacity-70">
+          Can't reach the gateway — is it running? <code>uvicorn app.api:app --port 8000</code>
+        </div>
+      ) : crashed ? (
+        <div className="mt-1 text-[12px] opacity-70">
+          The gateway hit an internal error; its terminal log has the traceback.
+        </div>
+      ) : null}
     </div>
   );
 }
