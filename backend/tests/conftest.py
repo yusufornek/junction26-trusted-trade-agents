@@ -249,8 +249,7 @@ def real_case_name_products(actual_product_rows):
     from app.catalog import extract
     # Read the net measure before a shared-unit drained weight. Counts are collected
     # independently from the text before each measure, not from production parsing.
-    measure = (r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)"
-               r"(?:\s*/\s*\d+(?:[.,]\d+)?(?=\s*(?:kg|g)\b))?\s*(kg|g|l|dl|cl|ml)\b")
+    measure = r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)\s*(kg|g|l|dl|cl|ml)\b"
     factors = {"kg": ("KG", "1"), "g": ("KG", ".001"), "l": ("L", "1"),
                "dl": ("L", ".1"), "cl": ("L", ".01"), "ml": ("L", ".001")}
     result = []
@@ -263,22 +262,45 @@ def real_case_name_products(actual_product_rows):
                            if u["unitId"] == row["salesUnit"]), 1)
         expected = {"L": set(), "KG": set()}
         for name in names:
-            leading = re.match(r"\s*((?:\d+\s*[x×]\s*)+)", name, re.I)
+            # Resolve shared-scale notation independently before reading measures.
+            def shared(match):
+                a, b = (Decimal(match[i].replace(",", ".")) for i in (1, 2))
+                count_context = re.search(r"(?:(?:kg|g|l|dl|cl|ml)\s*[x×]\s*(?:appr\.?\s*)?|\d+-)$",
+                                          name[:match.start()], re.I)
+                return (match[1] if a > b and not count_context else match[2]) + match[3]
+            name = re.sub(r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)\s*(kg|g|l|dl|cl|ml)\b",
+                          shared, name, flags=re.I)
+            leading = re.search(r"(?<![\d.,])((?:\d+\s*[x×]\s*)+)", name, re.I)
+            if leading and re.match(r"\d+(?:[.,]\d+)?(?:\s*[x×*]\s*\d+(?:[.,]\d+)?)*\s*(?:mm|cm|m)\b",
+                                    name[leading.end():], re.I):
+                leading = None
             leading_counts = list(map(int, re.findall(r"\d+", leading[1]))) if leading else []
             matches = list(re.finditer(measure, name, re.I))
             direct_counts = []
             for match in matches:
                 before = name[:match.start()]
-                direct = re.search(r"((?:\d+\s*[x×]\s*)+)$", before, re.I)
+                direct = re.search(r"(?:(?<![\d.,])|(?<=[a-z]\.))((?:\d+\s*[x×]\s*)+)$", before, re.I)
                 direct_counts.append(list(map(int, re.findall(r"\d+", direct[1]))) if direct else [])
-            pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+            pieces = re.search(r"(?<![\d.,/x×])((?:\d+\s*[x×]\s*)*\d+)\s*(?:pcs|kpl)\b", name, re.I)
+            if leading and pieces and pieces.start() <= leading.start() < pieces.end():
+                leading, leading_counts = None, []
+            piece_count = prod(map(int, re.findall(r"\d+", pieces[1]))) if pieces else None
             for match, direct in zip(matches, direct_counts):
-                counts = direct or leading_counts or next((c for c in direct_counts if c), [])
+                counts = direct or (leading_counts if len(matches) == 1 and leading.end() <= match.start() else []) if leading else direct
                 if direct and leading and leading.end() < match.start():
                     counts = leading_counts + direct
                 unit, factor = factors[match[2].lower()]
-                count = prod(counts) if counts else int(pieces[1]) if pieces else (
-                    1 if row.get("baseUnit") == unit else multiplier)
+                count = prod(counts) if counts else (1 if row.get("baseUnit") == unit else multiplier)
+                if piece_count and not counts:
+                    portion_total = Decimal(match[1].replace(",", ".")) * Decimal(factor) * piece_count
+                    other_totals = [Decimal(m[1].replace(",", ".")) * Decimal(factors[m[2].lower()][1])
+                                    for m in matches if m != match and factors[m[2].lower()][0] == unit]
+                    slash_count = (re.fullmatch(r"\s*/\s*", name[pieces.end():match.start()])
+                                   if pieces.end() <= match.start() else
+                                   re.fullmatch(r"\s*/\s*", name[match.end():pieces.start()]))
+                    standalone = len(matches) == 1 and not re.search(r"[x×]", pieces[1], re.I) and not slash_count
+                    if standalone or any(total > 0 and abs(portion_total / total - 1) <= Decimal(".03") for total in other_totals):
+                        count = piece_count if multiplier == 1 or row.get("baseUnit") == unit else multiplier
                 value = Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor)
                 if value > 0:
                     expected[unit].add(value.quantize(Decimal("0.000001")))

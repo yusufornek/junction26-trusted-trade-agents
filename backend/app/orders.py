@@ -440,7 +440,8 @@ class Orders:
         from .ubl import export
         self.expire()
         with self.db.connect() as conn:
-            conn.execute("BEGIN")
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             order = check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)
             return export(order, quote, document)
@@ -449,7 +450,8 @@ class Orders:
         self.expire()
         with self.db.connect() as conn:
             # Order state, quote reference and audit history share one read snapshot.
-            conn.execute("BEGIN")
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             order = self._order(conn, order_id)
             check_owner(order, agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)
@@ -487,6 +489,10 @@ class Orders:
         return self._review(order_id, approver, comment, False, actor=actor)
 
     def _review(self, order_id, approver, comment, approve, evidence_revision=None, *, actor=None):
+        from .foundation import PRINCIPAL
+        principal = PRINCIPAL.get()
+        if principal and principal.kind == "buyer_user":
+            actor = f"human:buyer_approver:{principal.credential_ref}"
         self.expire()
         if not approver.strip():
             raise DomainError("APPROVER_REQUIRED", "An approver name is required", 422)
@@ -556,6 +562,7 @@ class Orders:
             if approve and order.mandate is not None:
                 self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
+                    "organisation_id": principal.organisation_id if principal else None,
                     "evidence_revision": order.evidence_revision, "approval_side": order.approval_side,
                     **mandate_evidence(order.mandate),
                     "rule_hits": [h.model_dump() for h in order.policy.hits],

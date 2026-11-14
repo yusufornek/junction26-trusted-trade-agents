@@ -10,6 +10,8 @@ from tempfile import NamedTemporaryFile
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_files (path TEXT PRIMARY KEY, content TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS buyer_suspensions (agent_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS evidence_snapshots (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, bundle BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_autonomy (
  agent_id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK(level IN ('approval_required','autonomous_within_limits'))
 );
@@ -97,6 +99,8 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            from .transport_storage import A2A_SCHEMA, WEBHOOK_SCHEMA
+            conn.executescript(WEBHOOK_SCHEMA + A2A_SCHEMA)
         # Serialize additive migrations across gateway processes, including first start.
         with self.connect(write=True) as conn:
             # A subsequent build replaces catalog rows only.
@@ -200,7 +204,7 @@ class Database:
                     temporary.unlink(missing_ok=True)
 
     @contextmanager
-    def connect(self, write=False):
+    def connect(self, write=False, *, notify=True):
         active = self._connection.get()
         if active is not None:
             # Nested business writes use savepoints: a refusal rolls its partial state
@@ -265,7 +269,7 @@ class Database:
             conn.close()
             if writer_lock is not None:
                 writer_lock.close()
-        if committed and write and self.on_commit is not None:
+        if committed and write and notify and self.on_commit is not None:
             try:
                 self.on_commit()
             except Exception:

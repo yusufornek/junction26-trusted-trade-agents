@@ -60,7 +60,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 
     async def run():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "cancel_order", "get_order_ubl"}
+        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "cancel_order", "get_order_ubl", "get_order_evidence", "get_agent_context"}
         assert all(t.input_schema and t.output_schema for t in tools)
         result = await server.call_tool("search_products", {"query": "milk", "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"]})
         assert not result.is_error
@@ -88,10 +88,12 @@ def test_streamable_http_transport(gateway):
         initialized = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1"}}})
         assert initialized.status_code == 200
-        assert initialized.json()["result"]["serverInfo"]["name"] == "Valio Aimo Trusted Trade Agents"
+        assert initialized.json()["result"]["serverInfo"]["name"] == "fi.valioaimo/trusted-trade-agents"
         listed = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert listed.status_code == 200
-        assert len(listed.json()["result"]["tools"]) == 7
+        tools = listed.json()["result"]["tools"]
+        assert len(tools) == 9
+        assert {"get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools}
 
 
 def test_stdio_transport(gateway):
@@ -122,11 +124,12 @@ finally:
     try:
         result = rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1"}}})
-        assert result["result"]["serverInfo"]["name"] == "Valio Aimo Trusted Trade Agents"
+        assert result["result"]["serverInfo"]["name"] == "fi.valioaimo/trusted-trade-agents"
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        assert len(tools["result"]["tools"]) == 7
+        assert len(tools["result"]["tools"]) == 9
+        assert {"get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools["result"]["tools"]}
         search = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "search_products", "arguments": {"query": "milk", "limit": 2}}})
         assert not search["result"].get("isError", False)
@@ -149,11 +152,21 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",
                                     "/v1/orders/{order_id}/timeline", "/.well-known/jwks.json", "/v1/audit/head",
                                     "/v1/audit/verify", "/v1/orders/{id}/ubl", "/v1/audit/anchors", "/v1/mandates/revocations", "/v1/meta", "/v1/me",
-                                    "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy"}
+                                    "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy",
+                                    "/.well-known/agent-card.json", "/a2a", "/approvals/{order_id}",
+                                    "/v1/webhook-subscriptions", "/v1/webhook-subscriptions/{subscription_id}",
+                                    "/v1/webhook-subscriptions/{subscription_id}/deliveries",
+                                    "/v1/webhook-subscriptions/{subscription_id}/deliveries/{delivery_id}/redeliver",
+                                    "/.well-known/jwks-history.json", "/v1/orders/{order_id}/evidence",
+                                    "/v1/buyer/agents", "/v1/buyer/mandates", "/v1/buyer/spend", "/v1/buyer/orders",
+                                    "/v1/buyer/approvals", "/v1/buyer/activity", "/v1/buyer/agents/{agent_id}/suspend",
+                                    "/v1/buyer/agents/{agent_id}/resume", "/v1/buyer/mandates/{jti}/revoke",
+                                    "/v1/buyer/approvals/{order_id}/approve", "/v1/buyer/approvals/{order_id}/reject",
+                                    "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt"}
     for path in schema["paths"].values():
         for operation in path.values():
             content = operation["responses"]["200"]["content"]
-            assert content.get("application/json", content.get("application/xml"))["schema"]
+            assert content and all(media["schema"] for media in content.values())
     # Route inventory includes spec 10, 11 and 13 trust and UBL endpoints.
     models = schema["components"]["schemas"]
     assert {"plans", "no_match_reason"} <= models["LookupResult"]["properties"].keys()

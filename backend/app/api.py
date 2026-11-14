@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Literal
@@ -24,6 +25,9 @@ from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
 from .recovery import problem, validation_problem
+from .agent_context import AgentContext, agent_context
+from .discovery import MCPTransport, install_routes as install_discovery
+from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +41,53 @@ def create_app(gateway=None, *, settings=None, keys=None):
     async def lifespan(app):
         service = gateway or Gateway(settings)
         app.state.gateway = service
+        stop = asyncio.Event()
+        async def deliver_notifications():
+            while not stop.is_set():
+                await run_in_threadpool(service.outbox.dispatch)
+                await run_in_threadpool(service.webhooks.dispatch)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=.5)
+                except asyncio.TimeoutError:
+                    pass
+        from .mcp_server import create_server
+        app.state.mcp_server = create_server(service, agent_id=None)
+        app.state.mcp_server.keys = keys
+        from mcp.server.transport_security import TransportSecuritySettings
+        from urllib.parse import urlsplit
+        public = service.settings.public_url
+        security = TransportSecuritySettings(allowed_hosts=["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]", "[::1]:*"] +
+            ([urlsplit(public).netloc] if public else []),
+            allowed_origins=["http://localhost", "http://localhost:*", "http://127.0.0.1", "http://127.0.0.1:*", "http://[::1]", "http://[::1]:*"] + ([public] if public else []))
+        mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
+        app.state.mcp_http = mcp_http
+        worker = asyncio.create_task(deliver_notifications())
         try:
-            yield
+            async with mcp_http.router.lifespan_context(mcp_http):
+                yield
         finally:
+            stop.set()
+            await worker
             if gateway is None:
                 service.close()
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
-                  description="MVP fixed-price gateway. REST and MCP share one core. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. Commitments are gateway-simulated.",
+                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. Commitments are gateway-simulated.",
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    from .webhooks import router as webhook_router
+    from .a2a import install_routes
+    app.include_router(webhook_router)
+    install_routes(app)
+    from .buyer import router as buyer_router
+    from .evidence import router as evidence_router
+    app.include_router(buyer_router)
+    app.include_router(evidence_router)
+    install_discovery(app)
+    from .developer_docs import install_routes as install_developer_docs
+    install_developer_docs(app)
+    app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
@@ -56,7 +96,19 @@ def create_app(gateway=None, *, settings=None, keys=None):
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
         try:
-            response = await call_next(request)
+            if request.url.path == "/a2a":
+                try:
+                    await resolve_principal(request, await bearer(request))
+                except DomainError as error:
+                    response = await domain_error(request, error)
+                    response.headers["X-Correlation-Id"] = CORRELATION.get()
+                    return response
+            public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
+                "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
+            response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
+            if public:
+                response.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, If-None-Match", "Access-Control-Expose-Headers": "ETag"})
             response.headers["X-Correlation-Id"] = CORRELATION.get()
             return response
         finally:
@@ -137,12 +189,12 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def meta():
         return manifest()
 
-    @app.get("/v1/me", response_model=dict, summary="Authenticated principal, customer scope and current token buckets")
-    def me(request: Request, principal: Principal = Depends(resolve_principal)):
+    @app.get("/v1/me", response_model=AgentContext, summary="Caller scope, mandate, effective limits, budget, environment and operations")
+    def me(request: Request, principal: Principal = Depends(resolve_principal),
+           agent_mandate: Annotated[str | None, Header()] = None):
         service = svc(request)
         service.limiter.consume(principal.id, "read")
-        return {"principal": principal.public(), "customer_ids": principal.customer_ids, "environment": "live",
-                "rate_limits": service.limiter.snapshot(principal.id)}
+        return agent_context(service, principal, agent_mandate)
 
     @app.get("/v1/agents/{agent_id}/track-record", response_model=AgentTrackRecord,
              description="Audit-derived record for orders placed in window_days (default 30). Operator, the agent and its buyer organisation may read it. Readiness is advisory; no automatic promotion.")
@@ -187,7 +239,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                       coverage=svc(request).catalog.metadata("coverage"), anchoring=svc(request).anchoring.health())
 
     @app.get("/.well-known/jwks.json", response_model=JWKSet,
-             summary="Public Ed25519 signing keys for detached quote, receipt and audit-head JWS")
+             summary="Public Ed25519 keys for quote, receipt, audit-head JWS and Standard Webhooks v1a")
     def jwks(request: Request):
         return svc(request).signing.jwks()
 

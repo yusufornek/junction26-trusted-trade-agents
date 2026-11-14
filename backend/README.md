@@ -1,5 +1,55 @@
 # Trusted Trade Agents backend MVP
 
+## Buyer view and portable evidence (specs 28–29)
+
+`GET /v1/buyer/{agents,mandates,spend,orders,approvals,activity}` accepts `buyer_user`
+credentials with roles `buyer_viewer`, `buyer_approver`, or `buyer_admin`; the operator
+may read all customers. Responses include `organisation_id` and `customer_ids`.
+Identities and organisations are configured in policy; credentials still come from
+`AGENT_KEYS`. Buyer approvers/admins use `POST /v1/buyer/approvals/{order_id}/approve`
+or `/reject` (the existing `/v1/approvals` routes also accept them). Approval retains
+the evidence-revision rule and records `human:buyer_approver:<credential ref>`, the
+organisation and `approval_side=buyer`. Viewers cannot review.
+
+Buyer admins use `POST /v1/buyer/agents/{agent_id}/suspend` or `/resume` with an
+optional `{reason}` body, and `POST /v1/buyer/mandates/{jti}/revoke` for a previously
+used buyer VC. These local emergency controls are durable, scoped and audited.
+Buyer writes accept `Idempotency-Key` through the shared command ledger.
+Suspension returns `403 AGENT_SUSPENDED`, `CONTACT_ADMIN` on the next procurement
+command; history remains readable. Revocation reuses spec 12's revocation ledger,
+so bound pending orders cannot be approved. Spend uses policy's rolling 24-hour
+autonomous ledger, effective daily limits, pending commitments and human-approved
+totals. Domain activity is newest first with actors and human-readable summaries.
+
+`GET /v1/orders/{order_id}/evidence` downloads a ZIP; `?format=json` returns its
+signed manifest. MCP `get_order_evidence` returns the same manifest with authenticated,
+immutable artifact and bundle links. The order agent, its scoped buyer organisation,
+and the operator can read it; other agents receive 404. The ZIP includes signed quote,
+receipt, audit entries and hash-only links for all undisclosed entries, signed checkpoint,
+UBL Order/OrderResponse, public JWKS, optional anchor metadata, and `VERIFY.md`.
+The signed manifest binds order/customer/environment, the artifact inventory and SHA-256
+digests. Snapshots remain downloadable after later activity and key rotations.
+
+From `backend/`, using **independently obtained trusted keys**:
+
+```sh
+.venv/bin/python scripts/verify_evidence.py purchase.zip --trusted-jwks /trusted/gateway-jwks.json
+# Optional network anchor verification and explicit local official schema directory:
+.venv/bin/python scripts/verify_evidence.py purchase.zip --trusted-jwks /trusted/gateway-jwks.json --rpc-url https://polygon-rpc.example --xsd-dir vendor/ubl-2.1
+```
+
+The JSON report separates `signature_valid`, `trusted_issuer_match`, `audit_consistent`,
+`anchor_status` (`matched`, `pending`, `not_checked`), `ubl_schema_valid` and
+`supplier_acceptance` (`simulated`), plus inventory and binding checks. It names failed
+artifacts/entries and identifies offline versus network checks. Exit 0 requires all
+executed checks to pass. Without RPC, the anchor is `not_checked`; a configured RPC
+with an unconfirmed transaction fails with `pending`. UBL schemas default to the vendored
+official UBL 2.1 directory and never load remote schema hints. Bundled keys are compared,
+never treated as the trust root. `/.well-known/jwks-history.json` retains all public keys
+indefinitely for historical evidence; `/.well-known/jwks.json` retains spec 10's current
+seven-day quote-key window. Save trusted historical keys before offline verification.
+The upstream has no order API: receipts and UBL records explicitly remain gateway-simulated.
+
 One Python core serves FastAPI and the MCP 2.3 server. It searches the local catalog, screens a
 40-product pool with Decisions, checks live Valio price/availability for suitable candidates (up to 25 by default), locks fixed-price quotes, then
 runs the approval policy. The upstream mock has no search or order endpoint: quotes, orders,
@@ -173,8 +223,9 @@ Omitted autonomy uses `policy.autonomy.default: approval_required`: otherwise ac
 `PENDING_APPROVAL` with rule hit `autonomy_level`. The two demo mandates explicitly have
 `autonomous_within_limits`, granted after the pilot's approved orders (demo setting), preserving the
 1,010 EUR demo confirmation. Other policy limits and hard constraints still apply.
-REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. MCP fixes
-identity using `--agent-id` at launch; tools cannot change it per call. The console uses the operator token
+REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. Standalone MCP fixes
+identity using `--agent-id` at launch; the gateway's `/mcp` resolves each request's Bearer credential.
+Tools cannot choose another identity. The console uses the operator token
 and its buyer actions run as `OPERATOR_AGENT_ID` (default `web-console`).
 
 Lookup, quote and order require a mandate. Unregistered agents receive
@@ -309,8 +360,11 @@ Old stored lookups without preferences/plans remain readable, including through 
   with the price ratio uses the ratio and emits `SIZE_MISMATCH` naming the values; a conversion inconsistent
   with explicit name counts also carries `SIZE_MISMATCH`, even without a ratio. Both require approval by default.
   Without a live ratio, plausible but contradictory catalog/name content is not confirmed: `SIZE_MISMATCH`
-  names both figures and the plan displays the larger units-needed estimate (the smaller content).
-  This estimate is for review only and always requires approval; explicit quote quantities stay unchanged.
+  names both figures and retains the plausible catalog package total as the anchor.
+  Name candidates replace that anchor only when confirmed by the live ratio within 3%; either language can supply the confirmed candidate.
+  Slash portion counts (10/1500G, 60KPL/900G, 900g/60pcs, with optional spaces) never multiply a weighed package total.
+  Nested pcs/kpl chains keep every count and multiply only a portion measure that reconciles with a named or catalog total within 3%.
+  Explicit quote quantities stay unchanged.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
   count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.
@@ -829,6 +883,7 @@ credential, or structured 422 after authentication.
 REST and MCP use `app.commands` for principal-scoped idempotency and token costs. Order placement
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
 (optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
+Buyer suspension, resumption and local mandate revocation use the same command boundary and header.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same principal, command route (including every target/path parameter) and payload.
 The shared replay guard rechecks current authorization before exposing any saved result: ownership,
@@ -843,6 +898,9 @@ the original order retry; ownership and any signed buyer credential still apply,
 changed customer scope is enforced. Rejection/cancellation still need no purchasing credential.
 Autonomy replay never repeats a promotion/demotion, and rechecks the target's current organisation,
 customers and existence. Changing the autonomy target under the same key returns `409 IDEMPOTENCY_CONFLICT`.
+Buyer control replays likewise recheck the administrator role and the target's current organisation/customer
+scope; they never repeat a suspension or revocation. Mandate events are scoped by customer, issuer and
+mandate ID, and retain the buyer organisation and control provenance for activity and webhook delivery.
 Earlier command envelopes still load; legacy autonomy entries must also match the saved target.
 Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
 domain events commit atomically. Refusals do not cache a successful command result.
@@ -863,8 +921,8 @@ registration without a handler reserves the durable consumer name. `replay=True`
 events. Post-commit dispatch never runs callbacks inside the procurement transaction. Failures remain
 pending with exponential retry intervals, and `dispatch()` can be called by a worker independently
 of new traffic. Callbacks must deduplicate by event ID: delivery is at least once. Named registrations
-survive restart; callbacks are attached again by their owning feature. No webhook or A2A delivery is
-claimed before those features are installed.
+survive restart; callbacks are attached again by their owning feature. Specs 33–34 install signed
+webhook delivery and durable A2A task projections over this same outbox.
 
 REST errors use `application/problem+json` with RFC 9457 fields and legacy `code`, `message`, `data`.
 Recovery version 1 adds `retryable`, `next_action`, `retry_after_seconds`, `correlation_id`, and
@@ -917,11 +975,11 @@ kind, ID, organisation, customers, role and a digest credential reference. Polic
 maps IDs to `{customer_ids: [...]}`; `identities` maps credential IDs to `{kind, role, organisation_id}`.
 Buyer roles are `buyer_admin`, `buyer_approver`, `buyer_viewer`; suppliers use `supplier_agent`.
 `scripts/gen_keys.py --write` provisions every ID in `agents` and `identities`, with the same secret
-format and without printing secrets. These identity labels grant no new operations by themselves.
-The existing operator-only guards remain in force until the buyer/supplier feature specs add scope.
+format and without printing secrets. Buyer roles authorize the customer-scoped `/v1/buyer` operations
+described above; global administrative operations retain their operator-only guards.
 
 Public `GET /v1/meta` separates specification versions from installed packages and states limiter
-scope. A2A, Standard Webhooks and the MCP server card are explicitly planned, not implemented.
+scope. A2A 1.0, Standard Webhooks v1a and the draft MCP server card are implemented.
 The server-card draft is pinned to vendored commit `526201bbc80231daa40ffcdecfc9da4e54e5dc93`;
 Standard Webhooks is pinned to vendored commit `36afae792227eae8a182a7a1a5711dbdc08a4334`.
 
@@ -968,6 +1026,224 @@ mechanism. This suggests review; demotion is the same endpoint with `level: appr
 For a VC-bound order, this decision uses the original signed claim and current policy/grant,
 not its placement-time effective autonomy snapshot. A restrictive buyer claim still wins;
 expired or revoked authority does not prevent human rejection and does not suggest an autonomy review.
-Spec 28's buyer view and spec 33's signed webhook delivery are not installed here. This implementation
-uses the existing spec 19/22 principals, organisation scopes, audit chain and event/outbox; it does
-not claim outbound webhook delivery. The approval endpoints expose buyer/operator signing now.
+The approval endpoints expose buyer/operator signing. Spec 33 delivers subscribed purchasing events
+through signed webhooks independently of the decision; autonomy advisory events remain in the durable
+event/outbox for activity consumers.
+
+## Signed webhooks (spec 33)
+
+Create with an agent or reviewer Bearer credential:
+
+```http
+POST /v1/webhook-subscriptions
+Idempotency-Key: subscribe-hotel-decisions
+Content-Type: application/json
+
+{"url":"https://buyer.example/hooks","customer_ids":["1"],"event_types":["order.approval_required","order.confirmed"],"audience":"agent"}
+```
+
+The receiver must answer the signed `{"type":"webhook.challenge","challenge":"…"}` POST
+with HTTP 2xx and `{"challenge":"…"}` containing exactly the same challenge. Only then is the
+subscription enabled. HTTPS and public addresses are required. Each attempt resolves DNS again,
+rejects any nonpublic answer, and pins the connection to a checked address while retaining the
+original Host and TLS SNI. Redirects are never followed and environment proxies are disabled.
+Only explicit `WEBHOOK_SANDBOX=true` permits `http://localhost` resolved to loopback.
+
+`GET /v1/webhook-subscriptions` lists owned subscriptions. `PATCH /v1/webhook-subscriptions/{id}`
+changes the destination, customer/event filters or enabled state; changed destinations and re-enabling
+require a new challenge. `DELETE` disables and retains history. All writes accept `Idempotency-Key`.
+Keys bind the principal, command route, subscription/delivery targets and payload. Exact replays
+recheck current ownership, customer scope and reviewer authority before returning the saved result,
+without repeating the challenge or redelivery. Previously stored command envelopes remain replayable.
+An approver audience requires an operator or buyer approver/admin credential. Customer scope is checked
+at subscription time and again at delivery against the current policy.
+
+Supported event types: `order.approval_required`, `order.evidence_changed`, `order.confirmed`,
+`order.rejected`, `order.cancelled`, `order.expired`, `mandate.revoked`, `proposal.received`.
+The procurement core retains its existing `order.placed` domain event; the webhook projection names
+the initial purchasing outcome appropriately. The envelope retains the durable event ID, customer,
+aggregate ID/revision, correlation and payload. Multi-customer revocations project one scoped event
+per customer and mandate without exposing another customer's IDs.
+
+The outbox supplies at-least-once delivery. Every subscription/event pair has one immutable body,
+one stable `webhook-id`, and a separate delivery record. Five attempts use exponential intervals
+(2, 4, 8, 16 seconds before the next attempt) with 0–25% positive jitter. Each attempt gets a fresh
+timestamp/signature. API lifespan runs the worker every 0.5 s, and commits also trigger dispatch.
+`GET /v1/webhook-subscriptions/{id}/deliveries` shows status, attempt count, next retry and last
+HTTP status. Exhaustion sets `failed`; `POST .../deliveries/{delivery_id}/redeliver` restarts attempts
+with the same ID and body. A delivery failure never changes the order's purchasing decision.
+
+Signatures implement the vendored Standard Webhooks revision
+`36afae792227eae8a182a7a1a5711dbdc08a4334`: Ed25519 `v1a`, standard Base64 signature,
+over the exact bytes `webhook-id.webhook-timestamp.raw-body`. The signing key is the gateway key
+from spec 10; public keys are at `/.well-known/jwks.json`. Receiver example (verify before parsing,
+then durably deduplicate on `webhook-id` before performing effects):
+
+```python
+import base64
+import time
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+def verify(body: bytes, headers, trusted_jwks):
+    timestamp = headers["webhook-timestamp"]
+    if abs(time.time() - int(timestamp)) > 300:
+        raise ValueError("Stale webhook")
+    signed = headers["webhook-id"].encode() + b"." + timestamp.encode() + b"." + body
+    for item in headers["webhook-signature"].split():
+        version, _, signature = item.partition(",")
+        if version != "v1a":
+            continue
+        for jwk in trusted_jwks["keys"]:
+            if jwk.get("kty") != "OKP" or jwk.get("crv") != "Ed25519":
+                continue
+            try:
+                public = base64.urlsafe_b64decode(jwk["x"] + "=" * (-len(jwk["x"]) % 4))
+                Ed25519PublicKey.from_public_bytes(public).verify(
+                    base64.b64decode(signature, validate=True), signed)
+                return headers["webhook-id"]
+            except (InvalidSignature, ValueError):
+                pass
+    raise ValueError("Invalid webhook signature")
+```
+
+Approver notifications include `/approvals/{order_id}?revision=N`. An authenticated GET renders the
+reviewed evidence next to independent notification status; a stale link returns `EVIDENCE_CHANGED`.
+The page submits approval only through the existing authenticated POST with `evidence_revision=N`.
+No credential appears in the link. Fetch/display the review with the reviewer Bearer credential;
+the approval form requests that credential for its POST.
+
+## A2A service (spec 34)
+
+The REST API also serves public `GET /.well-known/agent-card.json` and authenticated
+`POST /a2a`. Use `Authorization: Bearer …`, `A2A-Version: 1.0`, optional `Agent-Mandate` and
+`X-Correlation-Id`. The installed `a2a-sdk==1.3.0` supplies the 1.0 protobuf types, JSON-RPC routing,
+validation, error details and SSE encoding. The protocol version is **1.0**; the package version is
+listed separately in `/v1/meta`. The Agent Card takes tool descriptions/input/output schemas from
+the shared MCP server and lists `find_offers`, `find_basket_offers`, `quote_and_order`, `order_status`,
+`cancel_order`, `get_evidence`, bearer security, streaming and push.
+
+SDK clients send a user Message with a stable `messageId` and one structured data part:
+
+```json
+{"message":{"messageId":"lookup-1","role":"ROLE_USER","parts":[{"data":{"version":1,"command":"lookup","need":{"customer_id":"1","intent":"milk","quantity":{"value":400,"unit":"L"},"deliver_by":"2026-11-17"}}}]}}
+```
+
+`SendMessage` returns a task with request/offers artifacts. Continue with `message.taskId` and
+`message.contextId`, a new message ID, and `{version:1, command:"select_plan", plan_index:0}`, then
+`{version:1, command:"place_order"}`. Quote and order use the message ID as their shared command
+idempotency key. Repeating an identical message returns the same task; changed content with the
+same ID conflicts. Retryable failures retain the task and resume on the same message ID.
+Protobuf Value represents numbers as doubles, so integral numbers are restored to integers before
+the shared strict validators; strings and booleans are never coerced.
+
+Tasks retain principal/context and request, offers, selected-plan, quote, order and evidence references.
+Artifacts contain both a structured data part and a text summary. `WORKING` is durable before supplier
+I/O; plan selection/missing input gives `INPUT_REQUIRED`; purchasing approval gives `AUTH_REQUIRED`;
+confirmation gives `COMPLETED`; rejection, expiry/failure and cancellation give the corresponding
+1.0 states. Human approval stays in the gateway reviewer POST flow. Order outbox events update the
+task and receipt artifact even when the purchasing decision arrives through another interface.
+
+The structured `lookup` command can invoke the shared basket adapter with
+`skill:"find_basket_offers", arguments:{…}`; `arguments` follows that MCP tool's published input schema.
+Selection then quotes its stored `basket_ref`. `get_evidence` returns spec 29's signed manifest with
+authenticated immutable artifact and ZIP links, using the same evidence core as REST and MCP
+`get_order_evidence`. The bundle contains the signed quote/receipt, audit chain and checkpoint, UBL,
+JWKS and verification instructions. Basket and evidence adapters remain owned by specs 32 and 29.
+
+`GetTask` and `ListTasks` are principal-scoped (including kind); another principal receives task-not-found.
+List supports context/status/timestamp filters, page size/token, history length and artifact inclusion.
+`SendMessageConfiguration` supports accepted output modes, bounded history, `returnImmediately` and
+task push configuration. `CancelTask` applies the existing order cancellation rules. A completed task
+is terminal: cancel its confirmed order using a **new** message without taskId,
+`{version:1, command:"cancel", order_id:"…", reason:"…"}`. This creates a new cancellation task.
+
+`SendStreamingMessage` emits task status and artifact updates in durable revision order while the command
+runs. `SubscribeToTask` replays the outbox-backed task events and follows pending human approval until a
+terminal state; an input-required task closes so the client can supply its next message. Resume with
+`Last-Event-ID` from update metadata's `event_id`, or `X-A2A-After-Revision` from `aggregate_revision`.
+Without a cursor it replays all retained revisions. Consumers can deduplicate by event ID/revision.
+
+All 1.0 push configuration methods are installed: `CreateTaskPushNotificationConfig`,
+`GetTaskPushNotificationConfig`, `ListTaskPushNotificationConfigs`, `DeleteTaskPushNotificationConfig`.
+They use spec 33 ownership challenges, destination safety, retry bounds and signing. Push bodies are
+SDK-compatible A2A `StreamResponse` status events, with optional `X-A2A-Notification-Token` and configured
+Authorization, plus Standard Webhooks headers. Configuring push also queues the latest task snapshot.
+
+Domain failures carry the same recovery version 1 payload in the task status data part and A2A's typed
+`google.rpc.ErrorInfo.metadata` in JSON-RPC `error.data`; throttles include `retry_after_seconds`.
+Authentication failures use HTTP 401 problem details before protocol parsing. Per-agent lookup,
+mutation and read buckets are shared with REST/MCP. Purchasing audit entries remain identical; A2A adds
+separate `A2A_TASK_UPDATED` lifecycle audit entries, not additional purchase decisions.
+
+Reference split-order client (no operator credential, approval remains external):
+
+```bash
+.venv/bin/python demo/a2a_client.py --url http://localhost:8000 --token "$AGENT_TOKEN" --need /tmp/need.json
+# Add --mandate /path/to/buyer-vc.jwt when using a buyer-issued mandate.
+.venv/bin/python -m pytest tests/test_webhooks.py tests/test_a2a_service.py tests/test_cross_interface.py -q
+```
+
+
+## MCP discovery and connect kit (specs 37–38)
+
+Start the API from `backend/` with `.venv/bin/python -m uvicorn app.api:app --port 8000`.
+The same process now serves authenticated, stateless Streamable HTTP at `/mcp`, sharing the
+REST gateway, principal, budgets and idempotency state. Standalone MCP stdio and port 8001
+remain available. The machine identity is `fi.valioaimo/trusted-trade-agents`, version `0.1.0`;
+the display title remains Valio Aimo Trusted Trade Agents. Tools are listed at runtime,
+including `get_agent_context` (the same advisory snapshot as authenticated `GET /v1/me`) and
+`get_order_evidence` (the portable evidence manifest and authenticated download links).
+
+A client starting with only the base address follows `/.well-known/ai-catalog.json` to
+`/mcp/server-card` and then `/mcp`. The card follows the vendored draft schema at commit
+`526201bbc80231daa40ffcdecfc9da4e54e5dc93`, also recorded in `/v1/meta` and the namespaced
+card extension. Startup validates the schema and compares runtime identity/transport.
+Public discovery is read-only, has wildcard CORS, cache validators and no customer authority.
+In production set `GATEWAY_PUBLIC_URL` to the HTTPS public origin; MCP's Host/Origin
+protection otherwise accepts only loopback addresses. Never disable that protection to
+work around a proxy configuration.
+
+`/developers` contains the connection guide, configurations, executable REST walkthrough,
+recovery and approval rules. `/llms.txt` links agents to it, OpenAPI and
+`/developers/tools.json`. Author the prose in `backend/docs/developers.html.in` and
+`backend/docs/llms.txt.in`; regenerate the committed static artifacts after tool changes:
+
+```bash
+.venv/bin/python scripts/build_developer_docs.py
+.venv/bin/python scripts/export_openapi.py
+.venv/bin/python -m pytest tests -q
+```
+
+Generation imports and registers tool schemas without opening a database or signing keys.
+The divergence acceptance test compares complete runtime schemas and generated HTML.
+
+The independent buyer is `clients/python/reference_buyer.py`, with pinned dependencies
+and environment names in that directory. From the repo root, install its requirements,
+export `GATEWAY_URL`, `AGENT_TOKEN`, optionally `AGENT_MANDATE` (VC-JWT), then run:
+
+```bash
+python clients/python/reference_buyer.py --scenario full_stock
+python clients/python/reference_buyer.py --scenario split_stock
+```
+
+The client requires context environment `sandbox`. An operator must prepare the fixture
+supplier/catalog and policy beforehand: full_stock covers 10 L autonomously; split_stock
+covers 400 L with a split plan and requires human approval. It follows `next_action`, polls
+pending orders, retains mutation keys on retries and verifies the Ed25519 receipt against
+public JWKS. It cannot approve its own order. This kit does not implement sandbox reset
+or credential issuance: use a separate deployment/storage/credentials and set
+`GATEWAY_ENVIRONMENT=sandbox`; that label alone does not provision or isolate data.
+Opaque credentials are expired by issuer removal/rotation; a refused key returns 401 with
+replacement guidance. Offline verification of a saved order is also available:
+
+```bash
+python clients/python/verify_receipt.py order.json --jwks jwks.json --customer ID --agent AGENT_ID
+```
+
+Tests use only temporary storage, mocked supplier calls and in-process ASGI, including the
+real MCP SDK connection and a shell walkthrough whose HTTP transport is bridged to TestClient.
+Claude Code configuration syntax is checked, Desktop stdio executes as a subprocess in the
+MCP transport suite, and the installed generic CLI loader checks `app/mcp_entry.py` without
+launching the optional inspector UI. To use that UI, install `mcp[cli]==2.3.0` and run
+`MCP_AGENT_ID=issued-agent .venv/bin/mcp dev app/mcp_entry.py` on the gateway host.

@@ -49,5 +49,8 @@ change or extend.
 | 39 | [Organiser answers](39-organiser-answers.md) | Whole units, unknown availability, not available, cut-off text, honour 429 | in progress |
 | 40 | [Graduated autonomy](40-graduated-autonomy.md) | Approval first, autonomy earned from a measured track record | in progress |
 | 41 | [Purchase memory](41-purchase-memory.md) | Remember purchase rhythms, suggest replenishment, turn patterns into recurring workflows over MCP | in progress |
+| 42 | [Agent connections and MCP on the public address](42-agent-connections.md) | Operator issues, lists and revokes agent keys for the console's Connect page; MCP served in the gateway at `/mcp` | in progress |
+| 43 | [Accounts, tenants and audiences](43-accounts-tenants-audiences.md) | Buyer businesses sign in, manage their team and bind their own agents; buyer / tenant / operator audiences on every connection type; strict tenant isolation | in progress |
+| 44 | [Agent governance inside a buyer business](44-agent-governance.md) | Agent ownership, three policy layers with provenance, change requests for loosening, versions and simulation, agent register, pause, alerts, governance report | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

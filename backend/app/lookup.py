@@ -128,7 +128,8 @@ def reconcile_size(product, price, requested_unit):
     if not sales_suspect and sales_content and sales_content > 0:
         exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
     if multiplier is not None and multiplier > 0:
-        named = name_sales_sizes(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier)
+        named = name_sales_sizes(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier,
+                                 sales_content or content)
         if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
         if product.base_unit == requested_unit:
@@ -142,8 +143,12 @@ def reconcile_size(product, price, requested_unit):
             exact["catalog"] = float(pack_quantity(sales_content, whole_case=True))
         # Use the same nested-count/net-weight parsing as catalog CASE validation.
         if named:
-            exact["name_parse"] = next((size for size in named if exact.get("catalog", 0) > 0 and
-                abs(size / exact["catalog"] - 1) <= .03), named[0])
+            # Price can confirm either translation, even when another language
+            # agrees with the catalog. Keep every candidate until this decision.
+            confirmed_names = [size for size in named if ratio is not None and
+                (abs(ratio / size - 1) <= .03 or isclose(abs(ratio / size - 1), .03, rel_tol=1e-12))]
+            exact["name_parse"] = next(iter(confirmed_names), next((size for size in named if exact.get("catalog", 0) > 0 and
+                abs(size / exact["catalog"] - 1) <= .03), max(named)))
 
     # A nonpositive size, including one rounded to zero, is never evidence or a divisor.
     exact = {source: size for source, size in exact.items() if size > 0}
@@ -164,17 +169,16 @@ def reconcile_size(product, price, requested_unit):
             count_evidence = named_cases if named_cases and not all(
                 counts == [1] for name in names for _, counts in name_measures(name, requested_unit)
                 if counts) else []
-            candidates = count_evidence or named if multiplier is not None and multiplier > 0 else named_cases
+            candidates = [*named, *count_evidence] if multiplier is not None and multiplier > 0 else named_cases
             size = exact[source]
-            if candidates and not any(abs(size / candidate - 1) <= .03 or isclose(
-                    abs(size / candidate - 1), .03, rel_tol=1e-12) for candidate in candidates):
+            disagrees = [candidate for candidate in candidates if not (abs(size / candidate - 1) <= .03 or isclose(
+                abs(size / candidate - 1), .03, rel_tol=1e-12))]
+            if disagrees:
                 values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
-                conservative = min(size, *candidates)
                 mismatch = Warning(code="SIZE_MISMATCH", text=(
                     f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; name_case={candidates} {requested_unit}; "
-                    f"used={conservative:g} {requested_unit} for conservative display only; approval required."))
-                display_source = next((key for key, value in exact.items() if value == conservative), "name_parse")
-                return conservative, display_source, False, [warning("SIZE_UNCONFIRMED"), mismatch]
+                    f"used={size:g} {requested_unit} from {source}; approval required."))
+                return size, source, False, [warning("SIZE_UNCONFIRMED"), mismatch]
             return size, source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(size)]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
         for source, size in exact.items():

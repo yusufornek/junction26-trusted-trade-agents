@@ -15,6 +15,9 @@ from .foundation import CORRELATION, PRINCIPAL, correlation_id
 from .recovery import problem, validation_problem
 from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
+from .evidence import EvidenceManifest, build_bundle
+from .discovery import NAME, TITLE, VERSION, DESCRIPTION, check_server
+from .agent_context import AgentContext, agent_context
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
@@ -33,8 +36,8 @@ WARNINGS = (
     "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; "
     "NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
     "SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; "
-    "without it, contradictory sizes are shown together and the larger units-needed estimate is for display and human review only. "
-    "Nested name counts retain inner packages while consuming the outer multiplier once; shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; "
+    "without it, contradictory sizes are shown together, the plausible catalog package total is retained and human review is required. Either language can supply a price-confirmed exact name candidate within 3%. "
+    "Nested name counts retain inner packages while consuming the outer multiplier once; full nested pcs/kpl counts require reconciliation with a package total. Slash portion counts do not multiply the total; consistent shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; "
     "OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. "
     "NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. "
     "Hard constraints and sale blocks cannot be overridden by fit scores."
@@ -47,8 +50,17 @@ WARNINGS = (
 
 
 class GatewayMCPServer(MCPServer):
+    async def list_tools(self):
+        tools = await super().list_tools()
+        # SDK defaults to validation schemas; Order's computed recovery guidance is
+        # emitted on the wire and must also appear in the advertised output schema.
+        for tool in tools:
+            if tool.name in {"place_order", "get_order_status", "cancel_order"}:
+                tool.output_schema = Order.model_json_schema(mode="serialization")
+        return tools
+
     def streamable_http_app(self, **kwargs):
-        if not self.keys.has_agent(self.agent_id):
+        if self.agent_id is not None and not self.keys.has_agent(self.agent_id):
             raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
         app = super().streamable_http_app(**kwargs)
         app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway)
@@ -76,14 +88,17 @@ class GatewayMCPServer(MCPServer):
                 correlation = metadata.get("correlation_id") or metadata.get("correlationId") or correlation
         token = PRESENTED_MANDATE.set(mandate)
         correlation_token = CORRELATION.set(correlation or correlation_id())
+        active_agent = self.agent_id or (PRINCIPAL.get().id if PRINCIPAL.get() else None)
+        if active_agent is None:
+            raise RuntimeError("Remote MCP requires an authenticated principal")
         policy = self.gateway.policy.get()
-        identity = policy.identities.get(self.agent_id)
+        identity = policy.identities.get(active_agent)
         org = identity.organisation_id if identity else None
         customers = policy.organisations[org].customer_ids if org in policy.organisations else (
-            policy.agents[self.agent_id].customer_ids if self.agent_id in policy.agents else [])
-        principal_token = PRINCIPAL.set(PRINCIPAL.get() or Principal(self.agent_id, kind=identity.kind if identity else "agent",
+            policy.agents[active_agent].customer_ids if active_agent in policy.agents else [])
+        principal_token = PRINCIPAL.set(PRINCIPAL.get() or Principal(active_agent, kind=identity.kind if identity else "agent",
             organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
-            credential_ref="stdio:" + self.agent_id))
+            credential_ref="stdio:" + active_agent))
         try:
             return await super().call_tool(name, arguments, context)
         except (ToolError, DomainError, ValidationError) as error:
@@ -107,10 +122,11 @@ class GatewayMCPServer(MCPServer):
 
 
 def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
-    # The agent identity is fixed when the server is launched for that agent, not self-declared per call.
-    server = GatewayMCPServer("Valio Aimo Trusted Trade Agents", instructions=(
+    # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
+    server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
+        "A2A 1.0 clients discover /.well-known/agent-card.json and use /a2a over the same authenticated core. Signed customer-scoped webhook subscriptions are managed through /v1/webhook-subscriptions; delivery status is separate from purchasing approval. "
         "Domain failures return isError=true and RFC 9457 structured content with code/message, recovery_version=1, retryable, next_action, retry_after_seconds and violations. Follow next_action, not prose. Pending orders return WAIT_FOR_APPROVAL and poll_after_seconds. "
         "Per-principal lookup/mutation/read buckets are shared with REST. RATE_LIMITED, UPSTREAM_BUSY and UPSTREAM_RATE_LIMITED require RETRY_SAME_COMMAND after the supplied interval. Valio calls share a process-wide 5/s bucket; a 429 blocks uncached calls for Retry-After seconds (default 30), returning 503 UPSTREAM_RATE_LIMITED. Cached lookups keep flowing. /health exposes upstream blocked_until and calls_last_minute; stats count upstream_rate_limits, one audit entry per block. Exact idempotent replays use read tokens. Quote and cancel accept optional idempotency_key; same principal/key and changed payload returns IDEMPOTENCY_CONFLICT. Correlation metadata: _meta.correlation_id or HTTP X-Correlation-Id. "
         "Every keyed command binds its principal, route including all target/path parameters, and payload. Exact replays recheck current authorization and scope before returning saved evidence. Policy YAML is published after the enclosing audit/command transaction commits, with durable SQLite recovery. "
@@ -132,16 +148,26 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     server.agent_id = agent_id
     server.mandate = mandate
 
+    def current_agent():
+        principal = PRINCIPAL.get()
+        return principal.id if principal is not None else agent_id
+
+    @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
+    def get_agent_context() -> AgentContext:
+        principal = PRINCIPAL.get()
+        gateway.limiter.consume(principal.id, "read")
+        return agent_context(gateway, principal, PRESENTED_MANDATE.get())
+
     @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; mandate categories filter before the result limit; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path." + MANDATE_HELP)
     def search_products(query: str, required_claims: list[str] | None = None,
                         exclude_allergens: list[str] | None = None, limit: int = 10) -> list[Product]:
-        gateway.limiter.consume(agent_id, "lookup")
+        gateway.limiter.consume(current_agent(), "lookup")
         return gateway.mandates.search(query, required_claims, exclude_allergens, limit,
-                                       token=PRESENTED_MANDATE.get(), agent_id=agent_id)
+                                       token=PRESENTED_MANDATE.get(), agent_id=current_agent())
 
     @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. " + WARNINGS + MANDATE_HELP)
     def find_offers(need: NeedSpec) -> LookupResult:
-        return gateway.find_offers(need, actor=f"agent:{agent_id}", mandate=PRESENTED_MANDATE.get())
+        return gateway.find_offers(need, actor=f"agent:{current_agent()}", mandate=PRESENTED_MANDATE.get())
 
     @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation." + MANDATE_HELP)
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
@@ -149,33 +175,39 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
                      idempotency_key: str | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id, mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
     @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order after ownership and identity checks, even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists." + MANDATE_HELP)
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
-            return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id, mandate=PRESENTED_MANDATE.get())
+            return gateway.orders.place_order(quote_id, idempotency_key, agent_id=current_agent(), mandate=PRESENTED_MANDATE.get())
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
     @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
-        return gateway.orders.get_order(order_id, agent_id)
+        return gateway.orders.get_order(order_id, current_agent())
+
+    @server.tool(description="Get this agent's portable transaction evidence manifest and authenticated artifact links, or download the ZIP at bundle_url. Includes signed quote/receipt/checkpoint, hash-only cross-customer audit links, UBL 2.1, historical JWKS, anchor metadata when present, and VERIFY.md. Verify with scripts/verify_evidence.py purchase.zip --trusted-jwks independently-trusted.json; bundled keys are not a trust root. No RPC means anchor_status=not_checked. Supplier acceptance is simulated; no supplier order was sent. Other agents' orders return ORDER_NOT_FOUND.")
+    def get_order_evidence(order_id: str) -> EvidenceManifest:
+        manifest = build_bundle(gateway, order_id, PRINCIPAL.get() or Principal(agent_id))[0]
+        return EvidenceManifest.model_validate(manifest)
 
     @server.tool(description="Export this agent's own order as UBL 2.1 XML, identical to GET /v1/orders/{id}/ubl. document=order (default) or response; response codes AP confirmed, RE rejected/cancelled/expired, CA pending. Includes sales-unit GTINs and UN/ECE unit codes. Party endpoint placeholders need data from Valio Aimo; gateway-simulated, no supplier transmission. Another agent's order is ORDER_NOT_FOUND.")
     def get_order_ubl(order_id: str, document: Literal["order", "response"] = "order") -> str:
-        return gateway.orders.get_order_ubl(order_id, document, agent_id)
+        return gateway.orders.get_order_ubl(order_id, document, current_agent())
 
-    @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
+    @server.tool(description="Cancel only a CONFIRMED order owned by the authenticated HTTP principal or the stdio --agent-id, before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
     def cancel_order(order_id: str, reason: str = "", idempotency_key: str | None = None) -> Order:
         try:
-            return gateway.orders.cancel(order_id, actor=f"agent:{agent_id}", reason=reason, command_key=idempotency_key)
+            return gateway.orders.cancel(order_id, actor=f"agent:{current_agent()}", reason=reason, command_key=idempotency_key)
         except DomainError as error:
             # Expected refusals must retain their public code instead of becoming SDK crash errors.
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
+    check_server(server)
     return server
 
 

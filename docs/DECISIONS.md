@@ -155,3 +155,29 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   and vault folders.
 - 2026-11-13 — Working model: Claude = advisor/orchestrator/reviewer, Codex = builder,
   Claude subagents = research/review/tests.
+
+## 2026-11-14 — Accounts, tenants and audiences (spec 43, builds on spec 42)
+- Decision: the gateway is multi-tenant. Buyer businesses sign in with email + password (scrypt, session cookie +
+  CSRF) and connect their own agents over MCP, REST, A2A, webhooks or a tool-calling pack. Remote MCP and A2A use
+  OAuth 2.1 per the MCP authorization specification (2026-07-28, vendored), alongside API keys shown once.
+  Each tenant's approvers approve that tenant's orders; Valio staff work as `platform_admin` across tenants.
+- Why: the challenge is about outside agents buying on behalf of real businesses; a connection must be bound to
+  exactly one account, and a buyer business owns its approvals. Gökalp chose OAuth + API keys, all connection
+  types, tenant approvers and email + password.
+
+## 2026-11-14 — Agent connections first (spec 42), accounts next (spec 43)
+- Decision: spec 42 implements the console's Connect contract (`docs/CONNECT-API.md`): operator-issued agent keys
+  (create / list / revoke) and MCP served inside the gateway at `/mcp`. It is built right away in a parallel lane and
+  pushed to main because the deployed Connect page waits for it. The multi-tenant accounts work becomes spec 43 and
+  extends the same `Connection` shape. Demo tenants: a hotel chain (the challenge's own example) and a hospital
+  kitchen (allergen-safe substitution, spec 31).
+- Why: Yusuf wrote and deployed the frontend against this contract; Gökalp chose to build it immediately.
+
+## 2026-11-14 — Agent governance inside a buyer business (spec 44)
+- Decision: every agent has an owner (new `member` role runs agents). Policy has three layers — platform (Valio),
+  tenant guardrails (tenant admin), agent policy (owner) — and the most restrictive value wins, shown with its
+  source. Tightening applies at once; loosening becomes a change request a tenant admin approves (never the
+  requester). Policies are versioned, simulated against recent history, and every order records the version it
+  ran under. Owners and admins can pause agents; alerts and a signed governance report close the loop.
+- Why: Gökalp asked for a small AI governance layer: business owners see which person runs which agent and what it
+  does, people manage their own agents' policies, admins control them.

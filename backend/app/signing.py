@@ -143,11 +143,13 @@ class SigningKeys:
         with self._lock():
             return self._rotate(self._registry(), now or datetime.now(timezone.utc))
 
-    def jwks(self):
+    def jwks(self, *, include_retired=False):
         registry = self._registry()
         now = datetime.now(timezone.utc)
+        # The historical endpoint retains verification keys indefinitely; the current
+        # quote key set preserves the spec 10 seven-day publication window.
         return {"keys": [{k: v for k, v in entry.items() if k != "publish_until"}
-                         for entry in registry["keys"] if entry["kid"] == registry["active"] or
+                         for entry in registry["keys"] if include_retired or entry["kid"] == registry["active"] or
                          datetime.fromisoformat(entry["publish_until"]) > now]}
 
     def sign_quote(self, quote):

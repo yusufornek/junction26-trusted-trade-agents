@@ -30,9 +30,11 @@ def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command)
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     organisations(gateway)
-    # Keep the matrix exhaustive when another keyed command is installed.
+    # Buyer and webhook commands have replay coverage in their feature test modules.
     assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
-                                   "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change"}
+                                   "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
+                                   "buyer.control", "buyer.revoke",
+                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}
     actor = "external"
     headers = agent_headers(actor)
     method, url, body = "POST", "", {}
@@ -344,6 +346,34 @@ def make_quote(gateway, need, agent="external", qty=1):
 def event_rows(gateway, aggregate_id):
     with gateway.db.connect() as conn:
         return [dict(row) for row in conn.execute("SELECT * FROM events WHERE aggregate_id=? ORDER BY aggregate_revision", (aggregate_id,))]
+
+
+def test_review_merged_events_keep_scoped_aggregates_and_buyer_provenance(gateway):
+    with gateway.db.connect(write=True) as conn:
+        for issuer, customers in (("issuer-h", ["1", "2"]), ("issuer-b", ["1"])):
+            audit.append(conn, "human:buyer_admin:fixture", "MANDATE_REVOKED", "Authority revoked",
+                         data={"issuer": issuer, "jti_revoked": ["shared-jti"], "customer_ids": customers,
+                               "organisation_id": "H", "source": "buyer_local"})
+        for proposal in ("proposal-one", "proposal-two"):
+            audit.append(conn, "supplier:fixture", "PROPOSAL_RECEIVED", "Proposal received",
+                         data={"proposal_id": proposal, "customer_id": "1"})
+        for action, agent in (("AGENT_SUSPENDED", "external"), ("AGENT_RESUMED", "external"),
+                              ("AUTONOMY_CHANGED", "other")):
+            audit.append(conn, "human:buyer_admin:fixture", action, "Agent authority changed",
+                         data={"agent_id": agent, "customer_ids": ["1"], "organisation_id": "H"})
+    with gateway.db.connect() as conn:
+        mandates = [dict(row) for row in conn.execute("SELECT * FROM events WHERE aggregate_type='mandate'")]
+    assert {e["aggregate_id"] for e in mandates} == {
+        "1:issuer-h:shared-jti", "2:issuer-h:shared-jti", "1:issuer-b:shared-jti"}
+    assert all(e["aggregate_revision"] == 1 for e in mandates)
+    assert all(json.loads(e["payload"])["context"]["organisation_id"] == "H" for e in mandates)
+    assert all(json.loads(e["payload"])["context"]["customer_id"] == e["customer_id"] for e in mandates)
+    assert all("customer_ids" not in json.loads(e["payload"]) for e in mandates)
+    assert all(json.loads(e["payload"])["source"] == "buyer_local" for e in mandates)
+    assert event_rows(gateway, "proposal-one")[0]["type"] == "proposal.received"
+    assert event_rows(gateway, "proposal-two")[0]["type"] == "proposal.received"
+    assert [e["type"] for e in event_rows(gateway, "external")] == ["agent.suspended", "agent.resumed"]
+    assert event_rows(gateway, "other")[0]["type"] == "autonomy.changed"
 
 
 def test_ac_1_rest_mcp_same_policy_and_single_events(gateway, need, upstream):

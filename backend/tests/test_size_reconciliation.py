@@ -253,3 +253,104 @@ def test_size_ac10_pack_count_in_name(gateway):
         product = base.model_copy(update={"name_en": name, "name_fi": name,
             "units": {"KI": multiplier}, "base_volume_l": None, "base_net_weight_kg": None})
         assert reconcile_size(product, {}, unit)[:2] == (expected, "name_parse")
+
+
+@pytest.mark.parametrize("name,expected", [("Meatpie 10/1500G", 1.5), ("Meatpie 10 / 1500 G", 1.5),
+                                         ("Pickles 400/240G", .4), ("Pickles 460 / 230 g", .46)])
+def test_review_count_total_weight(name, expected):
+    from app.catalog import name_sales_sizes
+    assert name_sales_sizes([name], "KG", 1) == [expected]
+
+
+@pytest.mark.parametrize("names,expected", [
+    (["Box 900g/60pcs", "60KPL/900G PAK"], .9),
+    (["Bag 200g / 4pcs"], .2), (["Bag 4pcs / 200g"], .2),
+    (["Box 60 KPL / 900 G", "Box 900 g / 60 pcs"], .9),
+])
+def test_review_translated_portion_totals(names, expected):
+    from app.catalog import name_sales_sizes
+    assert set(name_sales_sizes(names, "KG", 1)) == {expected}
+
+
+def test_review_complete_nested_pieces(gateway):
+    from app.catalog import name_measures
+    from app.lookup import reconcile_size
+    name = "Sausage (9x15pcs) 10,8kg/80g"
+    measures = name_measures(name, "KG")
+    assert (.08, [9, 15]) in measures
+    assert (10.8, []) in measures
+    product = gateway.catalog.get("1").model_copy(update={"name_en": name, "name_fi": name,
+        "units": {"KI": 1}, "base_volume_l": None, "base_net_weight_kg": 10.8})
+    assert reconcile_size(product, {}, "KG")[:2] == (10.8, "catalog")
+
+
+@pytest.mark.parametrize("ratio,expected,source", [(.5, .5, "name_parse"), (.51, .5, "name_parse"),
+                                                  (1., 1., "catalog")])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_review_price_confirmed_translation(gateway, need, ratio, expected, source, reverse):
+    from app.lookup import offer_for
+    names = ["Drink 500 ml", "Drink 1 l"]
+    product = gateway.catalog.get("1").model_copy(update={"name_en": names[reverse], "name_fi": names[not reverse],
+        "units": {"KI": 1}, "base_volume_l": 1})
+    request = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10.1})})
+    price = {"catalogPrice": {"value": 13}, "comparisonPrice": {"value": 13 / ratio}, "comparisonUnit": "L"}
+    offer = offer_for(product, request, price, {})
+    assert (offer.size_per_sales_unit, offer.size_source, offer.size_confirmed_by_price) == (expected, source, True)
+    assert offer.units_needed == (21 if expected == .5 else 11)
+    assert "SIZE_MISMATCH" not in {w.code for w in offer.warnings}
+
+
+@pytest.mark.parametrize("catalog,names", [(1., ["Drink 500 ml", "Drink 1 l"]),
+                                         (1., ["Drink 500 ml"]),
+                                         (5., ["Meatballs 5kg/15g"]),
+                                         (4., ["Meat balls 12g, 4kg"])])
+def test_review_catalog_anchor_without_ratio(gateway, catalog, names):
+    from app.lookup import reconcile_size
+    unit = "L" if catalog == 1 else "KG"
+    product = gateway.catalog.get("1").model_copy(update={"name_en": names[0], "name_fi": names[-1],
+        "units": {"KI": 1}, "base_volume_l": catalog if unit == "L" else None,
+        "base_net_weight_kg": catalog if unit == "KG" else None})
+    result = reconcile_size(product, {}, unit)
+    assert result[:2] == (catalog, "catalog")
+    if catalog == 1:
+        assert {w.code for w in result[3]} == {"SIZE_UNCONFIRMED", "SIZE_MISMATCH"}
+
+
+def test_review_whole_catalog_anchor_guard(actual_product_rows):
+    import hashlib
+    import json
+    from app.config import ROOT
+    from app.catalog import extract
+    from app.lookup import reconcile_size
+    fixture = json.loads((Path(__file__).parent / "fixtures/catalog_anchor_sizes.json").read_text())
+    assert fixture["catalog_sha256"] == hashlib.sha256((ROOT / "data/product_data.json.gz").read_bytes()).hexdigest()
+    assert fixture["product_count"] == len(actual_product_rows)
+    checked, failures = 0, []
+    for row in actual_product_rows:
+        for unit, expected in fixture["sizes"].get(str(row["id"]), {}).items():
+            actual = reconcile_size(extract(row, {}, {}), {}, unit)[0]
+            if actual != expected:
+                failures.append((str(row["id"]), unit, expected, actual))
+            checked += 1
+    assert checked == fixture["anchor_count"]
+    assert not failures, f"{len(failures)} anchor regressions: {failures[:20]}"
+
+
+@pytest.mark.parametrize("name,anchor,expected", [
+    ("Sausage (9x15pcs) 80g", None, []),
+    ("Sausage (9x15pcs) 80g", 10.8, [(.08, [9, 15])]),
+    ("Sausage (9x15pcs) 10.8kg/50g", 10.8, [(10.8, [])]),
+])
+def test_review_nested_pieces_require_total(name, anchor, expected):
+    from app.catalog import name_measures
+    assert name_measures(name, "KG", anchor) == expected
+
+
+def test_review_portion_chain_preserves_total_with_multiplier():
+    from app.catalog import name_sales_sizes
+    assert set(name_sales_sizes(["Sausage (9x15pcs) 10.8kg/80g"], "KG", 2)) == {21.6}
+
+
+def test_review_dimensions_are_not_pack_counts():
+    from app.catalog import name_sales_sizes
+    assert name_sales_sizes(["Tray 136x218*155*60mm 1200ml"], "L", 1) == [1.2]
