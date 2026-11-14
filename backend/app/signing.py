@@ -27,7 +27,8 @@ def unb64(value):
 def quote_payload(quote):
     """Reconstruct from the JSON resource, also used by the standalone verifier."""
     q = quote.model_dump(mode="json") if hasattr(quote, "model_dump") else quote
-    return {"id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
+    labels = {k: q[k] for k in ("supplier_id", "synthetic", "environment") if k in q and (q[k] not in ("valio", "live", False))}
+    return {**labels, "id": q["id"], "customer_id": q["customer_id"], "deliver_by": q["deliver_by"],
             "lines": [{"product_id": line["product_id"], "units": decimal_string(line["units_needed"]),
                        "unit_price": decimal_string(line["unit_price"]), "currency": line["currency"],
                        "gtin": line.get("gtin"), "provenance": line["provenance"]} for line in q["lines"]],
@@ -46,7 +47,12 @@ def quote_integrity(quote):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return decimal_string(value)
         return value
-    return immutable({k: v for k, v in q.items() if k not in {"signature", "status", "live_calls"}})
+    evidence = {k: v for k, v in q.items() if k not in {"signature", "status", "live_calls", "expiration_reason"}}
+    if "links" in evidence:
+        # Original link identifiers stay signed; read-time forward navigation is mutable.
+        evidence["links"] = {k: v for k, v in evidence["links"].items()
+                             if k not in {"quote_ids", "order_ids", "event_ids", "audit_checkpoints", "trace_ids", "task_ids"}}
+    return immutable(evidence)
 
 
 def verify_quote(quote, jwks):
@@ -72,7 +78,8 @@ def verify_quote(quote, jwks):
 
 def receipt_payload(order):
     o = order.model_dump(mode="json") if hasattr(order, "model_dump") else order
-    return {"order_id": o["id"], **{k: o[k] for k in (
+    labels = {k: o[k] for k in ("supplier_id", "synthetic", "environment", "execution") if k in o and o[k] not in ("valio", "live", False)}
+    return {**labels, "order_id": o["id"], **{k: o[k] for k in (
         "quote_id", "quote_signature_digest", "customer_id", "agent_id", "status", "currency",
         "decided_at", "decided_by_kind", "commitment")}, "total": decimal_string(o["total"])}
 

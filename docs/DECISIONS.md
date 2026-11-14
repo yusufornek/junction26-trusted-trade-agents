@@ -190,3 +190,19 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   ran under. Owners and admins can pause agents; alerts and a signed governance report close the loop.
 - Why: Gökalp asked for a small AI governance layer: business owners see which person runs which agent and what it
   does, people manage their own agents' policies, admins control them.
+
+## 2026-11-14 — Guardrail discussion (spec 45)
+- Demo: `hotel-chain-agent` stays autonomous within limits (earned track record); newly connected agents start with
+  approval. Both paths are visible side by side.
+- Approvers get a tenant-set amount threshold; above it only a tenant admin approves.
+- Sign-up asks business type and size (sites, buyers/approvers, monthly volume, meals per day); a preset per type
+  fills the guardrails (four-eyes on for groups, chains and hospital/school kitchens; off with a recorded warning
+  for a single restaurant), editable afterwards under spec 44 change control.
+- Anomaly detection in two layers: deterministic bands (median ± k·MAD, weekday-aware) always on, each anomaly with a
+  proposed fix through the exception journey; an optional forecast band from Mistral's Timestral
+  (`mistralai/Timestral-28M`, official weights, pinned package commit) behind `FORECAST_ENABLED`. The LLM only words
+  explanations. Production prerequisite: Timestral's licence is a modified MIT with a revenue threshold (> $20M
+  monthly revenue needs a commercial licence from Mistral), so a Valio deployment needs that licence or an
+  Apache-2.0 forecaster.
+- Why: the challenge scores autonomy and guardrails (20 %) and exception robustness (15 %); Gökalp wants anomalies
+  detected and turned into solutions, and personalised setup for small and large businesses.

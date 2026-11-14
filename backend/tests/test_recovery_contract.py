@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app import audit
@@ -15,6 +16,7 @@ from app.mcp_server import create_server
 from app.recovery import RECOVERY
 from conftest import OPERATOR_HEADERS, agent_headers
 from test_shared_foundation import make_quote
+from test_connect_kit import sandbox
 
 
 def expire_quote(gateway, quote):
@@ -27,18 +29,42 @@ def expire_quote(gateway, quote):
 
 def test_ac_1_all_domain_codes_have_explicit_mapping():
     codes = set()
+    dynamic_sources = {("auth.py", "check_owner", "code"),
+                       ("a2a.py", "invoke", "code")}
+    observed = set()
     for file in (Path(__file__).parents[1] / "app").glob("*.py"):
         tree = ast.parse(file.read_text())
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "DomainError":
                 code = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg == "code"), None)
                 if isinstance(code, ast.Constant):
                     codes.add(code.value)
+                elif isinstance(code, ast.Name) and file.name == "recovery.py":
+                    # Enumerate assignments feeding validation_problem, including both conditional branches.
+                    assignments = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                                   and any(isinstance(target, ast.Name) and target.id == code.id for target in n.targets)]
+                    assert assignments
+                    def literals(value):
+                        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                            return {value.value}
+                        assert isinstance(value, ast.IfExp), ast.dump(value)
+                        return literals(value.body) | literals(value.orelse)
+                    for assignment in assignments:
+                        codes.update(literals(assignment))
                 else:
-                    # Dynamic calls may only delegate an existing error/ownership code.
-                    assert isinstance(code, (ast.Name, ast.Attribute))
+                    owner = parents.get(node)
+                    while owner is not None and not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        owner = parents.get(owner)
+                    source = (file.name, owner.name if owner else None, ast.unparse(code))
+                    assert source in dynamic_sources, source
+                    observed.add(source)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "check_owner":
+                assert len(node.args) >= 3 and isinstance(node.args[2], ast.Constant)
+                codes.add(node.args[2].value)
+    assert observed == dynamic_sources
     assert codes <= RECOVERY.keys(), codes - RECOVERY.keys()
-    assert set(RECOVERY.values()) <= {(False, action) for action in ("FIX_REQUEST", "STOP", "CONTACT_ADMIN", "REFRESH_QUOTE", "REVIEW_UPDATED_EVIDENCE", "LOOKUP_REQUIRED")} | {(True, "RETRY_SAME_COMMAND")}
+    assert set(RECOVERY.values()) <= {(False, action) for action in ("FIX_REQUEST", "STOP", "CONTACT_ADMIN", "REFRESH_QUOTE", "REVIEW_UPDATED_EVIDENCE", "LOOKUP_REQUIRED", "WAIT_FOR_APPROVAL")} | {(True, "RETRY_SAME_COMMAND")}
 
 
 def test_ac_2_expired_quote_problem_matches_mcp(gateway, need, upstream):
@@ -58,12 +84,15 @@ def test_ac_2_expired_quote_problem_matches_mcp(gateway, need, upstream):
         assert result.structured_content[field] == data[field]
 
 
-def test_ac_3_timeout_is_retryable_with_interval(gateway, need, upstream, respx_mock):
+@pytest.mark.parametrize("endpoint", ["quote", "price", "availability"])
+def test_ac_3_timeout_is_retryable_with_interval(gateway, need, upstream, respx_mock, endpoint):
     quote = make_quote(gateway, need)
-    respx_mock.post("https://valio.test/api/price").mock(side_effect=httpx.ReadTimeout("private upstream detail"))
+    gateway.valio.cache.clear()
+    respx_mock.post("https://valio.test/api/" + ("price" if endpoint == "quote" else endpoint)).mock(side_effect=httpx.ReadTimeout("private upstream detail"))
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
         from conftest import quote_request
-        response = client.post("/v1/quotes", json=quote_request(need, need_ref=quote.need_ref).model_dump(mode="json"))
+        response = (client.post("/v1/quotes", json=quote_request(need, need_ref=quote.need_ref).model_dump(mode="json"))
+                    if endpoint == "quote" else client.post("/v1/offers", json=need.model_dump(mode="json")))
     assert response.status_code == 502
     data = response.json()
     assert data["retryable"] and data["next_action"] == "RETRY_SAME_COMMAND"
@@ -129,7 +158,21 @@ def test_ac_7_reference_client_recovers_using_actions_only(gateway, need, upstre
         result = await server.call_tool(name, arguments)
         if name == "place_order" and not result.is_error and not state["lost"]:
             state["lost"] = True
-            raise TimeoutError("committed but response lost")
+            # Real SDK read timeout on an in-memory connection after the purchase committed.
+            import anyio
+            from mcp import ClientSession
+            incoming_send, incoming = anyio.create_memory_object_stream(10)
+            outgoing, outgoing_receive = anyio.create_memory_object_stream(10)
+            from mcp.shared.exceptions import MCPError
+            timeout = None
+            async with incoming_send, incoming, outgoing, outgoing_receive:
+                async with ClientSession(incoming, outgoing, read_timeout_seconds=0.01) as session:
+                    try:
+                        await session.call_tool("place_order", arguments)
+                    except MCPError as error:
+                        timeout = error
+            assert timeout is not None
+            raise timeout
         return result
     async def sleep(seconds):
         waits.append(seconds)
@@ -138,3 +181,46 @@ def test_ac_7_reference_client_recovers_using_actions_only(gateway, need, upstre
     assert waits == [3, 1]
     with gateway.db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_review_reference_buyer_recovers_supplier_timeout(sandbox, need, upstream, monkeypatch):
+    gateway = sandbox
+    dispatch = gateway.orders.dispatch_pending
+    # Exercise the buyer's retry deterministically; worker recovery has its own regression.
+    monkeypatch.setattr(gateway.orders, "dispatch_pending", lambda order_id=None: dispatch(order_id) if order_id else None)
+    from test_supplier_adapters import ASGIBridge
+    from test_connect_kit import reference
+    from test_mcp_server_card import connected
+    from suppliers.nordfood import create_app as supplier_app
+    app = supplier_app()
+    adapter = gateway.suppliers.get("nordfood")
+    bridge = ASGIBridge(app)
+    bridge.lose_ack = True
+    adapter.client.close()
+    adapter.client = httpx.Client(transport=bridge)
+    request = need.model_copy(update={"supplier_id": "nordfood", "quantity": need.quantity.model_copy(update={"value": 2, "unit": "SALES_UNIT"})})
+    waits = []
+    async def run():
+        async with connected(gateway) as (session, http, _):
+            async def sleep(seconds):
+                assert seconds > 0
+                waits.append(seconds)
+            async def jwks():
+                return (await http.get("/.well-known/jwks.json")).json()
+            result = await reference.run_session(session, "full_stock", jwks, need=request.model_dump(mode="json"), sleep=sleep)
+            assert result["status"] == "CONFIRMED"
+            assert waits and len(app.state.orders) == 1
+    asyncio.run(run())
+
+
+def test_review_pending_interval_survives_stored_loading(gateway, need, upstream):
+    from app.models import Order
+    order = gateway.orders.place_order(make_quote(gateway, need).id, "pending-interval")
+    value = order.model_dump(mode="json")
+    value["status"] = "PENDING_EXECUTION"
+    # Old rows lack guidance; new rows include the computed property.
+    for include in [False, True]:
+        if include:
+            value["retry_after_seconds"] = 1
+        loaded = Order.model_validate(value)
+        assert loaded.model_dump(mode="json")["retry_after_seconds"] > 0

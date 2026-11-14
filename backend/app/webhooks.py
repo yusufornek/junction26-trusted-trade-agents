@@ -3,6 +3,7 @@
 The outbox is the queue; delivery records are immutable payload snapshots. DNS is
 checked on every attempt and the connection is pinned to that checked address.
 """
+from .telemetry import traced, metric
 import base64
 import html
 import ipaddress
@@ -31,10 +32,13 @@ from . import audit
 from .auth import Principal, require_reviewer, resolve_principal
 from .canonical import canonical_json
 from .db import DomainError
+from .models import InputTexts
 from .signing import unb64
 
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
-                    "order.cancelled", "order.expired", "mandate.revoked", "proposal.received"]
+                    "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
+                    "suggestion.shown", "suggestion.prepared", "suggestion.made_recurring",
+                    "suggestion.dismissed", "suggestion.snoozed"]
 EVENT_TYPES = set(EventType.__args__)
 
 
@@ -56,7 +60,7 @@ def notification_headers(config):
 class SubscriptionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str = Field(min_length=1, max_length=2048)
-    customer_ids: list[str] = Field(min_length=1)
+    customer_ids: InputTexts = Field(min_length=1)
     event_types: list[EventType] = Field(min_length=1)
     audience: Literal["agent", "approver"] = "agent"
 
@@ -64,7 +68,7 @@ class SubscriptionCreate(BaseModel):
 class SubscriptionPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str | None = Field(default=None, min_length=1, max_length=2048)
-    customer_ids: list[str] | None = Field(default=None, min_length=1)
+    customer_ids: InputTexts | None = Field(default=None, min_length=1)
     event_types: list[EventType] | None = Field(default=None, min_length=1)
     audience: Literal["agent", "approver"] | None = None
     enabled: bool | None = None
@@ -140,7 +144,9 @@ class Webhooks:
         except (ValueError, OSError):
             raise DomainError("WEBHOOK_DESTINATION_UNSAFE", "Use a public HTTPS destination (sandbox permits localhost).", 422) from None
 
+    @traced("webhook.deliver")
     def _post(self, url, body, event_id, extra_headers=None, *, challenge=False):
+        metric("delivery.attempts")
         deadline = self.clock() + self.response_deadline
         parsed, address = self._destination(url)
         original = httpx.URL(url)
@@ -324,6 +330,10 @@ class Webhooks:
                                            (sub["id"], row["event_id"])).fetchone()
                 event["payload"] = json.loads(event["payload"])
                 matches = event["customer_id"] in sub["customer_ids"] and self.event_type(event) in sub["event_types"]
+                if event["type"] == "proposal.received":
+                    prefs = self.gateway.proposals.preferences(event["customer_id"])
+                    matches = (matches and "webhook" in event["payload"].get("channels", [])
+                               and "webhook" in prefs.channels and bool(prefs.categories or prefs.interests))
                 if sub.get("task_id"):
                     matches = event["customer_id"] in sub["customer_ids"] and self.gateway.a2a.event_matches(event, sub["task_id"])
                 if not sub.get("operator"):

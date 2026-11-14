@@ -12,6 +12,12 @@ from app.api import create_app
 from conftest import OPERATOR_HEADERS, TEST_KEYS, agent_headers
 from app.mcp_server import create_server
 
+EXPECTED_MCP_TOOLS = {"search_products", "find_offers", "create_quote", "place_order",
+    "get_order_status", "get_order_receipt", "cancel_order", "get_order_ubl", "get_order_evidence",
+    "find_basket_offers", "get_agent_context", "list_proposals", "get_replenishment_suggestions", "prepare_suggestion",
+    "create_recurring_from_suggestion", "list_recurring_orders", "create_recurring_order",
+    "run_recurring_order_now", "pause_recurring_order", "apply_anomaly_fix"}
+
 
 @pytest.mark.parametrize("registered_agents", [("hotel-agent",)], indirect=True)
 def test_full_rest_flow_1000_l(gateway, need, upstream):
@@ -60,7 +66,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 
     async def run():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {"search_products", "find_offers", "find_basket_offers", "create_quote", "place_order", "get_order_status", "cancel_order", "get_order_ubl", "get_order_evidence", "get_agent_context"}
+        assert {t.name for t in tools} == EXPECTED_MCP_TOOLS
         assert all(t.input_schema and t.output_schema for t in tools)
         result = await server.call_tool("search_products", {"query": "milk", "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"]})
         assert not result.is_error
@@ -91,9 +97,7 @@ def test_streamable_http_transport(gateway):
         assert initialized.json()["result"]["serverInfo"]["name"] == "fi.valioaimo/trusted-trade-agents"
         listed = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert listed.status_code == 200
-        tools = listed.json()["result"]["tools"]
-        assert len(tools) == 10
-        assert {"find_basket_offers", "get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools}
+        assert {tool["name"] for tool in listed.json()["result"]["tools"]} == EXPECTED_MCP_TOOLS
 
 
 def test_stdio_transport(gateway):
@@ -117,7 +121,8 @@ finally:
     def rpc(message):
         process.stdin.write(json.dumps(message) + "\n")
         process.stdin.flush()
-        ready, _, _ = select.select([process.stdout], [], [], 5)
+        # Import and schema startup can exceed five seconds on a loaded runner.
+        ready, _, _ = select.select([process.stdout], [], [], 15)
         assert ready, "MCP stdio did not respond"
         return json.loads(process.stdout.readline())
 
@@ -128,8 +133,7 @@ finally:
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        assert len(tools["result"]["tools"]) == 10
-        assert {"find_basket_offers", "get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools["result"]["tools"]}
+        assert {tool["name"] for tool in tools["result"]["tools"]} == EXPECTED_MCP_TOOLS
         search = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "search_products", "arguments": {"query": "milk", "limit": 2}}})
         assert not search["result"].get("isError", False)
@@ -146,8 +150,9 @@ finally:
 
 def test_contract_all_routes_have_response_schema():
     schema = create_app(keys=TEST_KEYS).openapi()
-    assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/basket-lookups", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
-                                    "/v1/orders", "/v1/orders/{id}", "/v1/approvals", "/v1/approvals/{order_id}/approve",
+    assert set(schema["paths"]) == {"/v1/quotes/{quote_id}/anomaly-fixes/{fix_id}", "/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
+                                    "/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/approvals", "/v1/approvals/{order_id}/approve",
+
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",
                                     "/v1/orders/{order_id}/timeline", "/.well-known/jwks.json", "/v1/audit/head",
@@ -162,7 +167,17 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/buyer/approvals", "/v1/buyer/activity", "/v1/buyer/agents/{agent_id}/suspend",
                                     "/v1/buyer/agents/{agent_id}/resume", "/v1/buyer/mandates/{jti}/revoke",
                                     "/v1/buyer/approvals/{order_id}/approve", "/v1/buyer/approvals/{order_id}/reject",
-                                    "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connections", "/v1/connections/{connection_id}",
+                                    "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt",
+                                    "/v1/basket-lookups", "/v1/basket-lookups/{lookup_id}",
+                                    "/v1/recurring-orders", "/v1/recurring-orders/{id}/runs",
+                                    "/v1/recurring-orders/{id}/baseline", "/v1/recurring-orders/{id}/run-now",
+                                    "/v1/buyer/proposal-preferences", "/v1/proposals", "/v1/proposals/inbox",
+                                    "/v1/proposals/campaigns/{id}", "/v1/proposals/{id}/accept",
+                                    "/v1/proposals/{id}/decline", "/v1/proposals/{id}/mute",
+                                    "/v1/suggestions", "/v1/suggestions/{id}/prepare",
+                                    "/v1/suggestions/{id}/make-recurring", "/v1/suggestions/{id}/dismiss",
+                                    "/v1/suggestions/{id}/snooze", "/v1/buyer/memory-preferences",
+                                    "/v1/buyer/memory", "/v1/connections", "/v1/connections/{connection_id}",
                                     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
                                     "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token",
                                     "/oauth/register", "/v1/oauth/clients", "/v1/oauth/requests/{request_id}",
@@ -177,3 +192,14 @@ def test_contract_all_routes_have_response_schema():
     assert "preferences" in models["NeedSpec"]["properties"]
     assert {"lines", "plan_ref"} <= models["QuoteRequest"]["properties"].keys()
     assert "authoritative" in models["FulfilmentPlan"]["properties"]["policy_preview"]["description"]
+
+
+def test_recurring_scheduler_lifecycle_without_mcp(gateway, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gateway.recurring, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(gateway.recurring, "close", lambda: calls.append("close"))
+    with TestClient(create_app(gateway, serve_mcp=False)) as client:
+        assert calls == ["start"]
+        assert client.get("/health").status_code == 200
+        assert client.post("/mcp").status_code == 404
+    assert calls == ["start", "close"]

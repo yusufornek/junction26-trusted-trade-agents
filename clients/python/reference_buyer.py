@@ -13,6 +13,9 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
+from mcp.shared.exceptions import MCPError
+from mcp_types import CONNECTION_CLOSED, REQUEST_TIMEOUT
+
 
 class RecoveryRequired(Exception):
     def __init__(self, payload):
@@ -32,12 +35,16 @@ class ReferenceBuyer:
             try:
                 response = await self.call_tool(command, arguments)
                 payload = response.structured_content
+            except MCPError as error:
+                if error.code not in {REQUEST_TIMEOUT, CONNECTION_CLOSED}:
+                    raise
+                payload = {"next_action": "RETRY_SAME_COMMAND", "retry_after_seconds": 1}
             except (TimeoutError, ConnectionError):
                 # A lost response is ambiguous, so retry the exact same command/key.
                 payload = {"next_action": "RETRY_SAME_COMMAND", "retry_after_seconds": 1}
             action = payload.get("next_action")
             if action == "RETRY_SAME_COMMAND":
-                await self.sleep(payload["retry_after_seconds"])
+                await self.sleep(payload.get("retry_after_seconds", 1))
                 continue
             if action == "LOOKUP_REQUIRED":
                 command, arguments = "find_offers", {"need": need}
@@ -73,7 +80,7 @@ class ReferenceBuyer:
 
 
 def verify_receipt(order, jwks, *, customer_id, agent_id):
-    """Offline Ed25519 detached-JWS verification, with caller and simulation binding."""
+    """Offline Ed25519 detached-JWS verification, including supplier/environment evidence."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     def unb64(value):
         return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
@@ -81,9 +88,11 @@ def verify_receipt(order, jwks, *, customer_id, agent_id):
     header = json.loads(unb64(protected))
     if detached or set(header) != {"alg", "kid"} or header["alg"] != "EdDSA":
         raise ValueError("Unsupported receipt JWS")
-    if order["customer_id"] != customer_id or order["agent_id"] != agent_id or order["commitment"] != "gateway-simulated":
+    if order["customer_id"] != customer_id or order["agent_id"] != agent_id or order["commitment"] not in {"gateway-simulated", "supplier-acknowledged"}:
         raise ValueError("Receipt scope or commitment mismatch")
-    payload = {"order_id": order["id"], **{k: order[k] for k in (
+    labels = {k: order[k] for k in ("supplier_id", "synthetic", "environment", "execution")
+              if k in order and order[k] not in ("valio", "live", False)}
+    payload = {**labels, "order_id": order["id"], **{k: order[k] for k in (
         "quote_id", "quote_signature_digest", "customer_id", "agent_id", "status", "currency",
         "decided_at", "decided_by_kind", "commitment")},
         "total": format(Decimal(str(order["total"])).normalize(), "f")}
@@ -110,10 +119,12 @@ async def run_session(session, scenario, get_jwks, *, need=None, sleep=asyncio.s
     if context["environment"] != "sandbox":
         raise ValueError("Reference scenarios require an issued sandbox credential and sandbox endpoint")
     customer = context["customer_ids"][0]
+    today = (datetime.fromisoformat(context["fixture_clock"]).date() if context.get("fixture_clock")
+             else datetime.now(ZoneInfo("Europe/Helsinki")).date())
     need = need or {"customer_id": customer, "intent": "lactose-free milk", "search_terms": ["milk"],
         "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"],
-        "quantity": {"value": 10 if scenario == "full_stock" else 400, "unit": "L"},
-        "deliver_by": (datetime.now(ZoneInfo("Europe/Helsinki")).date() + timedelta(days=3)).isoformat()}
+        "quantity": {"value": 10 if scenario == "full_stock" else 1000, "unit": "L"},
+        "deliver_by": (today + timedelta(days=3)).isoformat()}
     order = await ReferenceBuyer(session.call_tool, sleep=sleep).purchase(need, scenario=scenario)
     verify_receipt(order, await get_jwks(), customer_id=customer, agent_id=context["principal"]["id"])
     if order["status"] != "CONFIRMED":

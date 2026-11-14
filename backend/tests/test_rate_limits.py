@@ -98,38 +98,58 @@ def test_ac_6_policy_limit_effective_next_request_and_audited(gateway, need, ups
     set_limits(gateway, "lookup", capacity=3)
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 200
+        before = max(e.id for e in gateway.audit())
         set_limits(gateway, "lookup", capacity=1, refill=0.001)
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 200
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 429
-    changes = [e.data["diff"] for e in gateway.audit() if e.action == "POLICY_UPDATED"]
-    assert any("rate_limits.lookup.capacity" in diff for diff in changes)
+    changes = [e.data["diff"] for e in gateway.audit() if e.action == "POLICY_UPDATED" and e.id > before]
+    assert any(diff.get("rate_limits.lookup.capacity") == {"before": 3, "after": 1} for diff in changes)
 
 
 def test_ac_7_bounded_global_supplier_concurrency(gateway, need, upstream, monkeypatch):
     from app import limits
-    guard = UpstreamGuard(concurrency=1, queue_size=1, wait_seconds=2)
+    guard = UpstreamGuard(concurrency=1, queue_size=1, wait_seconds=30)  # generous: the queued call must outlive the test client start-up under load
     monkeypatch.setattr(limits, "SUPPLIER_GUARD", guard)
-    entered, release = threading.Event(), threading.Event()
-    def held():
+    entered, release, queued, second_entered = (threading.Event() for _ in range(4))
+    active, maximum = [0], [0]
+    lock = threading.Lock()
+    original_acquire = guard.admitted.acquire
+    def acquire(*args, **kwargs):
+        result = original_acquire(*args, **kwargs)
+        if result and entered.is_set():
+            queued.set()
+        return result
+    monkeypatch.setattr(guard.admitted, "acquire", acquire)
+    def held(second=False):
         with guard.slot():
-            entered.set()
-            assert release.wait(5)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(held)
+            with lock:
+                active[0] += 1
+                maximum[0] = max(maximum[0], active[0])
+            (second_entered if second else entered).set()
+            try:
+                assert release.wait(5)
+            finally:
+                with lock:
+                    active[0] -= 1
+    # Start the application before the guard's two-second queue clock begins.
+    # Schema/MCP startup must not release the queued slot before the request.
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(held)
         assert entered.wait(5)
-        # Occupy the queue admission without releasing the active supplier call.
-        assert guard.admitted.acquire(blocking=False)
+        second = pool.submit(held, True)
         try:
-            with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
-                refused = client.post("/v1/offers", json=need.model_dump(mode="json"))
+            assert queued.wait(5)
+            assert not second_entered.wait(0.1), "queued supplier call entered while active slot was occupied"
+            refused = client.post("/v1/offers", json=need.model_dump(mode="json"))
             assert refused.status_code == 503
             assert refused.json()["code"] == "UPSTREAM_BUSY" and refused.json()["retryable"]
             assert refused.json()["next_action"] == "RETRY_SAME_COMMAND"
             assert not upstream.price_calls and not upstream.availability_calls
         finally:
-            guard.admitted.release()
             release.set()
-        future.result()
+        first.result()
+        second.result()
+    assert second_entered.is_set() and maximum[0] == 1
 
 
 def test_unknown_credentials_limited_before_authentication(gateway, monkeypatch):
@@ -145,3 +165,89 @@ def test_unknown_credentials_limited_before_authentication(gateway, monkeypatch)
         assert client.get("/v1/me", headers={"Authorization": "Bearer unknown"}).status_code == 401
         assert client.get("/v1/me", headers={"Authorization": "Bearer unknown"}).status_code == 429
     assert len(calls) == 1
+
+
+def test_review_legacy_replay_charged_as_read(gateway, need, upstream):
+    quote = make_quote(gateway, need)
+    # Simulate a pre-command-boundary record, including the original raw key format.
+    order = gateway.orders.place_order.__wrapped__(quote.id, 'legacy')
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE orders SET idempotency_key='legacy' WHERE id=?", (order.id,))
+        assert conn.execute('SELECT count(*) FROM commands').fetchone()[0] == 0
+    set_limits(gateway, 'mutation', refill=0.001)
+    gateway.limiter.clock = lambda: 1000
+    gateway.limiter.buckets.pop(('external', 'mutation'), None)
+    gateway.limiter.consume('external', 'mutation')
+    with TestClient(create_app(gateway), headers=agent_headers('external')) as client:
+        result = client.post('/v1/orders', json={'quote_id': quote.id}, headers={'Idempotency-Key': 'legacy'})
+    assert result.status_code == 200, result.text
+    assert result.json()['id'] == order.id
+    assert gateway.limiter.snapshot('external')['mutation']['remaining'] == 0
+
+
+def test_review_inbox_costs_one_read(gateway, need, upstream):
+    gateway.orders.place_order(make_quote(gateway, need, qty=200).id, 'inbox')
+    set_limits(gateway, 'read', refill=0.001)
+    gateway.limiter.clock = lambda: 1000
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        result = client.get('/v1/approvals')
+        assert result.status_code == 200 and len(result.json()) == 1, result.text
+        # Standalone quote reads still consume their own token.
+        quote_id = result.json()[0]['quote']['id']
+        assert client.get(f'/v1/quotes/{quote_id}').status_code == 429
+
+
+@pytest.mark.parametrize('transport', ['rest-agent', 'rest-operator', 'mcp'])
+def test_review_known_credentials_survive_source_exhaustion(gateway, transport):
+    from app.limits import SourceLimiter
+    gateway.source_limiter = SourceLimiter(capacity=1, refill_per_minute=0.001, clock=lambda: 1000)
+    if transport == 'mcp':
+        app = create_server(gateway, 'external').streamable_http_app(stateless_http=True, json_response=True)
+        url = '/mcp'
+        valid = agent_headers('external')
+    else:
+        app, url = create_app(gateway), '/v1/me'
+        valid = OPERATOR_HEADERS if transport == 'rest-operator' else agent_headers('external')
+    with TestClient(app) as client:
+        assert client.get(url, headers={'Authorization': 'Bearer invalid'}).status_code == 401
+        assert client.get(url, headers={'Authorization': 'Bearer invalid'}).status_code == 429
+        response = client.get(url, headers={**valid, 'Accept': 'application/json, text/event-stream'})
+        assert response.status_code not in (401, 429), response.text
+
+
+def test_review_conflicting_commands_pay_read_cost(gateway, need, upstream):
+    quote = make_quote(gateway, need)
+    gateway.orders.place_order(quote.id, 'conflict-cost')
+    set_limits(gateway, 'read', refill=0.001)
+    gateway.limiter.clock = lambda: 1000
+    with TestClient(create_app(gateway), headers=agent_headers('external')) as client:
+        for status in (409, 429):
+            result = client.post('/v1/orders', json={'quote_id': 'changed'}, headers={'Idempotency-Key': 'conflict-cost'})
+            assert result.status_code == status, result.text
+    assert any(e.action == 'RATE_LIMITED' and e.data['category'] == 'read' for e in gateway.audit())
+
+
+def test_review_stored_lookup_costs_one_read(gateway, need, upstream):
+    result = gateway.find_offers(need)
+    gateway.limiter.clock = lambda: 1000
+    set_limits(gateway, "read", capacity=1, refill=.001)
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.get("/v1/lookups/" + result.lookup_id)
+    assert response.status_code == 200
+    assert gateway.limiter.snapshot("external")["read"]["remaining"] == 0
+
+
+@pytest.mark.parametrize("supplier", ["valio", "nordfood"])
+def test_review_every_supplier_obeys_guard(gateway, need, upstream, monkeypatch, supplier):
+    from app import limits
+    guard = UpstreamGuard(concurrency=1, queue_size=0)
+    monkeypatch.setattr(limits, "SUPPLIER_GUARD", guard)
+    from test_supplier_adapters import ASGIBridge
+    from suppliers.nordfood import create_app as supplier_app
+    import httpx
+    adapter = gateway.suppliers.get("nordfood")
+    adapter.client.close()
+    adapter.client = httpx.Client(transport=ASGIBridge(supplier_app()))
+    with guard.slot(), TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.post("/v1/offers", json=need.model_copy(update={"supplier_id": supplier}).model_dump(mode="json"))
+    assert response.status_code == 503 and response.json()["code"] == "UPSTREAM_BUSY"

@@ -1,4 +1,4 @@
-"""Verify a saved gateway-simulated receipt without connecting to the gateway."""
+"""Verify a saved simulated or supplier-acknowledged receipt offline."""
 import argparse
 import json
 from pathlib import Path
@@ -12,6 +12,7 @@ if __name__ == "__main__":
     parser.add_argument("--customer", required=True)
     parser.add_argument("--agent", required=True)
     args = parser.parse_args()
-    verify_receipt(json.loads(args.order.read_text()), json.loads(args.jwks.read_text()),
+    order = json.loads(args.order.read_text())
+    verify_receipt(order, json.loads(args.jwks.read_text()),
                    customer_id=args.customer, agent_id=args.agent)
-    print("Receipt verified (gateway-simulated)")
+    print("Receipt verified (" + order["commitment"] + ")")

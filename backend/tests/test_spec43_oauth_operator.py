@@ -17,6 +17,7 @@ from app import oauth
 from app.api import create_app
 from app.models import PolicyUpdateRequest
 from conftest import OPERATOR_HEADERS, OPERATOR_TOKEN, agent_headers
+from test_sandbox import sandbox_gateway, sandbox_need, SANDBOX_ADMIN, ADMIN_HEADERS
 from test_spec42_agent_connections import rpc
 from test_verifiable_mandate import buyer as vc_issuer, issue as issue_mandate, AGENT
 
@@ -89,11 +90,11 @@ def call(client, token, name, arguments):
 
 
 @pytest.mark.parametrize("registration", ["cimd", "dcr", "pre_registered"])
-def test_ac_6_discovery_consent_and_full_purchase_as_agent(gateway, need, upstream, respx_mock, registration):
-    service = gateway
+def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gateway, monkeypatch, registration):
+    service = sandbox_gateway
     service.settings.public_url = ORIGIN
     service.oauth.resolver = lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
-    with TestClient(create_app(service), base_url=ORIGIN) as client:
+    with respx.mock(assert_all_called=False) as mock, TestClient(create_app(service), base_url=ORIGIN) as client:
         discovery = rpc(client, {})
         assert discovery.status_code == 401
         assert f'resource_metadata="{ORIGIN}/.well-known/oauth-protected-resource/mcp"' in discovery.headers["www-authenticate"]
@@ -105,25 +106,25 @@ def test_ac_6_discovery_consent_and_full_purchase_as_agent(gateway, need, upstre
         assert server["issuer"] == ORIGIN and server["code_challenge_methods_supported"] == ["S256"]
         assert server["authorization_response_iss_parameter_supported"] and server["client_id_metadata_document_supported"]
         if registration == "cimd":
-            route = respx_mock.get("https://93.184.216.34/oauth/metadata.json", headers={"host": "client.test"}).mock(
+            route = mock.get("https://93.184.216.34/oauth/metadata.json", headers={"host": "client.test"}).mock(
                 return_value=httpx.Response(200, json={"client_id": CIMD, **metadata()}))
             client_id = CIMD
         elif registration == "pre_registered":
-            registered = client.post("/v1/oauth/clients", headers=OPERATOR_HEADERS, json={"client_id": "pre-client", **metadata()})
+            registered = client.post("/v1/oauth/clients", headers=ADMIN_HEADERS, json={"client_id": "pre-client", **metadata()})
             assert registered.status_code == 201
             client_id = registered.json()["client_id"]
         else:
             client_id = register(client)["client_id"]
-        body, decision, request_id = grant(client, client_id, headers=OPERATOR_HEADERS)
+        body, decision, request_id = grant(client, client_id, headers=ADMIN_HEADERS)
         if registration == "cimd":
             assert route.called
             request = route.calls[0].request
             assert "authorization" not in request.headers
         connection_id = decision["connection_id"]
-        view = client.get("/v1/oauth/requests/" + request_id, headers=OPERATOR_HEADERS).json()
+        view = client.get("/v1/oauth/requests/" + request_id, headers=ADMIN_HEADERS).json()
         assert view["client_name"] == "ChatGPT" and view["redirect_host"] == "chatgpt.com"
         assert "code" not in view and "state" not in view and view["status"] == "approved"
-        connection = client.get("/v1/connections", headers=OPERATOR_HEADERS).json()[0]
+        connection = client.get("/v1/connections", headers=ADMIN_HEADERS).json()[0]
         assert connection["credential_kind"] == "oauth" and connection["client"] == "chatgpt"
         assert connection["connection_id"] == connection_id and "key" not in connection
         mandate = service.policy.get().agents["oauth-agent"]
@@ -136,14 +137,14 @@ def test_ac_6_discovery_consent_and_full_purchase_as_agent(gateway, need, upstre
                 **({"MCP-Method": "tools/list"} if revision == "2026-07-28" else {})}, "tools/list", params)
             assert tools.status_code == 200, (revision, tools.text)
             assert "find_offers" in {v["name"] for v in tools.json()["result"]["tools"]}
-        purchase_need = need.model_dump(mode="json")
-        lookup = call(client, token, "find_offers", {"need": purchase_need})
+        need = sandbox_need(service).model_dump(mode="json")
+        lookup = call(client, token, "find_offers", {"need": need})
         assert lookup["agent_id"] == "oauth-agent"
-        quote = call(client, token, "create_quote", {"customer_id": "1", "deliver_by": purchase_need["deliver_by"],
+        quote = call(client, token, "create_quote", {"customer_id": "1", "deliver_by": need["deliver_by"],
             "plan_ref": {"lookup_id": lookup["lookup_id"], "plan_index": 0}})
         order = call(client, token, "place_order", {"quote_id": quote["id"], "idempotency_key": "oauth-purchase"})
         assert order["status"] == "PENDING_APPROVAL" and order["agent_id"] == "oauth-agent"
-        approved = client.post(f'/v1/approvals/{order["id"]}/approve', headers=OPERATOR_HEADERS,
+        approved = client.post(f'/v1/approvals/{order["id"]}/approve', headers=ADMIN_HEADERS,
             json={"approver": "Operator", "evidence_revision": order["evidence_revision"]})
         assert approved.status_code == 200, approved.text
         assert call(client, token, "get_order_status", {"order_id": order["id"]})["status"] == "CONFIRMED"
@@ -151,7 +152,7 @@ def test_ac_6_discovery_consent_and_full_purchase_as_agent(gateway, need, upstre
             assert any(e.action == action and e.actor == "agent:oauth-agent" for e in service.audit())
         assert client.get("/v1/me", headers=bearer(token)).status_code == 401
         assert client.post("/a2a", headers=bearer(token), json={}).status_code == 401
-        assert client.delete("/v1/connections/" + connection_id, headers=OPERATOR_HEADERS).status_code == 200
+        assert client.delete("/v1/connections/" + connection_id, headers=ADMIN_HEADERS).status_code == 200
         assert rpc(client, bearer(token)).status_code == 401
         assert refresh(client, client_id, token).status_code == 400
         assert service.policy.get().agents["oauth-agent"] == mandate

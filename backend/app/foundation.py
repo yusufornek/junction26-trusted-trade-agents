@@ -6,6 +6,7 @@ from importlib.metadata import version
 from uuid import uuid4
 
 from .canonical import canonical_json
+from .runtime import ENVIRONMENT
 
 CORRELATION = ContextVar("correlation_id", default=None)
 CAUSATION = ContextVar("causation_id", default=None)
@@ -24,12 +25,43 @@ def trace_id():
     return format(context.trace_id, "032x") if context.is_valid else TRACE.get() or uuid4().hex
 
 
-def procurement_context(policy, customer_id, request_ref, constraints, mandate=None):
-    document = policy._editable(policy.get())
-    return {"customer_id": customer_id, "supplier_id": "valio-aimo", "request_ref": request_ref,
+def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio", snapshot=None):
+    from .runtime import ENVIRONMENT
+    document = policy._editable(snapshot if snapshot is not None else policy.get())
+    return {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
-            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": "live"}
+            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": ENVIRONMENT.get()}
+
+
+def forward_links(conn, *, request_id=None, quote_id=None, agent_id=None):
+    """Derive mutable navigation from existing rows, including pre-foundation records."""
+    if quote_id:
+        quote_ids = [quote_id]
+    else:
+        quote_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM quotes WHERE json_extract(data,'$.need_ref')=? "
+            "AND (? IS NULL OR json_extract(data,'$.agent_id')=?)", (request_id, agent_id, agent_id))]
+    order_ids = []
+    for reference in quote_ids:
+        order_ids.extend(r[0] for r in conn.execute(
+            "SELECT id FROM orders WHERE quote_id=? AND (? IS NULL OR json_extract(data,'$.agent_id')=?)",
+            (reference, agent_id, agent_id)))
+    event_ids, checkpoints, traces, tasks = [], [], [], []
+    aggregates = ([request_id] if request_id else []) + quote_ids + order_ids
+    for reference in aggregates:
+        for row in conn.execute("SELECT id,audit_id,json_extract(payload,'$.links.trace_id'),json_extract(payload,'$.links.task_id') FROM events WHERE aggregate_id=? ORDER BY aggregate_revision", (reference,)):
+            event_ids.append(row[0])
+            checkpoints.append(row[1])
+            if row[3] and row[3] not in tasks:
+                tasks.append(row[3])
+            if row[2] and row[2] not in traces:
+                traces.append(row[2])
+    if not order_ids and not tasks:
+        return {}  # Preserve original response shape until forward navigation exists.
+    return {"task_ids": tasks, "quote_ids": quote_ids, "order_ids": order_ids, "event_ids": event_ids,
+            "audit_checkpoints": checkpoints, "trace_ids": traces}
+
 
 
 EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "QUOTE_ACCEPTED": "quote.accepted",
@@ -39,8 +71,16 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "EVIDENCE_CHANGED": "order.evidence_changed", "POLICY_UPDATED": "policy.updated",
                  "MANDATE_REVOKED": "mandate.revoked"}
 EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
+EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
+EVENT_ACTIONS.update(AGENT_ANOMALY_ALERT="agent.anomaly_alert", ANOMALY_FIX_APPLIED="quote.anomaly_fixed",
+                     ANOMALY_DETECTED="quote.anomaly_detected")
+EVENT_ACTIONS.update(RECURRING_CREATED="recurring.created", RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
+                     RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
+                     PROPOSAL_ACTION="proposal.action")
+EVENT_ACTIONS.update({"SUGGESTION_" + action.upper(): "suggestion." + action
+                      for action in ("shown", "prepared", "made_recurring", "dismissed", "snoozed")})
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
@@ -51,15 +91,24 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
                 emit(conn, action, actor, ts, audit_id,
                      {**scoped_data, "customer_id": customer, "mandate_id": mandate, "jti_revoked": [mandate]})
         return
+    if action in {"PLACE_ORDER", "APPROVE", "CANCEL", "SUPPLIER_ACKNOWLEDGED"} and order_id:
+        from .purchase_memory import remember_order
+        remember_order(conn, order_id)
     event_type = EVENT_ACTIONS.get(action)
     if event_type is None:
         return
+    if action == "APPROVE" and order_id:
+        row = conn.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+        if row and row[0] != "CONFIRMED":
+            event_type = "order.execution_pending" if row[0] == "PENDING_EXECUTION" else "order.rejected"
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
     if kind == "mandate":
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":
-        aggregate_id = data.get("proposal_id", aggregate_id)
+        aggregate_id = data.get("id") or data.get("proposal_id", aggregate_id)
+    if kind in {"recurring", "suggestion"}:
+        aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
     if aggregate_id is None:
@@ -68,6 +117,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
+    if kind in {"proposal", "recurring", "suggestion"}:
+        context = {"customer_id": data["customer_id"], "environment": data.get("environment", ENVIRONMENT.get())}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}
@@ -80,11 +131,13 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
              "order_id": order_id, "event_id": event_id, "audit_checkpoint": audit_id,
              "receipt_id": order_id if obj.get("receipt") else None,
              "trace_id": TRACE.get() or obj.get("links", {}).get("trace_id") or trace_id(), "task_id": TASK.get()}
+    if placement := obj.get("links", {}).get("placement_span"):
+        links["placement_span"] = placement
     payload = {**data, "links": links, "status": obj.get("status"), "context": context,
                "evidence_revision": obj.get("evidence_revision")}
     conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
-                  context.get("environment", "live"), kind, aggregate_id, revision, actor, ts,
+                  context.get("environment", ENVIRONMENT.get()), kind, aggregate_id, revision, actor, ts,
                   correlation, CAUSATION.get(), json.dumps(payload), audit_id))
     conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
                  "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))
@@ -135,6 +188,10 @@ class Outbox:
         if not self.lock.acquire(blocking=False):
             return
         try:
+            consumers = tuple(self.handlers)
+            if not consumers:
+                return
+            placeholders = ",".join("?" for _ in consumers)
             with self.db.connect() as conn:
                 consumers = tuple(self.handlers)
                 if not consumers:
@@ -166,10 +223,11 @@ class Outbox:
 
 def manifest():
     from mcp_types import LATEST_PROTOCOL_VERSION
-    return {"specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
+    from .telemetry import STACK_VERSIONS
+    return {"observability": STACK_VERSIONS, "specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
             "mcp_server_card": {"status": "draft; implemented", "draft_commit": "526201bbc80231daa40ffcdecfc9da4e54e5dc93"},
             "a2a": {"version": "1.0", "status": "implemented"}, "ubl": "2.1",
             "vc_data_model": "2.0", "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037",
             "problem_details": "RFC 9457", "standard_webhooks": {"commit": "36afae792227eae8a182a7a1a5711dbdc08a4334", "status": "implemented", "signature": "v1a Ed25519"}},
-            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx", "a2a-sdk")},
+            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx", "a2a-sdk", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http", "opentelemetry-instrumentation-fastapi", "opentelemetry-instrumentation-httpx")},
             "limiter_scope": "in-process, single instance", "recovery_version": 1}

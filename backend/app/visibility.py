@@ -16,6 +16,9 @@ def event_visible(gateway, conn, event, principal):
     if organisation and organisation != principal.organisation_id:
         return False
     kind = event["aggregate_type"]
+    if kind in {"proposal", "suggestion"}:
+        # These are customer-wide buyer resources, not unowned historical purchases.
+        return principal.kind in {"agent", "buyer_user"}
     table = {"order": "orders", "quote": "quotes", "request": "lookups", "task": "a2a_tasks"}.get(kind)
     owners = set()
     if table:

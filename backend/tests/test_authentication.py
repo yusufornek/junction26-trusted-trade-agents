@@ -214,6 +214,41 @@ def test_ac_5_customer_scope_before_upstream(client, gateway, need, upstream):
     assert event.data["live_calls"] == {"price": 0, "availability": 0}
 
 
+@pytest.mark.parametrize("transport", ["rest", "mcp"])
+def test_review_denied_quote_replay_matches_fresh_failure_audit(client, gateway, need, upstream, transport):
+    """Spec 02 R-10 / spec 19 R-4: scope refusals have identical audit data."""
+    lookup = gateway.find_offers(need, "agent:agent-a")
+    body = quote_request(need, qty=1, need_ref=lookup.lookup_id).model_dump(mode="json")
+
+    def call(key):
+        if transport == "rest":
+            result = client.post("/v1/quotes", json=body,
+                headers={**agent_headers("agent-a"), "Idempotency-Key": key})
+            return result.status_code, result.json()
+        result = asyncio.run(create_server(gateway, "agent-a").call_tool("create_quote", {**body, "idempotency_key": key}))
+        return (403 if result.is_error else 200), result.structured_content
+
+    assert call("quote-audit")[0] == 200
+    policy = gateway.policy._editable(gateway.policy.get())
+    policy["agents"]["agent-a"]["customer_ids"] = ["2"]
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Scope removed"))
+    calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+    audits = []
+    for key in ("fresh-refusal", "quote-audit"):
+        before = len(gateway.audit())
+        status, result = call(key)
+        assert (status, result["code"]) == (403, "CUSTOMER_NOT_IN_MANDATE")
+        events = gateway.audit()[before:]
+        assert [event.action for event in events] == ["CREATE_QUOTE_FAILED"]
+        assert events[0].actor == "agent:agent-a"
+        # Each request retains its own trace/correlation; compare domain evidence.
+        assert events[0].data["trace_id"] and events[0].data["correlation_id"]
+        audits.append({key: value for key, value in events[0].data.items()
+                       if key not in {"trace_id", "correlation_id"}})
+    assert audits[0] == audits[1]
+    assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
+
+
 def test_ac_6_mandate_required(client, gateway, need, upstream):
     lookup, quote, _ = objects(gateway, need, "agent-a")
     # Revoke after a quote exists to exercise placement without an ownership mismatch.

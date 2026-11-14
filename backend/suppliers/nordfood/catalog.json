@@ -1,0 +1,1322 @@
+[
+  {
+    "article": "NF-001",
+    "barcode": "6408430000487",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 1",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 2,
+    "net_per_case": 12,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-002",
+    "barcode": "0731000000027",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 2",
+    "bottles_per_case": 6,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 7.2,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-003",
+    "barcode": "0731000000034",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 3",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 17,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-004",
+    "barcode": "0731000000041",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 4",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 18,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-005",
+    "barcode": "0731000000058",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 5",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 19,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-006",
+    "barcode": "0731000000065",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 6",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 20,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-007",
+    "barcode": "0731000000072",
+    "description": "Synthetic Nordfood Milk lactose free 1 L 7",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 21,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-008",
+    "barcode": "0731000000089",
+    "description": "Synthetic Nordfood Swedish beverage 1 L",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 22,
+    "currency": "SEK",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-009",
+    "barcode": "0731000000096",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 9",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 23,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-010",
+    "barcode": "0731000000102",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 10",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 24,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-011",
+    "barcode": "0731000000119",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 11",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 25,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-012",
+    "barcode": "0731000000126",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 12",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 26,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-013",
+    "barcode": "0731000000133",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 13",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 27,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-014",
+    "barcode": "0731000000140",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 14",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 28,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-015",
+    "barcode": "0731000000157",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 15",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 29,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-016",
+    "barcode": "0731000000164",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 16",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 30,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-017",
+    "barcode": "0731000000171",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 17",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 31,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-018",
+    "barcode": "0731000000188",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 18",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 32,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-019",
+    "barcode": "0731000000195",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 19",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 33,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-020",
+    "barcode": "0731000000201",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 20",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 34,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-021",
+    "barcode": "0731000000218",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 21",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 35,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-022",
+    "barcode": "0731000000225",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 22",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 36,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-023",
+    "barcode": "0731000000232",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 23",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 37,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-024",
+    "barcode": "0731000000249",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 24",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 38,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-025",
+    "barcode": "0731000000256",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 25",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 39,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-026",
+    "barcode": "0731000000263",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 26",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 40,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-027",
+    "barcode": "0731000000270",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 27",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 41,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-028",
+    "barcode": "0731000000287",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 28",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 42,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-029",
+    "barcode": "0731000000294",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 29",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 43,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-030",
+    "barcode": "0731000000300",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 30",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 44,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-031",
+    "barcode": "0731000000317",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 31",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 45,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-032",
+    "barcode": "0731000000324",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 32",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 46,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-033",
+    "barcode": "0731000000331",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 33",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 47,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-034",
+    "barcode": "0731000000348",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 34",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 48,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-035",
+    "barcode": "0731000000355",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 35",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 49,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-036",
+    "barcode": "0731000000362",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 36",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 50,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-037",
+    "barcode": "0731000000379",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 37",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 51,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-038",
+    "barcode": "0731000000386",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 38",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 52,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-039",
+    "barcode": "0731000000393",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 39",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 53,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-040",
+    "barcode": "0731000000409",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 40",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 54,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-041",
+    "barcode": "0731000000416",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 41",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 55,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-042",
+    "barcode": "0731000000423",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 42",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 56,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-043",
+    "barcode": "0731000000430",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 43",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 57,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-044",
+    "barcode": "0731000000447",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 44",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 58,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-045",
+    "barcode": "0731000000454",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 45",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 59,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-046",
+    "barcode": "0731000000461",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 46",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 60,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-047",
+    "barcode": "0731000000478",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 47",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 61,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-048",
+    "barcode": "0731000000485",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 48",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 62,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-049",
+    "barcode": "0731000000492",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 49",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 63,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-050",
+    "barcode": "0731000000508",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 50",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 64,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-051",
+    "barcode": "0731000000515",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 51",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 65,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-052",
+    "barcode": "0731000000522",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 52",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 66,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-053",
+    "barcode": "0731000000539",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 53",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 67,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-054",
+    "barcode": "0731000000546",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 54",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 68,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-055",
+    "barcode": "0731000000553",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 55",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 69,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-056",
+    "barcode": "0731000000560",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 56",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 70,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-057",
+    "barcode": "0731000000577",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 57",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 71,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-058",
+    "barcode": "0731000000584",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 58",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 72,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-059",
+    "barcode": "0731000000591",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 59",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 73,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  },
+  {
+    "article": "NF-060",
+    "barcode": "0731000000607",
+    "description": "Synthetic Nordfood Pantry beverage 1 L 60",
+    "bottles_per_case": 12,
+    "litres_per_bottle": 1,
+    "minimum_cases": 1,
+    "net_per_case": 74,
+    "currency": "EUR",
+    "claims": [
+      "FREE_FROM_LACTOSE"
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
+  }
+]

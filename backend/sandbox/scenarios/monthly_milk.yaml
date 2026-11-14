@@ -1,0 +1,13 @@
+version: 1
+purchase_history: monthly_milk_history.json
+customers:
+  '1':
+    required_claims: [FREE_FROM_LACTOSE]
+organisations:
+  hotel-chain:
+    customer_ids: ['1']
+identities:
+  sandbox-agent:
+    organisation_id: hotel-chain
+products:
+  - {id: milk, name: 'Lactose-free milk 1 l', category: '10400', size: 1, unit: L, price: 1.01, stock: 100000, claims: [FREE_FROM_LACTOSE], allergens: {AM: CONTAINS}}

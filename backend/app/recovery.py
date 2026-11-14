@@ -3,12 +3,14 @@ from .foundation import correlation_id
 
 # Explicit inventory: adding a domain code requires choosing an authorised recovery.
 RECOVERY = {}
+RECOVERY.update(AGENT_PAUSED=(False, "CONTACT_ADMIN"), FIX_NOT_FOUND=(False, "REFRESH_QUOTE"))
 for _code in ("APPROVER_REQUIRED", "IDEMPOTENCY_REQUIRED", "INVALID_CHECKPOINT", "INVALID_LIMIT",
               "INVALID_LOT_SIZE", "INVALID_PLAN_INDEX", "INVALID_SEARCH_MODE", "NEED_MISMATCH",
-              "UNKNOWN_CODE", "UNSUPPORTED_CURRENCY", "VALIDATION_ERROR"):
+              "UNKNOWN_CODE", "UNSUPPORTED_CURRENCY", "VALIDATION_ERROR", "FUNCTION_UNIT_MISMATCH",
+              "BASKET_LINE_MISMATCH"):
     RECOVERY[_code] = (False, "FIX_REQUEST")
 for _code in ("AGENT_NOT_REGISTERED", "CUSTOMER_NOT_IN_MANDATE", "MANDATE_INVALID", "OPERATOR_REQUIRED",
-              "UNAUTHENTICATED", "REVOCATION_INVALID", "BUYER_ADMIN_REQUIRED", "AGENT_SUSPENDED"):
+              "UNAUTHENTICATED", "REVOCATION_INVALID", "BUYER_ADMIN_REQUIRED", "AGENT_SUSPENDED", "BUYER_APPROVER_REQUIRED"):
     RECOVERY[_code] = (False, "CONTACT_ADMIN")
 for _code in ("CUTOFF_PASSED", "EXPIRED_ORDER", "HARD_CONSTRAINT_VIOLATION", "IDEMPOTENCY_CONFLICT",
               "INVALID_TRANSITION", "LOOKUP_NOT_FOUND", "NEED_NOT_FOUND", "ORDER_NOT_FOUND",
@@ -18,14 +20,31 @@ for _code in ("CUTOFF_PASSED", "EXPIRED_ORDER", "HARD_CONSTRAINT_VIOLATION", "ID
 for _code in ("VALIO_UNAVAILABLE", "AVAILABILITY_ERROR", "PRICE_ERROR", "UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED", "RATE_LIMITED"):
     RECOVERY[_code] = (True, "RETRY_SAME_COMMAND")
 RECOVERY.update(NEED_REF_REQUIRED=(False, "LOOKUP_REQUIRED"), EXPIRED_QUOTE=(False, "REFRESH_QUOTE"),
+                NOT_DECIDED=(False, "WAIT_FOR_APPROVAL"),
+                BASKET_NOT_FOUND=(False, "LOOKUP_REQUIRED"), EMPTY_BASKET=(False, "LOOKUP_REQUIRED"),
+                BASKET_STOCK_UNAVAILABLE=(False, "REVIEW_UPDATED_EVIDENCE"),
                 EVIDENCE_CHANGED=(False, "REVIEW_UPDATED_EVIDENCE"))
 RECOVERY.update(WEBHOOK_DESTINATION_UNSAFE=(False, "FIX_REQUEST"), WEBHOOK_CHALLENGE_FAILED=(False, "FIX_REQUEST"),
                 WEBHOOK_NOT_FOUND=(False, "STOP"), TASK_NOT_FOUND=(False, "STOP"))
+for _code in ("INVALID_OCCURRENCE", "APPROVED_TEMPLATE_REQUIRED", "INVALID_PRICE_EVIDENCE", "CUSTOMER_REQUIRED"):
+    RECOVERY[_code] = (False, "FIX_REQUEST")
+for _code in ("RECURRING_NOT_AUTHORIZED", "RECURRING_FORBIDDEN", "BUYER_REQUIRED", "CUSTOMER_FORBIDDEN",
+              "SUPPLIER_REQUIRED", "BUYER_AGENT_REQUIRED"):
+    RECOVERY[_code] = (False, "CONTACT_ADMIN")
+for _code in ("RECURRING_NOT_FOUND", "PROPOSAL_NOT_FOUND", "CAMPAIGN_NOT_FOUND", "PROPOSAL_EXPIRED", "SUGGESTION_NOT_FOUND"):
+    RECOVERY[_code] = (False, "STOP")
+for _code in ("NO_RECURRING_OFFER", "PROPOSAL_NO_MATCH"):
+    RECOVERY[_code] = (False, "LOOKUP_REQUIRED")
+RECOVERY.update(UNKNOWN_SUPPLIER=(False, "FIX_REQUEST"), SUPPLIER_NOT_IN_MANDATE=(False, "CONTACT_ADMIN"),
+                SUPPLIER_UNAVAILABLE=(True, "RETRY_SAME_COMMAND"), SANDBOX_ONLY=(False, "FIX_REQUEST"),
+                UNKNOWN_SCENARIO=(False, "FIX_REQUEST"))
 RECOVERY.update(OAUTH_REQUEST_NOT_FOUND=(False, "STOP"), OAUTH_REQUEST_EXPIRED=(False, "CONTACT_ADMIN"),
                 OAUTH_REQUEST_DECIDED=(False, "STOP"), OAUTH_CONSENT_CSRF=(False, "CONTACT_ADMIN"))
 
 
+
 def problem(error, instance=None):
+    from .runtime import ENVIRONMENT
     retryable, action = RECOVERY[error.code]
     data = error.data if error.status != 401 else {}
     result = {"type": f"urn:trusted-trade:problem:{error.code.lower().replace('_', '-')}",
@@ -36,6 +55,8 @@ def problem(error, instance=None):
               "retry_after_seconds": data.get("retry_after_seconds", 1 if retryable else None),
               "correlation_id": correlation_id(), "violations": data.get("violations", []), "data": data}
     # References are deliberately omitted unless a transport has verified read access.
+    if ENVIRONMENT.get() == "sandbox":
+        result["environment"] = "sandbox"
     return result
 
 

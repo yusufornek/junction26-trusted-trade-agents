@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Request, Query
+from pydantic import BaseModel, Field
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -21,6 +22,7 @@ from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, E
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
 from .models import AgentTrackRecord, AutonomyChange, AutonomyChangeResult
+from .models import BasketLookupRequest, BasketLookupResult
 from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
@@ -36,30 +38,44 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
+    from .telemetry import Telemetry
+    telemetry = gateway.telemetry if gateway else Telemetry(settings.environment)
 
     @asynccontextmanager
     async def lifespan(app):
-        service = gateway or Gateway(settings)
+        service = gateway or Gateway(settings, telemetry=telemetry)
         app.state.gateway = service
         stop = asyncio.Event()
         async def deliver_notifications():
             while not stop.is_set():
-                await run_in_threadpool(service.outbox.dispatch)
-                await run_in_threadpool(service.webhooks.dispatch)
+                def deliver():
+                    with service.activate():
+                        try:
+                            service.orders.dispatch_pending()
+                        except Exception:
+                            logger.exception("Supplier execution awaits durable retry")
+                        service.outbox.dispatch()
+                        service.webhooks.dispatch()
+                await run_in_threadpool(deliver)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
                     pass
             # A request can commit just after the worker's last poll. Drain local
             # consumers once before shutdown; signed HTTP deliveries remain durable.
-            await run_in_threadpool(service.outbox.dispatch)
+            def flush_outbox():
+                with service.activate():
+                    service.outbox.dispatch()
+            await run_in_threadpool(flush_outbox)
         if not serve_mcp:
             worker = asyncio.create_task(deliver_notifications())
+            service.recurring.start()
             try:
                 yield
             finally:
                 stop.set()
                 await worker
+                service.recurring.close()
                 if gateway is None:
                     service.close()
             return
@@ -75,20 +91,26 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
+        from .discovery import check_server
+        check_server(app.state.mcp_server, http_app=mcp_http,
+                     mounted_paths=[route.path for route in app.router.routes if isinstance(getattr(route, "endpoint", None), MCPTransport)])
         worker = asyncio.create_task(deliver_notifications())
+        service.recurring.start()
         try:
             async with mcp_http.router.lifespan_context(mcp_http):
                 yield
         finally:
             stop.set()
             await worker
+            service.recurring.close()
             if gateway is None:
                 service.close()
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
-                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. Commitments are gateway-simulated.",
+                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. supplier_id defaults to valio (gateway-simulated); nordfood is synthetic and supplier-acknowledged after submit. Sandbox deployments use isolated credentials, storage and fixture time; every response carries X-Environment.",
+
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
-                             for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
+                             for code in (401, 403, 404, 409, 422, 423, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
     from .connections import router as connections_router
@@ -101,19 +123,32 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     install_routes(app)
     from .buyer import router as buyer_router
     from .evidence import router as evidence_router
+    from .recurring import router as recurring_router
+    from .proposals import router as proposals_router
     app.include_router(buyer_router)
-    from .baskets import router as baskets_router
-    app.include_router(baskets_router)
     app.include_router(evidence_router)
     install_discovery(app)
     from .developer_docs import install_routes as install_developer_docs
     install_developer_docs(app)
     if serve_mcp:
         app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+    app.include_router(recurring_router)
+    app.include_router(proposals_router)
+    from .purchase_memory import router as memory_router
+    app.include_router(memory_router)
+    from .anomaly_service import router as anomalies_router
+    app.include_router(anomalies_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")
     async def correlation(request, call_next):
+        from .runtime import CLOCK, ENVIRONMENT, TRANSPORT
+        service = getattr(app.state, "gateway", None)
+        clock_token = CLOCK.set(service.sandbox.now if service and service.sandbox else None)
+        environment_token = ENVIRONMENT.set(settings.environment)
+        from .telemetry import CURRENT
+        telemetry_token = CURRENT.set(telemetry)
+        transport_token = TRANSPORT.set("a2a" if request.url.path == "/a2a" else "mcp" if request.url.path.startswith("/mcp") else "rest")
         token = CORRELATION.set(request.headers.get("X-Correlation-Id") or correlation_id())
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
@@ -124,6 +159,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 except DomainError as error:
                     response = await domain_error(request, error)
                     response.headers["X-Correlation-Id"] = CORRELATION.get()
+                    response.headers["X-Environment"] = settings.environment
                     return response
             public = request.url.path.startswith("/.well-known/oauth-") or request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
@@ -132,10 +168,15 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 response.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type, If-None-Match", "Access-Control-Expose-Headers": "ETag"})
             response.headers["X-Correlation-Id"] = CORRELATION.get()
+            response.headers["X-Environment"] = settings.environment
             return response
         finally:
             PRINCIPAL.reset(principal_token)
             CORRELATION.reset(token)
+            CLOCK.reset(clock_token)
+            ENVIRONMENT.reset(environment_token)
+            TRANSPORT.reset(transport_token)
+            CURRENT.reset(telemetry_token)
 
     @app.exception_handler(DomainError)
     async def domain_error(request, error):
@@ -159,6 +200,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         try:
             response = await domain_error(request, DomainError("INTERNAL_ERROR", "The request could not be completed", 500))
             response.headers["X-Correlation-Id"] = CORRELATION.get()
+            response.headers["X-Environment"] = settings.environment
             return response
         finally:
             CORRELATION.reset(token)
@@ -211,6 +253,26 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     def meta():
         return manifest()
 
+    @app.get("/v1/suppliers", response_model=list[dict], summary="Supplier capabilities; Nordfood is synthetic")
+    def suppliers(request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).suppliers.list()
+
+    class SandboxReset(BaseModel):
+        scenario: str = Field(max_length=200)
+
+    def sandbox_admin(request: Request, principal: Principal = Depends(require_operator)):
+        if svc(request).sandbox is None:
+            raise DomainError("SANDBOX_ONLY", "Use the isolated sandbox deployment and its admin credential", 403)
+        return svc(request).sandbox
+
+    @app.get("/v1/sandbox/scenarios", response_model=list[dict], summary="Versioned synthetic scenarios; sandbox admin only")
+    def sandbox_scenarios(workspace=Depends(sandbox_admin)):
+        return workspace.list()
+
+    @app.post("/v1/sandbox/reset", response_model=dict, summary="Expire outstanding sandbox promises with reason sandbox_reset, reset fixture state")
+    def sandbox_reset(body: SandboxReset, workspace=Depends(sandbox_admin)):
+        return workspace.reset(body.scenario)
+
     @app.get("/v1/me", response_model=AgentContext, summary="Caller scope, mandate, effective limits, budget, environment and operations")
     def me(request: Request, principal: Principal = Depends(resolve_principal),
            agent_mandate: Annotated[str | None, Header()] = None):
@@ -228,7 +290,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
               description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key binds this target and payload, rechecks current target scope, and replays the first result without changing authority again; changed target or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows the enclosing command commit. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
                         principal: Principal = Depends(resolve_principal),
-                        idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                        idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).autonomy.change(agent_id, body, principal, command_key=idempotency_key)
 
     def audit_cancel_validation(request, raw_body, message):
@@ -270,17 +332,30 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
 
     @app.post("/v1/mandates/revocations", response_model=dict[str, str | list[str]], summary="Record a buyer-signed mandate revocation")
     def revoke_mandate(body: RevocationRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                      idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).mandates.revoke(body.jwt, "human:operator" if principal.operator else f"agent:{principal.agent_id}", command_key=idempotency_key)
 
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
-    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
-        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate)
+    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
+               idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
+        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate, command_key=idempotency_key)
 
-    @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
+    @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref",
+             description="Authorized stored lookup with forward links to related quotes, orders, events, audit checkpoints and traces, including historical records.")
     def get_lookup(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).lookup.get(lookup_id, principal.owner)
+
+    @app.post("/v1/basket-lookups", response_model=BasketLookupResult,
+              summary="Scale an agent-supplied recipe and price one deduplicated basket in two supplier batches")
+    def basket_offers(body: BasketLookupRequest, request: Request, principal: Principal = Depends(resolve_principal),
+                      mandate=Depends(presented_mandate),
+                      idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
+        return svc(request).baskets.find_basket_offers(body, actor=f"agent:{principal.agent_id}", mandate=mandate, command_key=idempotency_key)
+
+    @app.get("/v1/basket-lookups/{lookup_id}", response_model=BasketLookupResult, summary="Read this agent's stored recipe basket")
+    def get_basket(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).baskets.get(lookup_id, principal.owner)
 
     @app.get("/v1/policy", response_model=PolicyResource, summary="Read effective procurement policy and known warning codes")
     def get_policy(request: Request, principal: Principal = Depends(require_operator)):
@@ -288,12 +363,12 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
 
     @app.put("/v1/policy", response_model=PolicyResource, summary="Persist policy for subsequent operations and audit changed fields")
     def put_policy(body: PolicyUpdateRequest, request: Request, principal: Principal = Depends(require_operator),
-                   idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                   idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).policy.update(body, actor="human:operator", command_key=idempotency_key)
 
     @app.post("/v1/policy/reset", response_model=PolicyResource, summary="Restore committed policy defaults with a human audit event")
     def reset_policy(body: PolicyResetRequest, request: Request, principal: Principal = Depends(require_operator),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).policy.update(body, reset=True, actor="human:operator", command_key=idempotency_key)
 
     @app.get("/v1/stats", response_model=Stats, summary="Operator metrics from persisted evidence; no upstream calls")
@@ -303,23 +378,27 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return read_stats(service.db, since, registered_agents=set(service.policy.get().agents), mandates=service.mandates)
 
     @app.get("/v1/products/{id}", response_model=Product)
-    def product(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).catalog.get(id)
+    def product(id: str, request: Request, supplier_id: str = Query(default="valio"), principal: Principal = Depends(resolve_principal)):
+        svc(request).policy.check_supplier(principal.id, supplier_id)
+        return svc(request).suppliers.get(supplier_id).catalog.get(id)
 
     @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
-              description="Lookup, quote and order require a customer mandate and enforce agent ownership.")
+              description="Lookup, quote and order require a customer mandate and enforce agent ownership. "
+                          "Cached replays recheck current ownership and mandate scope; refusals record CREATE_QUOTE_FAILED without repeating quote creation.")
     def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate, command_key=idempotency_key)
 
-    @app.get("/v1/quotes/{id}", response_model=Quote)
+    @app.get("/v1/quotes/{id}", response_model=Quote,
+             description="Authorized quote evidence with derived forward navigation in links (quote_ids, order_ids, event_ids, audit_checkpoints, trace_ids). These mutable lists are excluded from signed evidence; original link identifiers stay authenticated.")
     def get_quote(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_quote(id, principal.owner)
 
     @app.post("/v1/orders", response_model=Order, summary="Accept an unexpired quote under an agent mandate",
               description="Ordering requires a mandate: unregistered agents receive 403 AGENT_NOT_REGISTERED, "
                           "with no order or reservation created. Existing idempotent orders are returned on retry. "
-                          "Registered agents are subject to policy and may require human approval.")
+                          "Registered agents are subject to policy and may require human approval. "
+                          "Refused replay checks record PLACE_ORDER_FAILED without repeating a purchase.")
     def place_order(body: OrderRequest, request: Request,
                     idempotency_key: Annotated[str, Header(min_length=1, description="Retry key: same quote and agent returns the same order.")],
                     principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
@@ -329,9 +408,16 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     def orders(request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.list_orders(agent_id=principal.owner)
 
-    @app.get("/v1/orders/{id}", response_model=Order)
+    @app.get("/v1/orders/{id}", response_model=Order,
+             description="Owned order state with durable order_revision, approval_reason, expires_at and next_action. Pending: WAIT_FOR_APPROVAL with poll_after_seconds; confirmed: null; rejected/cancelled: STOP; expired: LOOKUP_REQUIRED. Rejection retains the approver comment. Polling never places another order.")
     def get_order(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_order(id, principal.owner)
+
+    @app.get("/v1/orders/{id}/receipt", response_model=Order,
+             summary="Get a decided order and its detached signed receipt",
+             description="Same owned order resource and spec 10 receipt signature, verifiable with receipt_payload and independently trusted gateway JWKS. Pending orders return 409 NOT_DECIDED with WAIT_FOR_APPROVAL and a polling interval in data. Receipt id is the order id; commitment is gateway-simulated.")
+    def get_order_receipt(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).orders.get_order_receipt(id, principal.owner)
 
     @app.get("/v1/orders/{id}/ubl", response_class=Response,
              summary="Export UBL 2.1 Order or OrderResponse; agent owns order, operator sees all",
@@ -350,7 +436,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
     def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None, mandate=Depends(presented_mandate)):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None, mandate=Depends(presented_mandate)):
         return svc(request).orders.cancel(order_id,
             actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
             stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key)
@@ -359,7 +445,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
         service = svc(request)
         from .autonomy import buyer_scope
-        return [ApprovalItem(order=o, quote=service.orders.get_quote(o.quote_id)) for o in service.orders.list_orders(True)
+        return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id)) for o in service.orders.list_orders(True)
                 if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order,
@@ -368,16 +454,17 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
-                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope.")
+                          "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope. "
+                          "Refused replay checks record APPROVE_FAILED without repeating approval.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
-                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
             actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
     @app.post("/v1/approvals/{order_id}/reject", response_model=Order,
               description="Reject a pending order. Optional Idempotency-Key replays the first result; cached responses recheck the reviewer's current organisation and customer scope.")
     def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
-               idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+               idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.reject(order_id, body.approver, body.comment,
             actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
@@ -415,6 +502,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 if not isinstance(operation, dict):
                     continue
                 for status, response in operation.get("responses", {}).items():
+                    response.setdefault("headers", {})["X-Environment"] = {"schema": {"type": "string", "enum": ["live", "sandbox"]}, "description": "Isolated gateway environment; sandbox observations are synthetic fixtures."}
                     response.setdefault("headers", {})["X-Correlation-Id"] = {"schema": {"type": "string"}, "description": "Accepted or generated request correlation identifier."}
                     if status.isdigit() and int(status) >= 400:
                         response.get("content", {}).pop("application/json", None)
@@ -422,6 +510,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                         response.setdefault("headers", {})["Retry-After"] = {"schema": {"type": "integer", "minimum": 1}, "description": "Seconds before retrying the same command, when retryable."}
         return schema
     app.openapi = problem_openapi
+    telemetry.instrument_app(app)
     return app
 
 

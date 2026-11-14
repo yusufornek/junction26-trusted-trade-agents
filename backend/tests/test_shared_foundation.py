@@ -18,6 +18,46 @@ from test_verifiable_mandate import buyer as vc_issuer, issue
 KEYED_WRITES = ("create_quote", "place_order", "cancel", "approve", "reject", "update", "reset", "revoke", "change", "find_offers")
 
 
+@pytest.mark.parametrize("model,body", [
+    ("NeedSpec", {"intent": "x" * 5000}),
+    ("NeedSpec", {"preferences": {"labels": ["x" * 5000]}}),
+    ("CancelRequest", {"cancelled_by": "Buyer", "reason": "x" * 5000}),
+    ("ApprovalRequest", {"approver": "Buyer", "comment": "x" * 5000}),
+    ("ConnectionRequest", {"agent_id": "test-agent", "client": "rest", "customer_ids": ["1"], "label": "x" * 5000}),
+    ("CustomerConstraints", {"note": "x" * 5000}),
+])
+def test_review_request_text_fields_are_bounded(need, model, body):
+    from app import models
+    from pydantic import ValidationError
+    data = {**need.model_dump(mode="json"), **body} if model == "NeedSpec" else body
+    with pytest.raises(ValidationError) as error:
+        getattr(models, model).model_validate(data)
+    assert any(e["type"] == "string_too_long" for e in error.value.errors())
+
+
+def test_review_failure_audit_bounds_entire_request(gateway):
+    with gateway.db.connect(write=True) as conn:
+        audit.append(conn, "agent:external", "LOOKUP_FAILED", "Refused", data={"inputs": {
+            "intent": "x" * 100000, "notes": ["n" * 5000] * 1000}, "error": "RATE_LIMITED"})
+    event = gateway.audit()[-1]
+    assert len(json.dumps(event.data)) < 20000
+    assert "truncated" in json.dumps(event.data).lower()
+    assert audit.verify(gateway.db)["valid"]
+
+
+def test_review_historical_long_lookup_and_quote_keep_loading(gateway, need, upstream):
+    from app.models import LookupResult
+    lookup = gateway.find_offers(need)
+    with gateway.db.connect(write=True) as conn:
+        data = json.loads(conn.execute("SELECT data FROM lookups WHERE id=?", (lookup.lookup_id,)).fetchone()[0])
+        data["need"]["intent"] = "historical " * 1000
+        conn.execute("UPDATE lookups SET data=? WHERE id=?", (json.dumps(data), lookup.lookup_id))
+    loaded = gateway.lookup.get(lookup.lookup_id, "external")
+    assert len(loaded.need.intent) > 4000
+    quote = gateway.orders.create_quote(quote_request(need, need_ref=lookup.lookup_id))
+    assert gateway.orders.get_quote(quote.id).id == quote.id
+
+
 @pytest.mark.parametrize("old_field_present", [False, True])
 @pytest.mark.parametrize("version", [None, 2])
 def test_review_policy_default_fingerprint_upgrade(gateway, old_field_present, version):
@@ -121,11 +161,13 @@ def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command)
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     organisations(gateway)
-    # Buyer and webhook commands have replay coverage in their feature test modules.
+    # Buyer, webhook and basket commands have replay coverage in their feature test modules.
     assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                                    "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
-                                   "buyer.control", "buyer.revoke",
-                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"}
+                                   "buyer.control", "buyer.revoke", "baskets.find_basket_offers",
+                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create",
+                                   "recurring.create", "recurring.baseline", "recurring.run", "recurring.pause",
+                                   "proposals.submit", "proposals.action", "proposals.put_preferences", "memory.act", "memory.put_preferences"}
     actor = "external"
     headers = agent_headers(actor)
     method, url, body = "POST", "", {}
@@ -267,6 +309,69 @@ def test_review_policy_file_waits_for_outer_commit(gateway, monkeypatch, section
     with gateway.db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM commands WHERE key='file-review'").fetchone()[0] == 0
     assert staged or failure == "audit"
+
+
+@pytest.mark.parametrize("phase", ["publication", "connection"])
+def test_review_policy_cleanup_cannot_fail_committed_write(gateway, monkeypatch, phase, caplog):
+    import fcntl
+    from pathlib import Path
+    from app import db as db_module
+
+    body = gateway.policy._editable(gateway.policy.get())
+    body["approval"]["max_auto_total_eur"] = 17
+    original_connect = sqlite3.connect
+    connections = []
+
+    class TrackedConnection(sqlite3.Connection):
+        pass
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs, factory=TrackedConnection)
+        connections.append(conn)
+        return conn
+
+    original_unlink = Path.unlink
+    failures = []
+
+    def unlink(path, *args, **kwargs):
+        if path.name.startswith(".policy-"):
+            failures.append(path)
+            raise PermissionError("Policy directory denies cleanup")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", connect)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    if phase == "publication":
+        def replace(*args):
+            raise PermissionError("Policy directory denies publication")
+        monkeypatch.setattr(db_module.os, "replace", replace)
+    else:
+        # Leave the staged file for connection cleanup, as deferred recovery does.
+        monkeypatch.setattr(gateway.db, "_publish_files", lambda *args: None)
+
+    error, result = None, None
+    try:
+        result = gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"), command_key="cleanup-review")
+    except PermissionError as caught:
+        error = caught  # Retain the traceback, so GC cannot accidentally release resources.
+    assert failures
+    assert error is None, f"Cleanup changed the committed response: {error}"
+    assert result.approval.max_auto_total_eur == 17
+    for conn in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
+    with gateway.db.path.with_suffix(".db.writer.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    assert gateway.db._connection.get() is None and gateway.db._staged_files.get() is None
+    assert "cleanup" in caplog.text.lower()
+    monkeypatch.undo()
+    assert gateway.policy.get().approval.max_auto_total_eur == 17
+    assert [event.action for event in gateway.audit()] == ["POLICY_UPDATED"]
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM commands WHERE key='cleanup-review'").fetchone()[0] == 1
+    assert gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Operator"),
+                                 command_key="cleanup-review").approval.max_auto_total_eur == 17
 
 
 def test_review_policy_projection_recovers_after_commit(gateway, monkeypatch, tmp_path):
@@ -478,6 +583,14 @@ def test_ac_1_rest_mcp_same_policy_and_single_events(gateway, need, upstream):
     first, second = response.json(), remote.structured_content
     for field in ("status", "policy", "total", "currency", "customer_id", "agent_id", "commitment", "next_action"):
         assert first[field] == second[field]
+    def business_evidence(value):
+        if isinstance(value, dict):
+            return {k: business_evidence(v) for k, v in value.items() if k != "fetched_at"}
+        if isinstance(value, list):
+            return [business_evidence(v) for v in value]
+        return value
+    assert business_evidence(first["lines"]) == business_evidence(second["lines"])
+    assert first["warnings"] == second["warnings"]
     assert {k: v for k, v in first["context"].items() if k != "request_ref"} == {k: v for k, v in second["context"].items() if k != "request_ref"}
     for order in (first, second):
         entries = [e for e in gateway.audit(order_id=order["id"]) if e.action == "PLACE_ORDER"]
@@ -564,7 +677,9 @@ def test_ac_6_public_pinned_compatibility_manifest(gateway):
     assert response.status_code == 200
     manifest = response.json()
     assert set(manifest["specifications"]) == {"openapi", "mcp_protocol", "mcp_server_card", "a2a", "ubl", "vc_data_model", "vc_securing_profile", "problem_details", "standard_webhooks"}
-    assert all(value for value in manifest["specifications"].values())
+    assert {key: value for key, value in manifest["specifications"].items() if isinstance(value, str)} == {
+        "openapi": "3.1.0", "mcp_protocol": "2026-07-28", "ubl": "2.1", "vc_data_model": "2.0",
+        "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037", "problem_details": "RFC 9457"}
     for value in manifest["specifications"].values():
         if isinstance(value, dict):
             assert value.get("version") or value.get("draft_commit") or value.get("commit")
@@ -666,3 +781,145 @@ def test_mcp_wire_correlation_metadata(gateway, need, upstream):
         assert payload["correlation_id"] == "metadata-correlation"
         event = event_rows(gateway, payload["lookup_id"])[0]
         assert event["correlation_id"] == "metadata-correlation"
+
+
+def test_review_evidence_changed_retry_is_saved(gateway, need, upstream):
+    from conftest import OPERATOR_HEADERS
+    upstream.model, upstream.amount = 'Stock', 400
+    order = gateway.orders.place_order(make_quote(gateway, need, qty=400).id, 'pending-review')
+    upstream.amount = 300
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        url = f'/v1/approvals/{order.id}/approve'
+        args = dict(json={'approver': 'Ada'}, headers={'Idempotency-Key': 'review-evidence'})
+        first = client.post(url, **args)
+        assert first.status_code == 409 and first.json()['code'] == 'EVIDENCE_CHANGED'
+        calls = len(upstream.availability_calls)
+        second = client.post(url, **args)
+        assert second.status_code == 409 and second.json()['data'] == first.json()['data']
+        assert len(upstream.availability_calls) == calls
+        assert gateway.orders.get_order(order.id).status == 'PENDING_APPROVAL'
+        assert client.post(url, json=args['json'], headers={'Idempotency-Key': 'review-revised'}).json()['status'] == 'CONFIRMED'
+
+
+@pytest.mark.parametrize('existing', [False, True])
+@pytest.mark.parametrize('failure', ['insert', 'commit'])
+def test_review_policy_outer_rollback(gateway, existing, failure):
+    from conftest import OPERATOR_HEADERS
+    if existing:
+        gateway.policy.update(PolicyUpdateRequest(policy=gateway.policy.get(), updated_by='Ada'))
+    path = gateway.policy.runtime_path
+    before = path.read_bytes() if path.exists() else None
+    with gateway.db.connect(write=True) as conn:
+        counts = [conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('audit', 'events', 'commands')]
+        if failure == 'insert':
+            conn.execute("CREATE TRIGGER fail_command BEFORE INSERT ON commands BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        else:
+            conn.execute('CREATE TABLE rollback_parent (id TEXT PRIMARY KEY)')
+            conn.execute('CREATE TABLE deferred_failure (id TEXT REFERENCES rollback_parent(id) DEFERRABLE INITIALLY DEFERRED)')
+            conn.execute("CREATE TRIGGER fail_command AFTER INSERT ON commands BEGIN INSERT INTO deferred_failure VALUES ('missing'); END")
+    policy = gateway.policy.get().model_dump(mode='json')
+    policy['approval']['max_auto_total_eur'] = 2500
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS, raise_server_exceptions=False) as client:
+        result = client.put('/v1/policy', json={'policy': policy, 'updated_by': 'Ada'}, headers={'Idempotency-Key': 'policy-failure'})
+        assert result.status_code == 500
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert gateway.policy.get().approval.max_auto_total_eur == 1500
+    with gateway.db.connect() as conn:
+        assert counts == [conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('audit', 'events', 'commands')]
+
+
+def test_review_order_replay_returns_first_result(gateway, need, upstream):
+    quote = make_quote(gateway, need)
+    with TestClient(create_app(gateway), headers=agent_headers('external')) as client:
+        args = dict(json={'quote_id': quote.id}, headers={'Idempotency-Key': 'first-result'})
+        first = client.post('/v1/orders', **args).json()
+        cancelled = client.post(f"/v1/orders/{first['id']}/cancel", json={'reason': 'changed plans', 'cancelled_by': 'agent'})
+        assert cancelled.status_code == 200
+        replay = asyncio.run(create_server(gateway, 'external').call_tool('place_order', {'quote_id': quote.id, 'idempotency_key': 'first-result'}))
+        assert not replay.is_error and replay.structured_content == first
+    assert gateway.orders.get_order(first['id']).status == 'CANCELLED'
+    assert any(e.action == 'ORDER_REPLAY' for e in gateway.audit(order_id=first['id']))
+
+
+def test_review_approval_refreshes_policy_context(gateway, need, upstream):
+    from app.foundation import procurement_context
+    from app.models import EffectiveConstraints
+    from conftest import OPERATOR_HEADERS
+    order = gateway.orders.place_order(make_quote(gateway, need, qty=200).id, 'context-review')
+    old = order.context['policy_version']
+    policy = gateway.policy.get().model_dump(mode='json')
+    policy['ranking_weights']['price'] += 1
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by='Ada'))
+    expected = procurement_context(gateway.policy, '1', order.context['request_ref'], EffectiveConstraints())['policy_version']
+    assert expected != old
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        result = client.post(f'/v1/approvals/{order.id}/approve', json={'approver': 'Ada'})
+    assert result.status_code == 200, result.text
+    assert result.json()['context']['policy_version'] == expected
+    assert gateway.orders.get_order(order.id).context['policy_version'] == expected
+    assert json.loads(event_rows(gateway, order.id)[-1]['payload'])['context']['policy_version'] == expected
+
+
+def test_review_inactive_outbox_does_not_starve(gateway, need, upstream):
+    gateway.outbox.register('offline')
+    with gateway.db.connect(write=True) as conn:
+        for index in range(101):
+            audit.append(conn, 'agent:external', 'LOOKUP', 'Historical request', data={'lookup_id': f'backlog-{index}'})
+    delivered = []
+    gateway.outbox.register('healthy', delivered.append, replay=True)
+    for _ in range(3):
+        gateway.outbox.dispatch()
+    with gateway.db.connect() as conn:
+        total = conn.execute('SELECT count(*) FROM events').fetchone()[0]
+        assert conn.execute("SELECT count(*) FROM outbox WHERE consumer='offline' AND status='pending'").fetchone()[0] == total
+    assert len(delivered) == total
+
+
+def test_review_forward_links_preserve_signed_quote(gateway, need, upstream):
+    from app.signing import verify_quote, quote_payload
+    quote = make_quote(gateway, need)
+    order = gateway.orders.place_order(quote.id, 'navigation')
+    fetched = gateway.orders.get_quote(quote.id, 'external')
+    assert order.id in fetched.links['order_ids']
+    assert set(e['id'] for e in event_rows(gateway, order.id)) <= set(fetched.links['event_ids'])
+    assert fetched.signature == quote.signature
+    verify_quote(fetched.model_dump(mode='json'), gateway.signing.jwks())
+    lookup = gateway.lookup.get(quote.need_ref, 'external')
+    assert quote.id in lookup.links['quote_ids'] and order.id in lookup.links['order_ids']
+    # Navigation is derived for historical records too, without requiring new stored fields.
+    with gateway.db.connect(write=True) as conn:
+        raw = json.loads(conn.execute('SELECT data FROM quotes WHERE id=?', (quote.id,)).fetchone()[0])
+        raw['links'] = {}
+        raw['signature'] = gateway.signing.sign(quote_payload(raw))
+        conn.execute('UPDATE quotes SET data=? WHERE id=?', (json.dumps(raw), quote.id))
+    historical = gateway.orders.get_quote(quote.id, 'external')
+    assert order.id in historical.links['order_ids']
+    verify_quote(historical.model_dump(mode='json'), gateway.signing.jwks())
+
+
+@pytest.mark.parametrize('section', ['agents', 'live_max'])
+def test_review_policy_digest_preserves_field_presence(gateway, section):
+    from conftest import OPERATOR_HEADERS
+    policy = gateway.policy.get().model_dump(mode='json', include={'approval', 'reject', 'ranking_weights', 'shortlist'})
+    policy['shortlist'].pop('live_max', None)
+    changed = json.loads(json.dumps(policy))
+    if section == 'agents':
+        changed['agents'] = {}
+    else:
+        changed['shortlist']['live_max'] = gateway.policy.get().shortlist.live_max
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
+        first = client.put('/v1/policy', json={'policy': policy, 'updated_by': 'Ada'}, headers={'Idempotency-Key': 'presence'})
+        assert first.status_code == 200, first.text
+        second = client.put('/v1/policy', json={'policy': changed, 'updated_by': 'Ada'}, headers={'Idempotency-Key': 'presence'})
+        assert second.status_code == 409 and second.json()['code'] == 'IDEMPOTENCY_CONFLICT'
+
+
+def test_review_historical_command_digest_still_replays(gateway, need, upstream):
+    quote = make_quote(gateway, need)
+    first = gateway.orders.place_order(quote.id, 'historical-command').model_dump(mode='json')
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE commands SET digest=substr(digest,4) WHERE key='historical-command'")
+    before = len(upstream.availability_calls)
+    replay = gateway.orders.place_order(quote.id, 'historical-command')
+    assert replay.model_dump(mode='json') == first
+    assert len(upstream.availability_calls) == before

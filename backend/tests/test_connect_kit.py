@@ -40,6 +40,10 @@ def product_rows():
 @pytest.fixture
 def sandbox(gateway):
     gateway.settings.environment = "sandbox"
+    # Spec 38's mocked supplier remains useful; spec 26 additionally requires an explicit scoped key ring.
+    from app.auth import Credentials
+    from conftest import OPERATOR_TOKEN, AGENT_TOKENS
+    gateway.settings.keys = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{secret}" for agent, secret in AGENT_TOKENS.items()), environment="sandbox")
     return gateway
 
 
@@ -125,6 +129,10 @@ def test_ac_4_developer_and_llms_pages_and_links_resolve(sandbox):
         llms = client.get("/llms.txt")
         assert llms.status_code == 200 and llms.headers["content-type"].startswith("text/plain")
         urls = re.findall(r'href="([^"#]+)', page.text) + re.findall(r'\]\(([^)]+)\)', llms.text)
+        from urllib.parse import urlsplit
+        paths = {urlsplit(html.unescape(url)).path for url in urls}
+        assert {"/openapi.json", "/developers/tools.json", "/developers"} <= paths
+        assert any(url.endswith("/developers#rules") for url in urls)
         for url in urls:
             assert client.get(html.unescape(url)).status_code == 200, url
         for symptom in ("401", "404", "Unsupported protocol version", "missing customer scope", "Reconnect"):
@@ -152,13 +160,26 @@ def test_ac_5_generated_tables_equal_live_tool_schemas(sandbox, monkeypatch):
     source = (BACKEND / "docs/developers.html.in").read_text()
     desktop = json.loads(re.search(r'<pre data-config="claude-desktop">(.*?)</pre>', source, re.S)[1])
     config = desktop["mcpServers"]["valio-aimo"]
+    assert config["command"] == "/absolute/repo/backend/.venv/bin/python"
+    assert config["cwd"] == "/absolute/repo/backend"
+    assert config.get("env", {}) == {}
+    # Validate the extracted command using its actual executable/argument parser.
+    desktop_command = [sys.executable, *config["args"], "--help"]
+    parsed = subprocess.run(desktop_command, cwd=BACKEND, capture_output=True, text=True)
+    assert parsed.returncode == 0 and "--agent-id" in parsed.stdout
+    code = html.unescape(re.search(r'<pre data-config="claude-code">(.*?)</pre>', source, re.S)[1])
+    assert shlex.split(code) == ["claude", "mcp", "add", "--transport", "http", "valio-aimo", "${GATEWAY_URL}/mcp", "--header", "Authorization: Bearer ${AGENT_TOKEN}"]
+    cli = html.unescape(re.search(r'<pre data-config="mcp-cli">(.*?)</pre>', source, re.S)[1]).splitlines()
+    assert shlex.split(cli[0]) == ["cd", config["cwd"]]
+    command = shlex.split(cli[1])
+    assert command == ["MCP_AGENT_ID=issued-agent", ".venv/bin/mcp", "dev", "app/mcp_entry.py"]
+    assert (BACKEND / command[1]).is_file()
     assert config["args"] == ["-m", "app.mcp_server", "--agent-id", "issued-agent"]
     assert '--transport http' in source and '${GATEWAY_URL}/mcp' in source
     # Exercise the installed CLI's real loader without its optional Typer/inspector UI dependency.
     import ast
     import importlib
     import logging
-    import sys
     import mcp
     from typing import Any
     from mcp.server import MCPServer, Server
@@ -169,8 +190,10 @@ def test_ac_5_generated_tables_equal_live_tool_schemas(sandbox, monkeypatch):
     exec(compile(ast.Module(body=[loader], type_ignores=[]), str(cli_source), "exec"), namespace)
     _import_server = namespace["_import_server"]
     monkeypatch.setattr("app.service.Gateway", lambda: sandbox)
-    monkeypatch.setenv("MCP_AGENT_ID", "external")
-    assert _import_server(BACKEND / "app/mcp_entry.py", None).agent_id == "external"
+    env_name, env_value = command[0].split("=", 1)
+    assert env_value == config["args"][-1]
+    monkeypatch.setenv(env_name, "external")
+    assert _import_server(BACKEND / command[-1], None).agent_id == "external"
 
 
 def test_ac_6_published_walkthrough_executes_against_in_process_gateway(sandbox, need, upstream, tmp_path):
@@ -253,3 +276,22 @@ sys.exit(22 if status >= 400 else 0)
             assert result.returncode == 0, result.stderr
             assert "Receipt verified" in result.stdout
             assert len(requests) == 6
+
+
+@pytest.mark.parametrize("field", ["vc", "credentialSubject"])
+@pytest.mark.parametrize("value", [None, [], "invalid"])
+def test_review_malformed_mandate_is_structured_refusal(sandbox, field, value):
+    from app.mandates import sign_jwt
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    claims = {"vc": {"credentialSubject": {"customer_id": "1"}}}
+    if field == "vc":
+        claims["vc"] = value
+    else:
+        claims["vc"]["credentialSubject"] = value
+    token = sign_jwt(Ed25519PrivateKey.generate(), claims, kid="malformed")
+    with TestClient(create_app(sandbox), headers=agent_headers("external"), raise_server_exceptions=False) as client:
+        response = client.get("/v1/me", headers={"Agent-Mandate": token})
+    assert response.status_code == 403
+    assert response.json()["code"] == "MANDATE_INVALID" and response.json()["next_action"] == "CONTACT_ADMIN"
+    result = asyncio.run(create_server(sandbox, "external", mandate=token).call_tool("get_agent_context", {}))
+    assert result.is_error and result.structured_content["code"] == "MANDATE_INVALID"

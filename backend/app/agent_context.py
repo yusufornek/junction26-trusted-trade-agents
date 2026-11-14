@@ -1,8 +1,10 @@
 """Authenticated, advisory authority snapshot shared by REST and MCP."""
 from .models import Model
+from pydantic import Field
 
 
 class AgentContext(Model):
+    fixture_clock: str | None = Field(default=None, exclude_if=lambda v: v is None)
     principal: dict
     customer_ids: list[str]
     mandate: dict
@@ -19,8 +21,11 @@ def agent_context(service, principal, mandate=None):
     customers = list(principal.customer_ids)
     if mandate:
         # The credential's customer is verified before it is exposed as scope.
-        from .mandates import decode
-        customer = decode(mandate)[1].get("vc", {}).get("credentialSubject", {}).get("customer_id")
+        from .mandates import decode, invalid
+        vc = decode(mandate)[1].get("vc")
+        if not isinstance(vc, dict) or not isinstance(vc.get("credentialSubject"), dict):
+            invalid("format")
+        customer = vc["credentialSubject"].get("customer_id")
         with service.db.connect() as conn:
             policy, record, _ = service.mandates.authorize(conn, mandate, principal.id, customer)
         customers = [customer]
@@ -45,7 +50,8 @@ def agent_context(service, principal, mandate=None):
     operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "get_order_evidence", "cancel_order"]
     if row:
         operations += ["find_offers", "create_quote", "place_order"]
-    return AgentContext(principal=principal.public(), customer_ids=customers, mandate=summary,
+    return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+        principal=principal.public(), customer_ids=customers, mandate=summary,
         effective_limits={"per_order_eur": per_order, "rolling_24h_eur": daily},
         remaining_budget={"currency": "EUR", "window": "rolling_24h", "spent": spent, "remaining": max(0, daily - spent)},
         environment=service.settings.environment, rate_limits=service.limiter.snapshot(principal.id),

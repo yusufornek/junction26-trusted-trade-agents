@@ -1,0 +1,18 @@
+name: full_stock
+version: 1
+clock: "2026-11-14T10:00:00+00:00"
+stock:
+  "1": 2000
+  "2": 2000
+  "3": 2000
+customers:
+  recipe:
+    exclude_allergens: [AM]
+products:
+  - {id: pasta, name: 'Lasagne pasta 1.5 kg', category: '20100', size: 1.5, unit: KG, price: 10.0, stock: 10000}
+  - {id: tomato, name: 'Tomato sauce 2 kg', category: '20200', size: 2, unit: KG, price: 10.0, stock: 10000}
+  - {id: mince, name: 'Plant mince 1 kg', category: '20300', size: 1, unit: KG, price: 10.0, stock: 10000}
+  - {id: oat, name: 'Oat drink 1 l', category: '10400', size: 1, unit: L, price: 10.0, stock: 10000}
+  - {id: oil, name: 'Olive oil 0.5 l', category: '20400', size: 0.5, unit: L, price: 10.0, stock: 10000, allergens: {AM: FREE_FROM}}
+  - {id: milk-oat, name: 'Cheap oat style milk 1 l', category: '10400', size: 1, unit: L, price: 0.1, stock: 10000, allergens: {AM: CONTAINS}}
+

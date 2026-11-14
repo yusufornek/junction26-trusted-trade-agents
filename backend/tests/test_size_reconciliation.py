@@ -9,6 +9,175 @@ from conftest import OPERATOR_HEADERS, TEST_KEYS
 from conftest import quote_request
 
 
+def review_pack_flow(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows,
+                     product_id, requested, expected_size, expected_units, comparison=False):
+    import httpx
+    from app.models import Quantity
+    from conftest import rebuild_catalog
+    row = next(r for r in actual_product_rows if str(r["id"]) == product_id)
+    rebuild_catalog(gateway, tmp_path, [row])
+    product = gateway.catalog.get(product_id)
+    request = need.model_copy(update={"intent": product.name_en, "search_terms": [product.name_en.split()[0]],
+        "required_claims": [], "exclude_allergens": [], "quantity": Quantity(value=requested, unit="KG")})
+
+    def price(req):
+        body = upstream.price_response(req).json()
+        for item in body["products"]:
+            item["comparisonUnit"] = "KG"
+            if comparison:
+                item["comparisonPrice"] = {"value": 13 / expected_size}
+            else:
+                item.pop("comparisonPrice", None)
+        return httpx.Response(200, json=body)
+
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=price)
+    result = gateway.find_offers(request)
+    offer, plan = result.offers[0], result.plans[0]
+    assert (offer.size_per_sales_unit, offer.units_needed, offer.purchase_total) == (
+        expected_size, expected_units, 13 * expected_units)
+    assert (plan.lines[0].units, plan.total) == (expected_units, 13 * expected_units)
+    if not comparison:
+        assert "SIZE_UNCONFIRMED" in {w.code for w in offer.warnings}
+        assert plan.policy_preview.outcome == "PENDING_APPROVAL"
+    quote = gateway.orders.create_quote(quote_request(request, qty=plan.lines[0].units,
+        product_id=product_id, need_ref=result.lookup_id), "external")
+    assert (quote.lines[0].size_per_sales_unit, quote.total) == (expected_size, 13 * expected_units)
+    order = gateway.orders.place_order(quote.id, f"review-{product_id}-{comparison}", "external")
+    if not comparison:
+        assert order.status == "PENDING_APPROVAL"
+    assert gateway.lookup.get(result.lookup_id).offers[0].units_needed == expected_units
+    assert gateway.orders.get_quote(quote.id).total == quote.total
+    assert gateway.orders.get_order(order.id).total == quote.total
+    return offer
+
+
+@pytest.mark.parametrize("comparison", [False, True])
+def test_review_explicit_package_total(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows, comparison):
+    review_pack_flow(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows,
+                     "470742", 27.7, 2.77, 10, comparison)
+
+
+@pytest.mark.parametrize("comparison", [False, True])
+def test_review_repeated_pack_not_nested(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows, comparison):
+    offer = review_pack_flow(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows,
+                            "476903", 16, 4, 4, comparison)
+    assert offer.name_size_candidates
+    assert {c.size_per_sales_unit for c in offer.name_size_candidates} == {4}
+    assert any("4x1kg Auringonkukansiemen" in c.source_text for c in offer.name_size_candidates)
+    from app.catalog import named_case_sizes
+    assert named_case_sizes(["8 x Brand 4x70g"], "KG") == [2.24]
+
+
+@pytest.mark.parametrize("name,multiplier,expected", [
+    ("8 x Brand 4x70g", 8, 2.24), ("10x(5x220g)", 10, 11),
+    ("5kg/25g 200pcs", 200, 5), ("22g/2.77kg", 126, 2.77),
+    ("450 x 310 x 80 mm, 11160 ml, 50 pcs", 450, 558),
+])
+def test_review_local_pack_counts_and_totals(gateway, name, multiplier, expected):
+    from app.lookup import reconcile_size
+    product = gateway.catalog.get("1").model_copy(update={"name_en": name, "name_fi": name,
+        "units": {"KI": multiplier}, "base_volume_l": None, "base_net_weight_kg": None})
+    size, _, confirmed, warnings = reconcile_size(product, {}, "L" if "ml" in name else "KG")
+    assert size == expected
+    assert not confirmed and "SIZE_UNCONFIRMED" in {w.code for w in warnings}
+
+
+@pytest.mark.parametrize("comparison", [False, True])
+def test_review_inner_portion_count(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows, comparison):
+    review_pack_flow(gateway, need, upstream, tmp_path, respx_mock, actual_product_rows,
+                     "464706", 62.5, 2.5, 25, comparison)
+
+
+@pytest.mark.parametrize("product_id,unit,size", [
+    ("470742", "KG", 2.77), ("476903", "KG", 4), ("464706", "KG", 2.5),
+    ("462607", "KG", .15), ("464639", "KG", .9), ("460892", "KG", 10.8),
+    ("477242", "L", 7.92), ("460121", "KG", 5), ("461802", "KG", 5),
+    ("461798", "KG", 5), ("471894", "KG", 6), ("472819", "KG", 4),
+])
+def test_review_independent_real_package_sizes(need, actual_product_rows, product_id, unit, size):
+    from app.catalog import extract
+    from app.lookup import offer_for
+    from app.models import Quantity
+    product = extract(next(r for r in actual_product_rows if str(r["id"]) == product_id), {}, {})
+    request = need.model_copy(update={"quantity": Quantity(value=size * 10, unit=unit)})
+    offer = offer_for(product, request, {}, {})
+    assert (offer.size_per_sales_unit, offer.units_needed) == (size, 10)
+    assert "SIZE_UNCONFIRMED" in {w.code for w in offer.warnings}
+    assert offer.name_size_candidates
+    assert all(c.source_text in {product.name_en, product.name_fi} for c in offer.name_size_candidates)
+
+
+def test_review_every_real_product_size_is_proven_or_requires_approval(need, actual_product_rows,
+                                                                      record_testsuite_property):
+    """Exhaustive property over the organiser's real records, without supplier calls."""
+    from app.catalog import extract
+    from app.lookup import offer_for
+    from app.models import Quantity
+    count = 0
+    for row in actual_product_rows:
+        if row.get("deleted"):
+            continue
+        product = extract(row, {}, {})
+        count += 1
+        for unit in ("L", "KG"):
+            request = need.model_copy(update={"quantity": Quantity(value=1, unit=unit)})
+            unpriced = offer_for(product, request, {}, {})
+            # Missing/wrong-unit comparison data must never silently authorise a name estimate.
+            for price in ({}, {"catalogPrice": {"value": 13}, "comparisonPrice": {"value": 2},
+                               "comparisonUnit": "KG" if unit == "L" else "L"},
+                          {"catalogPrice": {"value": 13}, "comparisonPrice": {"value": 2},
+                               "comparisonUnit": unit}):
+                offer = offer_for(product, request, price, {})
+                codes = {w.code for w in offer.warnings}
+                if offer.size_per_sales_unit is None:
+                    assert "SIZE_UNKNOWN" in codes, product.id
+                elif offer.size_source in {"base_unit", "sales_unit", "price_ratio"}:
+                    continue  # Definitions and actual invoiced ratios are independent of names.
+                elif "SIZE_UNCONFIRMED" not in codes:
+                    # Independently check rule (a), rather than trusting the boolean.
+                    ratio = 6.5 if price.get("comparisonUnit") == unit else None
+                    assert ratio and abs(ratio / offer.size_per_sales_unit - 1) <= .030000000001, product.id
+                    assert offer.size_confirmed_by_price, product.id
+                if not price and offer.size_source == "name_parse":
+                    assert unpriced.name_size_candidates, product.id
+                    assert offer.size_per_sales_unit == min(c.size_per_sales_unit
+                        for c in offer.name_size_candidates), product.id
+    record_testsuite_property("size_confirmation_real_products", count)
+    assert count == 17546
+
+
+def test_review_legacy_size_evidence_keeps_signed_shape(gateway, need, upstream):
+    import json
+    from app.signing import verify_quote
+    lookup = gateway.find_offers(need)
+    quote = gateway.orders.create_quote(quote_request(need, need_ref=lookup.lookup_id))
+    data = quote.model_dump(mode="json")
+    for line in data["lines"]:
+        line.pop("name_size_candidates", None)
+        line.pop("minimum_order_quantity", None)
+    data["signature"] = gateway.signing.sign_quote(data)
+    legacy_lookup = lookup.model_dump(mode="json")
+    for offer in legacy_lookup["offers"]:
+        offer.pop("name_size_candidates", None)
+        offer.pop("minimum_order_quantity", None)
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(data), quote.id))
+        conn.execute("UPDATE lookups SET data=? WHERE id=?", (json.dumps(legacy_lookup), lookup.lookup_id))
+    loaded = gateway.orders.get_quote(quote.id)
+    assert all("name_size_candidates" not in line for line in loaded.model_dump(mode="json")["lines"])
+    verify_quote(loaded, gateway.signing.jwks())
+    assert all("name_size_candidates" not in o for o in gateway.lookup.get(lookup.lookup_id).model_dump(mode="json")["offers"])
+    order = gateway.orders.place_order(quote.id, "legacy-name-candidates")
+    historical = order.model_dump(mode="json")
+    for line in historical["lines"]:
+        line.pop("name_size_candidates", None)
+        line.pop("minimum_order_quantity", None)
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE orders SET data=? WHERE id=?", (json.dumps(historical), order.id))
+    assert all("name_size_candidates" not in line for line in
+               gateway.orders.get_order(order.id).model_dump(mode="json")["lines"])
+
+
 @pytest.mark.parametrize("index", range(30))
 @pytest.mark.parametrize("fraction", ["0.1", "0.2", "0.3", "3"])
 @pytest.mark.parametrize("sales_units", [False, True])
@@ -219,12 +388,15 @@ def kg_price(ratio):
 
 
 @pytest.mark.parametrize("price,confirmed", [({}, False), (kg_price(1.0), True)])
-def test_size_ac9_kg_sold_is_one_kg_per_unit(gateway, price, confirmed):
+def test_size_ac9_kg_sold_is_one_kg_per_unit(gateway, need, price, confirmed):
     from app.lookup import reconcile_size
     product = gateway.catalog.get("7").model_copy(update={
         "name_en": "Liver pate appr 2,4 kg", "name_fi": "Maksapasteija n 2,4 kg", "base_net_weight_kg": 2.4})
     assert product.sales_unit == "KG"
     assert reconcile_size(product, price, "KG") == (1.0, "base_unit", confirmed, [])
+    from app.lookup import offer_for
+    request = need.model_copy(update={"quantity": need.quantity.model_copy(update={"value": 10, "unit": "KG"})})
+    assert offer_for(product, request, price, {}).units_needed == 10
 
 
 def test_size_ac10_pack_count_in_name(gateway):
@@ -354,3 +526,37 @@ def test_review_portion_chain_preserves_total_with_multiplier():
 def test_review_dimensions_are_not_pack_counts():
     from app.catalog import name_sales_sizes
     assert name_sales_sizes(["Tray 136x218*155*60mm 1200ml"], "L", 1) == [1.2]
+
+
+@pytest.mark.parametrize("ratio", [.97, 1.03])
+def test_review_kg_inclusive_boundary(gateway, ratio):
+    from app.lookup import reconcile_size
+    assert reconcile_size(gateway.catalog.get("7"), kg_price(ratio), "KG")[2] is True
+
+
+def test_review_name_count_cannot_override_known_multiplier(gateway, need, upstream):
+    product_size(gateway, name="Milk 5 x carton 1 L", multiplier=10)
+    upstream.price = 5 * 2.6
+    result = gateway.find_offers(need)
+    offer = next(o for o in result.offers if o.product_id == "1")
+    assert (offer.size_per_sales_unit, offer.size_source, offer.size_confirmed_by_price) == (5, "price_ratio", False)
+    assert "SIZE_MISMATCH" in {w.code for w in offer.warnings}
+    quote = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=result.lookup_id))
+    assert gateway.orders.place_order(quote.id, "conflicting-count").status == "PENDING_APPROVAL"
+
+
+def test_size_ac8_recorded_milk_lookup_all_three_pack_counts(gateway, need, respx_mock):
+    from conftest import replay_recorded_demo
+    result = replay_recorded_demo(gateway, need, respx_mock)
+    offers = {o.product_id: o for o in result.offers}
+    for pid, size, units in [("469330", 5, 200), ("463038", 20, 50), ("464768", 12, 84)]:
+        assert (offers[pid].size_per_sales_unit, offers[pid].units_needed) == (size, units)
+
+
+def test_review_known_count_without_ratio_keeps_conflict_visible(gateway):
+    from app.lookup import reconcile_size
+    product = gateway.catalog.get("1").model_copy(update={"name_en": "Yoghurt 4x125g", "name_fi": "Yoghurt 4x125g",
+        "units": {"KI": 6}, "base_volume_l": None, "base_net_weight_kg": None})
+    size, source, confirmed, warnings = reconcile_size(product, {}, "KG")
+    assert (size, source, confirmed) == (.75, "name_parse", False)
+    assert {"SIZE_UNCONFIRMED", "SIZE_MISMATCH"} <= {w.code for w in warnings}

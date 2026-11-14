@@ -1,0 +1,8 @@
+[
+  {"date":"2026-06-01","customer_id":"1","product_id":"milk","quantity":{"value":980,"unit":"L"}},
+  {"date":"2026-07-01","customer_id":"1","product_id":"milk","quantity":{"value":1000,"unit":"L"}},
+  {"date":"2026-08-01","customer_id":"1","product_id":"milk","quantity":{"value":1020,"unit":"L"}},
+  {"date":"2026-09-01","customer_id":"1","product_id":"milk","quantity":{"value":1000,"unit":"L"}},
+  {"date":"2026-10-01","customer_id":"1","product_id":"milk","quantity":{"value":990,"unit":"L"}},
+  {"date":"2026-11-01","customer_id":"1","product_id":"milk","quantity":{"value":1010,"unit":"L"}}
+]

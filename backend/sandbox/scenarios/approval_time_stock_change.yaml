@@ -1,0 +1,11 @@
+name: approval_time_stock_change
+version: 1
+clock: "2026-11-14T10:00:00+00:00"
+stock:
+  "1": 2000
+  "2": 2000
+  "3": 2000
+stock_after_place:
+  "1": 10
+  "2": 10
+  "3": 10

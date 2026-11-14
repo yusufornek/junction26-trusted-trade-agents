@@ -60,6 +60,82 @@ def quote(gateway, need, token, qty=100):
     return gateway.orders.create_quote(quote_request(need, qty=qty, need_ref=lookup.lookup_id), AGENT, mandate=token)
 
 
+@pytest.mark.parametrize("command,transport", [("lookup", "core"), ("quote", "rest"),
+    ("quote", "mcp"), ("order", "rest"), ("order", "mcp"), ("approval", "rest")])
+@pytest.mark.parametrize("refusal", ["revoked", "customer_scope"])
+def test_review_keyed_replay_refusals_are_audited(gateway, need, upstream, buyer, command, transport, refusal):
+    """Spec 12 R-4: every replay guard uses the command's normal refusal audit.
+
+    Lookup keys are core-only; approval is REST-only. Quote/order exercise both
+    public transports, including headerless replays of stored buyer authority.
+    """
+    token = issue(buyer)
+    body = gateway.policy._editable(gateway.policy.get())
+    body["agents"][AGENT] = {"customer_ids": ["1"], "autonomy": "autonomous_within_limits",
+                            "max_auto_daily_total_eur": 5000}
+    gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
+    lookup = gateway.find_offers(need, f"agent:{AGENT}", mandate=token)
+    request = quote_request(need, qty=200, need_ref=lookup.lookup_id)
+    payload, path, tool = request.model_dump(mode="json"), "/v1/quotes", "create_quote"
+    if command in {"order", "approval"}:
+        q = gateway.orders.create_quote(request, AGENT, mandate=token)
+        payload, path, tool = {"quote_id": q.id}, "/v1/orders", "place_order"
+        if command == "approval":
+            pending = gateway.orders.place_order(q.id, "setup-order", AGENT)
+            assert pending.status == "PENDING_APPROVAL"
+            payload, path = {"approver": "Ada"}, f"/v1/approvals/{pending.id}/approve"
+
+    with TestClient(create_app(gateway)) as client:
+        def call(present=False):
+            if transport == "core":
+                try:
+                    return 200, gateway.find_offers(need, f"agent:{AGENT}",
+                        mandate=token if present else None, command_key="review-audit").model_dump(mode="json")
+                except DomainError as error:
+                    return error.status, {"code": error.code, "data": error.data}
+            if transport == "mcp":
+                result = asyncio.run(create_server(gateway, AGENT, mandate=token if present else None)
+                    .call_tool(tool, {**payload, "idempotency_key": "review-audit"}))
+                return (403 if result.is_error else 200), result.structured_content
+            auth = OPERATOR_HEADERS if command == "approval" else headers(token) if present else agent_headers(AGENT)
+            result = client.post(path, json=payload, headers={**auth, "Idempotency-Key": "review-audit"})
+            return result.status_code, result.json()
+
+        first = call(present=True)
+        assert first[0] == 200, first
+        assert call() == first
+        if refusal == "revoked":
+            claims = {"iss": ISSUER, "jti_revoked": [decode(token)[1]["jti"]], "iat": int(audit.utcnow().timestamp())}
+            gateway.mandates.revoke(sign_jwt(buyer, claims, kid="buyer-1"), f"agent:{AGENT}")
+        else:
+            body["agents"][AGENT]["customer_ids"] = ["2"]
+            gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Scope removed"))
+        with gateway.db.connect() as conn:
+            before = {table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table}")]
+                      for table in ("lookups", "quotes", "orders", "reservations", "commands", "events")}
+        audit_before = len(gateway.audit())
+        calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+        status, denied = call()
+        code = "MANDATE_INVALID" if refusal == "revoked" else "CUSTOMER_NOT_IN_MANDATE"
+        assert (status, denied["code"]) == (403, code)
+        if refusal == "revoked":
+            assert denied["data"]["check"] == "revoked"
+        events = gateway.audit()[audit_before:]
+        action = {"lookup": "LOOKUP", "quote": "CREATE_QUOTE", "order": "PLACE_ORDER", "approval": "APPROVE"}[command]
+        assert [event.action for event in events] == [action + "_FAILED"]
+        event = events[0]
+        assert event.actor == ("human:operator" if command == "approval" else f"agent:{AGENT}")
+        assert event.data["error"] == code
+        assert event.data["live_calls"] == {"price": 0, "availability": 0}
+        assert event.data["inputs"]
+        if command == "approval":
+            assert event.order_id == pending.id and event.data["stated_name"] == "Ada"
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
+        with gateway.db.connect() as conn:
+            assert before == {table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table}")]
+                              for table in before}
+
+
 @pytest.mark.parametrize("command", ["quote", "lookup"])
 def test_review_bound_mandate_checked_on_headerless_command_replay(gateway, need, upstream, buyer, command):
     claims = decode(issue(buyer, sub="external"))[1]
@@ -268,8 +344,14 @@ def test_ac_5_signed_revocation_blocks_quote_replay_and_pending_approval(gateway
                                   ("/v1/quotes", quote_request(need, need_ref=q.need_ref).model_dump(mode="json"), headers(token)),
                                   ("/v1/orders", {"quote_id": q.id}, {"Idempotency-Key": "pending"}),
                                   (f"/v1/approvals/{order.id}/approve", {"approver": "Ada"}, OPERATOR_HEADERS)):
+            before = len(gateway.audit())
             result = client.post(path, json=body, headers=extra)
             assert result.status_code == 403 and result.json()["data"]["check"] == "revoked", result.text
+            action = "CREATE_QUOTE_FAILED" if path == "/v1/quotes" else "PLACE_ORDER_FAILED" if path == "/v1/orders" else "APPROVE_FAILED"
+            events = gateway.audit()[before:]
+            assert [event.action for event in events] == [action]
+            assert events[0].data["error"] == "MANDATE_INVALID" and events[0].data["check"] == "revoked"
+            assert events[0].data["live_calls"] == {"price": 0, "availability": 0}
         # Revocation must still allow a human to reject the pending order.
         assert client.post(f"/v1/approvals/{order.id}/reject", json={"approver": "Ada"}, headers=OPERATOR_HEADERS).status_code == 200
     assert gateway.audit()[-2].data["error"] == "MANDATE_INVALID"
@@ -507,3 +589,28 @@ def test_legacy_revocations_migrate_without_restoring_authority(gateway, buyer, 
             assert row["customer_id"] == "" and row["mandate_id"] == "old-revoked"
             with pytest.raises(DomainError, match="revoked"):
                 gateway.mandates.verify(conn, token, AGENT, "1")
+
+
+@pytest.mark.parametrize('transport', ['rest', 'mcp'])
+def test_review_cached_quote_revalidates_revocation(gateway, need, upstream, buyer, transport):
+    token = issue(buyer)
+    lookup = gateway.find_offers(need, f'agent:{AGENT}', mandate=token)
+    body = quote_request(need, qty=1, need_ref=lookup.lookup_id).model_dump(mode='json')
+    with TestClient(create_app(gateway), headers=headers(token)) as client:
+        first = client.post('/v1/quotes', json=body, headers={'Idempotency-Key': 'cached-authority'})
+        assert first.status_code == 200, first.text
+        revoke = sign_jwt(buyer, {'iss': ISSUER, 'jti_revoked': [decode(token)[1]['jti']],
+                               'iat': int(audit.utcnow().timestamp())}, kid='buyer-1', typ='JWT')
+        assert client.post('/v1/mandates/revocations', json={'jwt': revoke}).status_code == 200
+        before = len(upstream.price_calls), len(upstream.availability_calls)
+        if transport == 'rest':
+            replay = client.post('/v1/quotes', json=body, headers={'Idempotency-Key': 'cached-authority'})
+            assert replay.status_code == 403, replay.text
+            payload = replay.json()
+        else:
+            replay = asyncio.run(create_server(gateway, AGENT, mandate=token).call_tool('create_quote', {**body, 'idempotency_key': 'cached-authority'}))
+            assert replay.is_error
+            payload = replay.structured_content
+        assert payload['code'] == 'MANDATE_INVALID' and payload['data']['check'] == 'revoked'
+        assert before == (len(upstream.price_calls), len(upstream.availability_calls))
+    assert gateway.audit()[-1].data['error'] == 'MANDATE_INVALID'

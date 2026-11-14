@@ -42,12 +42,62 @@ def migrate(conn):
 
 
 def utcnow():
+    from .runtime import CLOCK
+    if clock := CLOCK.get():
+        return clock()
     return datetime.now(timezone.utc)
+
+
+def bounded_summary(value):
+    """Bound failure storage without serializing or traversing an unbounded request."""
+    remaining = 8000
+
+    def visit(item, depth=0):
+        nonlocal remaining
+        if remaining <= 0 or depth > 8:
+            return "<truncated>"
+        if isinstance(item, str):
+            limit = min(1024, remaining)
+            text = item[:limit]
+            remaining -= len(text)
+            return text + ("<truncated>" if len(item) > limit else "")
+        if isinstance(item, dict):
+            result = {}
+            for index, (key, val) in enumerate(item.items()):
+                if index >= 20 or remaining <= 0:
+                    result["truncated"] = True
+                    break
+                result[str(key)[:128]] = visit(val, depth + 1)
+                remaining -= 32
+            return result
+        if isinstance(item, (list, tuple)):
+            result = []
+            for val in item[:20]:
+                if remaining <= 0:
+                    break
+                result.append(visit(val, depth + 1))
+                remaining -= 16
+            if len(result) < len(item):
+                result.append("<truncated>")
+            return result
+        return item if item is None or isinstance(item, (bool, int, float)) else visit(str(item), depth + 1)
+
+    result = visit(value)
+    if len(json.dumps(result, default=str)) > 16000:
+        return {"truncated": True, "summary": str(result)[:2000]}
+    return result
 
 
 def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=None):
     from .foundation import CORRELATION, TRACE, emit
     data = dict(data or {})
+    if action.endswith(("_FAILED", "_REFUSED", "_RATE_LIMITED")) or action == "RATE_LIMITED":
+        data = bounded_summary(data)
+        summary = summary[:2000]
+        actor = actor[:256]
+    from .runtime import ENVIRONMENT
+    if ENVIRONMENT.get() == "sandbox":
+        data["environment"] = "sandbox"
     if CORRELATION.get():
         data["correlation_id"] = CORRELATION.get()
     if TRACE.get():
@@ -73,9 +123,12 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
 
 
 def head(db, signing):
+    from .runtime import ENVIRONMENT
     with db.connect() as conn:
         row = conn.execute("SELECT COUNT(*) AS entries, (SELECT hash FROM audit ORDER BY id DESC LIMIT 1) AS head_hash FROM audit").fetchone()
     payload = {"entries": row["entries"], "head_hash": row["head_hash"] or GENESIS, "at": utcnow().isoformat()}
+    if ENVIRONMENT.get() == "sandbox":
+        payload["environment"] = "sandbox"
     return {**payload, "jws": signing.sign(payload)}
 
 

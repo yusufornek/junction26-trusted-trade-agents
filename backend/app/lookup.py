@@ -1,3 +1,4 @@
+from .foundation import TASK
 import re
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -11,13 +12,23 @@ from .auth import check_owner
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
 from .catalog import (allergen_evidence, constraint_failures, number, suspect_content, case_suspect,
-                      named_case_sizes, name_sales_sizes, name_measures)
+                      named_case_sizes, name_sales_sizes, name_measures, name_size_evidence, sizes_agree)
+
 from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
 from .valio import RequestCounter
+from .runtime import ENVIRONMENT
+from .suppliers import reservation_key
 
 WARNING_TEXT = {
+    "QUANTITY_ANOMALY": "Quantity is outside the expected purchase-history band; review the proposed correction or split.",
+    "PRICE_ANOMALY": "Unit price exceeds the last paid price threshold; review a cheaper ranked alternative.",
+    "VELOCITY_ANOMALY": "Rolling-hour order count exceeds the expected band; review and pause or resume the agent.",
+    "NEW_CATEGORY": "This agent has not previously bought this product category for this customer.",
+    "CLINICAL_REVIEW": "Clinical review by a buyer approver is required.",
+    "SUBSTITUTION_PROFILE": "The substitute needs approval under the customer's substitution profile.",
+    "PARTIAL_BASKET": "Some recipe ingredients are uncovered; review the partial basket.",
     "PARTIAL_STOCK": "On-time available stock covers only part of the requested quantity.",
     "DATE_SHIFT": "The upstream API returned a delivery date after the requested deadline.",
     "CUTOFF_PASSED": "The order cut-off for this delivery has passed.",
@@ -91,7 +102,7 @@ def day(value):
 
 
 def round_quantity(quantity, product):
-    return float(pack_quantity(1, requested=quantity, step=sales_step(product)))
+    return float(pack_quantity(1, requested=quantity, step=sales_step(product), minimum=product.minimum_order_quantity))
 
 
 def size_for(product, price, requested_unit):
@@ -111,7 +122,7 @@ def reconcile_size(product, price, requested_unit):
     if product.sales_unit == requested_unit == "KG":
         # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
         # ("ca 2,4 kg") describes the item, not the sales unit.
-        confirmed = ratio is not None and abs(ratio - 1) <= 0.03
+        confirmed = ratio is not None and sizes_agree(ratio, 1.0)
         return 1.0, "base_unit", confirmed, []
     multiplier = product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None)
     exact = {}
@@ -127,9 +138,10 @@ def reconcile_size(product, price, requested_unit):
     sales_suspect = case_suspect(sales_content, multiplier, names, requested_unit, product.base_unit, content)
     if not sales_suspect and sales_content and sales_content > 0:
         exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
+    named = []
     if multiplier is not None and multiplier > 0:
-        named = name_sales_sizes(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier,
-                                 sales_content or content)
+        evidence = name_size_evidence(names, requested_unit, 1 if product.base_unit == requested_unit else multiplier)
+        named = sorted({r["size"] for r in evidence if not r["check_only"] and r["size"] > 0})
         if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
         if product.base_unit == requested_unit:
@@ -148,10 +160,11 @@ def reconcile_size(product, price, requested_unit):
             confirmed_names = [size for size in named if ratio is not None and
                 (abs(ratio / size - 1) <= .03 or isclose(abs(ratio / size - 1), .03, rel_tol=1e-12))]
             exact["name_parse"] = next(iter(confirmed_names), next((size for size in named if exact.get("catalog", 0) > 0 and
-                abs(size / exact["catalog"] - 1) <= .03), max(named)))
+                abs(size / exact["catalog"] - 1) <= .03), min(named)))
 
     # A nonpositive size, including one rounded to zero, is never evidence or a divisor.
     exact = {source: size for source, size in exact.items() if size > 0}
+
 
     def packaging_warnings(size):
         if named_cases and not any(abs(size / named - 1) <= .03 or
@@ -161,7 +174,7 @@ def reconcile_size(product, price, requested_unit):
                 f"name_case={named_cases} {requested_unit} per sales unit."))]
         return []
 
-    if exact:
+    if exact or named:
         if ratio is None:
             source = next(iter(exact))
             # Independent explicit counts can contradict the sales multiplier. A
@@ -179,13 +192,15 @@ def reconcile_size(product, price, requested_unit):
                     f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; name_case={candidates} {requested_unit}; "
                     f"used={size:g} {requested_unit} from {source}; approval required."))
                 return size, source, False, [warning("SIZE_UNCONFIRMED"), mismatch]
+
             return size, source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(size)]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
-        for source, size in exact.items():
+        for source, size in [*exact.items(), *(("name_parse", s) for s in named)]:
             difference = abs(ratio / size - 1)
             if difference < 0.03 or isclose(difference, 0.03, rel_tol=1e-12):
                 return size, source, True, packaging_warnings(size)
-        values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
+        values = ", ".join(f"{key}={value:g} {requested_unit}"
+                           for key, value in [*exact.items(), *(("name_parse", s) for s in named)])
         mismatch = Warning(code="SIZE_MISMATCH", text=(
             f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; price_ratio={ratio:g} {requested_unit} per sales unit."
         ))
@@ -195,7 +210,8 @@ def reconcile_size(product, price, requested_unit):
     return None, None, False, []
 
 
-def reserved(conn, product_id, exclude_order=None):
+def reserved(conn, product_id, exclude_order=None, supplier_id="valio"):
+    product_id = reservation_key(supplier_id, product_id)
     return conn.execute(
         "SELECT coalesce(sum(quantity),0) FROM reservations WHERE product_id=? AND order_id!=?",
         (product_id, exclude_order or "")).fetchone()[0]
@@ -229,13 +245,16 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
         codes.append("CUTOFF_PASSED")
     usable = [line for line in lines if not line.get("salesBlock")
               and (sales_unit is None or line.get("salesUnit") == sales_unit)]
-    unknown = not (raw.get("salesBlock") or raw.get("error")) and any(
+    finite = raw.get("_stock_semantics") == "finite"
+    unlimited = raw.get("_stock_semantics") == "unlimited"
+    unknown = not finite and not unlimited and not (raw.get("salesBlock") or raw.get("error")) and any(
         (number(line.get("availableAmount")) or 0) >= 999999 for line in usable)
     on_time = [line for line in usable if (d := day(line.get("availableDate"))) and d <= deliver_by]
-    unknown_on_time = unknown and any((number(line.get("availableAmount")) or 0) >= 999999 for line in on_time)
+    unknown_on_time = (unknown and any((number(line.get("availableAmount")) or 0) >= 999999 for line in on_time)) or (
+        unlimited and bool(on_time) and not raw.get("salesBlock") and not raw.get("error"))
     amount = 0.0 if raw.get("salesBlock") or raw.get("error") else sum(
         max(0, number(line.get("availableAmount")) or 0) for line in on_time
-        if (number(line.get("availableAmount")) or 0) < 999999)
+        if finite or (number(line.get("availableAmount")) or 0) < 999999)
     if unknown:
         codes.append("AVAILABILITY_UNCONFIRMED")
     if unknown_on_time:
@@ -252,7 +271,8 @@ def availability_for(raw, deliver_by, quantity, reserved_amount=0, sales_unit=No
         delivery = ", ".join(sorted({d.isoformat() for d in dates})) or "unknown date"
         warnings = [Warning(code=w.code, text=f"Order cut-off for delivery on {delivery} passed at {cutoff.isoformat()}")
                     if w.code == "CUTOFF_PASSED" else w for w in warnings]
-    return Availability(available_amount=None if unknown_on_time else amount, availability_known=not unknown_on_time,
+    return Availability(stock_semantics="unlimited" if unlimited else "unknown" if unknown else "finite",
+                        available_amount=None if unknown_on_time else amount, availability_known=not unknown_on_time,
                         logistic_model=raw.get("logisticModel"),
                         closing_time=cutoff, available_date=min(dates) if dates else None,
                         enough=quantity is not None and amount >= quantity, coverage=coverage), warnings
@@ -262,7 +282,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
         float(pack_quantity(size, requested=need.quantity.value,
-                            step=sales_step(product))) if size else None)
+                            step=sales_step(product), minimum=product.minimum_order_quantity)) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount, product.sales_unit)
     warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}
@@ -318,10 +338,16 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     matched.append(f"Purchase total: {total:.2f} {currency}; overbuy: {float(overbuy):g} {need.quantity.unit}."
                    if total is not None and overbuy is not None else "Purchase total or overbuy: unknown.")
     return OfferCard(
+        supplier_id=need.supplier_id, synthetic=product.synthetic or stock.get("_synthetic", False),
         product_id=product.id, gtin=product.gtin, name=product.name_en, sales_unit=product.sales_unit,
-        allowed_lot_size=float(sales_step(product)),
+        allowed_lot_size=float(sales_step(product)), minimum_order_quantity=product.minimum_order_quantity,
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
         size_confirmed_by_price=confirmed,
+        name_size_candidates=[{"size_per_sales_unit": r["size"], "source_text": r["source_text"],
+                               "expression": r["expression"]}
+            for r in name_size_evidence([product.name_en, product.name_fi], need.quantity.unit,
+                product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None))]
+            if need.quantity.unit != "SALES_UNIT" else [],
         unit_price=net, unit_price_with_tax=number(catalog.get("valueWithTax")),
         price_per_l_or_kg=net / size if net is not None and size and need.quantity.unit != "SALES_UNIT" else None,
         total=total, purchase_total=total,
@@ -331,8 +357,14 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
         delivery_reliability=product.delivery_reliability, co2_kg_per_kg=product.co2_kg_per_kg,
         labels=product.labels, matched_because=matched,
         fit=fit["probability"] if fit else None, fit_question=fit["question"] if fit else None,
-        provenance={"price": Provenance(source="valio:/api/price", fetched_at=fetched, valid_to=valid_to),
-                    "availability": Provenance(source="valio:/api/availability",
+        provenance={"price": Provenance(source=price.get("_source", "valio:/api/price"), fetched_at=fetched, valid_to=valid_to,
+                    **({"environment": "sandbox", "synthetic": True} if ENVIRONMENT.get() == "sandbox" else
+                       {"synthetic": True} if product.synthetic else {})),
+                    "availability": Provenance(source=stock.get("_source", "valio:/api/availability"),
+                                               **({"environment": "sandbox", "synthetic": True} if ENVIRONMENT.get() == "sandbox" else
+                                                  {"synthetic": True} if product.synthetic else {}),
+                                               requested_date=need.deliver_by, returned_dates=[d for line in stock.get("scheduleLines", []) if (d := day(line.get("availableDate")))],
+
                                                fetched_at=timestamp(stock.get("_fetched_at")) or audit.utcnow(), valid_to=available.closing_time)},
     )
 
@@ -389,17 +421,27 @@ class Lookup:
         self.mandates = mandates
 
     def get(self, lookup_id, agent_id=None):
+        return self._get(lookup_id, agent_id)
+
+    def _get(self, lookup_id, agent_id=None):
         with self.db.connect() as conn:
             row = conn.execute("SELECT data FROM lookups WHERE id=?", (lookup_id,)).fetchone()
         if not row:
             raise DomainError("LOOKUP_NOT_FOUND", "Lookup was not found", 404)
-        return check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
-                           agent_id, "LOOKUP_NOT_FOUND")
+        result = check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
+                             agent_id, "LOOKUP_NOT_FOUND")
+        from .foundation import TASK, forward_links
+        with self.db.connect() as conn:
+            result.links.update(forward_links(conn, request_id=lookup_id, agent_id=agent_id))
+        return result
 
-    def find_offers(self, need, actor="agent:external", *, mandate=None):
+    def find_offers(self, need, actor="agent:external", *, mandate=None, product_ids=None):
+        return self._run(need, actor, lambda counter: self._find_offers(need, actor, mandate, counter, product_ids=product_ids))
+
+    def _run(self, need, actor, operation):
         counter = RequestCounter()
         try:
-            return self._find_offers(need, actor, mandate, counter)
+            return operation(counter)
         except DomainError as error:
             with self.db.connect(write=True) as conn:
                 audit.append(conn, actor, "LOOKUP_FAILED", error.message,
@@ -409,36 +451,58 @@ class Lookup:
                 error.audited = True
             raise
 
-    def prepare(self, need, actor, mandate, counter):
+    def prepare(self, need, actor, mandate, counter, *, product_ids=None):
+        adapter = self.suppliers.get(need.supplier_id)
+        catalog = adapter.catalog
         # Check authority before catalog screening, Decisions or any Valio call.
         with self.db.connect() as conn:
-            policy, record, mandate = self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), need.customer_id)
+            policy, record, mandate = self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), need.customer_id, supplier_id=need.supplier_id)
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         original_need = need
         need, effective = self.policy.effective_need(need, policy)
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
         categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories") if mandate is not None else None
+        from .substitution import functional_categories
+        functional = functional_categories(catalog, need)
+        if functional is not None:
+            categories = sorted(functional if categories is None else functional.intersection(categories))
         removed_by, counts = {}, {}
         retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
                               terms_used=list(need.search_terms) if need.search_terms else
                               re.findall(r"[^\W_]+", need.intent, re.UNICODE))
-        pool, excluded = self.catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
+        pool, excluded = catalog.search(query, need.required_claims, need.exclude_allergens, pool_size,
                                              max_limit=pool_size, removed_by=removed_by, counts=counts, sources=effective,
                                              categories=categories)
         global_warnings = []
         if not pool and retrieval.mode == "intent":
             retrieval = Retrieval(mode="intent_broadened", terms_used=broadened_terms(need.intent))
             removed_by, counts = {}, {}
-            pool, excluded = self.catalog.search(" ".join(retrieval.terms_used), need.required_claims,
+            pool, excluded = catalog.search(" ".join(retrieval.terms_used), need.required_claims,
                                                  need.exclude_allergens, pool_size, max_limit=pool_size,
                                                  removed_by=removed_by, mode="or", counts=counts, sources=effective,
                                                  categories=categories)
             global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
                 f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
         matched_count = counts.get("matched_count", len(pool))
+        from .substitution import include_preferred
+        pool = include_preferred(pool, need, catalog, categories)[:pool_size]
+        if product_ids is not None:
+            if not 1 <= len(product_ids) <= 10:
+                raise DomainError("VALIDATION_ERROR", "Explicit procurement is limited to 10 products", 422)
+            pool = [catalog.get(pid) for pid in dict.fromkeys(product_ids)]
+            pool = [p for p in pool if not constraint_failures(p, need.required_claims, need.exclude_allergens)
+                    and (categories is None or p.category in categories)]
+            matched_count = len(pool)
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = counter.screened_count
+        if need.function:
+            # Functional substitution is offered only with both category and fit evidence.
+            failed = [p for p in pool if (fits or {}).get(p.id, {}).get("probability", -1) < policy.approval.min_fit_probability]
+            if failed:
+                removed_by["function (fit not proven)"] = len(failed)
+                excluded += len(failed)
+            pool = [p for p in pool if p not in failed]
         if matched_count > screened_count:
             global_warnings.append(Warning(code="POOL_TRUNCATED", text=(
                 f"{screened_count:,} of {matched_count:,} matching products screened; add search terms to narrow.")))
@@ -449,18 +513,28 @@ class Lookup:
             candidates = pool[:min(policy.shortlist.live_max, max(passing, need.max_candidates))]
         else:
             candidates = pool[:need.max_candidates]
+        if need.substitute_for:
+            preferred = next((p for p in pool if p.id == need.substitute_for.product_id), None)
+            if preferred and all(p.id != preferred.id for p in candidates):
+                candidates = [preferred, *candidates[:max(0, policy.shortlist.live_max - 1)]]
         return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool)
 
-    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None):
-        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter)
+    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None, product_ids=None):
+        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter, product_ids=product_ids)
+        adapter = self.suppliers.get(need.supplier_id)
+        catalog = adapter.catalog
         ids = [p.id for p in candidates]
+        if need.substitute_for and need.substitute_for.product_id not in ids:
+            ids.append(need.substitute_for.product_id)
         price, stock = {}, {}
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
                 target.update(evidence[endpoint] if evidence is not None else
-                              self.valio.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
+                              adapter.fetch(endpoint, need.customer_id, need.deliver_by, ids, counter))
             except DomainError as error:
-                if error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED"}:
+                if (error.code in {"UPSTREAM_BUSY", "UPSTREAM_RATE_LIMITED", "SUPPLIER_UNAVAILABLE"}
+                        or error.code == "VALIO_UNAVAILABLE" and (
+                            error.data.get("timeout") or error.data.get("upstream_status") in {502, 503})):
                     raise
                 global_warnings.append(warning("PRICE_ERROR" if endpoint == "price" else "AVAILABILITY_ERROR"))
         if candidates and (not fits or any(p.id not in fits for p in candidates)):
@@ -471,15 +545,23 @@ class Lookup:
         with self.db.connect() as conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN")
-            reservations = {p.id: reserved(conn, p.id) for p in candidates}
+            reservations = {p.id: reserved(conn, p.id, supplier_id=need.supplier_id) for p in candidates}
             autonomous_total = self.policy.autonomous_total(conn, agent_id)
         offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),
                             (fits or {}).get(p.id), reserved_amount=reservations[p.id], sources=effective) for p in candidates]
+        if any(o.currency is not None and o.currency != "EUR" for o in offers):
+            raise DomainError("UNSUPPORTED_CURRENCY", "Policy supports EUR only; no FX rate source is configured", 422)
         rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability,
-             catalog_stats=self.catalog.metadata("ranking"), reject_codes=policy.reject.on)
+             catalog_stats=catalog.metadata("ranking"), reject_codes=policy.reject.on)
+        from .substitution import annotate, rank_substitutes
+        for offer in offers:
+            annotate(offer, need, catalog, policy, price)
+        if need.substitute_for:
+            offers = rank_substitutes(offers, need, catalog, price)
+
         from .plans import build_plans
         returned = offers[:need.max_candidates]
-        plans = build_plans(need, offers, self.policy, policy, agent_id, self.catalog,
+        plans = build_plans(need, offers, self.policy, policy, agent_id, catalog,
                             autonomous_total=autonomous_total)
         no_match_reason = None
         if not pool:
@@ -491,22 +573,22 @@ class Lookup:
                 no_match_reason += f" Tried words: {tried}. Supply search_terms to narrow the product search."
         # The stored need remains the request, so removed standing rules do not become permanent request rules.
         stored_need = original_need.model_copy(update={
-            "required_claims": self.catalog.normalize_codes(original_need.required_claims, "required_claims"),
-            "exclude_allergens": self.catalog.normalize_codes(original_need.exclude_allergens, "exclude_allergens"),
+            "required_claims": catalog.normalize_codes(original_need.required_claims, "required_claims"),
+            "exclude_allergens": catalog.normalize_codes(original_need.exclude_allergens, "exclude_allergens"),
             "preferences": need.preferences})
-        result = LookupResult(mandate=record, lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
+        result = LookupResult(supplier_id=need.supplier_id, environment=ENVIRONMENT.get(), synthetic=adapter.synthetic, mandate=record, lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
                               exclusion_counts=removed_by, offers=returned, plans=plans,
                               no_match_reason=no_match_reason, excluded_count=excluded,
                               retrieval=retrieval, matched_count=matched_count,
                               priced_count=len(candidates), screened_count=screened_count,
                               live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
-            _, result.mandate, _ = self.mandates.authorize(conn, mandate, agent_id, need.customer_id, products=[o.product_id for o in offers])
+            _, result.mandate, _ = self.mandates.authorize(conn, mandate, agent_id, need.customer_id, products=[o.product_id for o in offers], supplier_id=need.supplier_id)
             from .foundation import CORRELATION, procurement_context, trace_id
-            result.context = procurement_context(self.policy, need.customer_id, result.lookup_id, effective, result.mandate)
+            result.context = procurement_context(self.policy, need.customer_id, result.lookup_id, effective, result.mandate, supplier_id=need.supplier_id)
             result.correlation_id = CORRELATION.get()
             result.links = {"request_id": result.lookup_id, "trace_id": trace_id(),
-                            "event_id": str(uuid4()), "task_id": None}
+                            "event_id": str(uuid4()), "task_id": TASK.get()}
             self.mandates.bind(conn, "lookup", result.lookup_id, mandate)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             conn.execute("INSERT INTO lookup_offers VALUES(?,?)", (result.lookup_id, json.dumps([o.model_dump(mode="json") for o in offers])))

@@ -1,0 +1,15 @@
+name: split_stock
+version: 1
+clock: "2026-11-14T10:00:00+00:00"
+stock:
+  "1": 400
+  "2": 120
+  "3": 0
+customers:
+  hotel: {}
+approval:
+  max_auto_total_eur: 1500
+products:
+  - {id: milk-a, name: 'Lactose-free milk 5 l', category: '10400', size: 5, unit: L, price: 21.35, stock: 40, claims: [FREE_FROM_LACTOSE]}
+  - {id: milk-b, name: 'Lactose-free milk alternative 5 l', category: '10400', size: 5, unit: L, price: 21.35, stock: 40, claims: [FREE_FROM_LACTOSE]}
+

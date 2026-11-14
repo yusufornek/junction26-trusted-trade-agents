@@ -34,7 +34,8 @@ class Principal:
 
 
 class Credentials:
-    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console"):
+    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console", *, environment="live"):
+        self.environment = environment
         self.operator_agent_id = operator_agent_id
         self._operator = sha256(operator_token.encode()).digest() if operator_token else None
         self._agents = []
@@ -50,6 +51,7 @@ class Credentials:
                 raise RuntimeError("Duplicate AGENT_KEYS identity or credential")
             seen.add(digest)
             self._agents.append((agent_id, digest))
+        self._known = frozenset(seen)
 
     def require_operator(self):
         if self._operator is None:
@@ -57,6 +59,21 @@ class Credentials:
 
     def has_agent(self, agent_id):
         return any(identity == agent_id for identity, _ in self._agents)
+
+    def fingerprint(self, principal):
+        """Local dispatch binding; never retain or expose the presented secret."""
+        digest = self._operator if principal.operator else next(
+            (digest for identity, digest in self._agents if identity == principal.id), None)
+        return digest.hex() if digest else None
+
+    @property
+    def agent_ids(self):
+        return tuple(identity for identity, _ in self._agents)
+
+    def recognizes(self, secret):
+        # A cheap credential-membership gate; full identity/policy resolution stays below admission.
+        digest = sha256(secret.encode()).digest()
+        return digest in self._known
 
     def resolve(self, secret, policy=None):
         digest = sha256(secret.encode()).digest()
@@ -113,12 +130,15 @@ def check_source(service, source):
 
 
 def admit_credential(service, keys, source, secret, resource=None):
-    """Use the existing source admission rules for REST and browser sign-in."""
-    check_source(service, source)
-    if not secret:
-        raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
+    """Unknown credentials spend source tokens; known credentials retain principal limits."""
+    known = keys.recognizes(secret)
+    if not known:
+        check_source(service, source)
     principal = resolve_credential(keys, secret, service, resource)
-    service.source_limiter.refund(source)
+    if not known:
+        service.source_limiter.refund(source)
+    if keys.environment != service.settings.environment:
+        raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
     return principal
 
 
@@ -132,7 +152,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     principal = admit_credential(service, request.app.state.keys, source, secret, resource)
     request.state.principal = principal
     PRINCIPAL.set(principal)
-    if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes")) or path in {"/v1/me", "/v1/approvals"}):
+    if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes", "/v1/lookups/")) or path in {"/v1/me", "/v1/approvals"}):
         service.limiter.consume(principal.id, "read")
     return principal
 
@@ -189,20 +209,17 @@ class MCPBearerMiddleware:
             correlation_token = CORRELATION.set(correlation)
             try:
                 source = (scope.get("client") or ("unknown",))[0]
-                check_source(self.gateway, source)
                 value = headers.get(b"authorization", b"").decode("latin-1")
                 scheme, _, token = value.partition(" ")
-                if scheme.lower() != "bearer" or not token:
-                    raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
+                secret = token if scheme.lower() == "bearer" else ""
                 from .oauth import OAuthError
                 try:
                     resource = self.gateway.oauth.resource if scope.get("path") == "/mcp" else None
                 except OAuthError:
                     resource = None
-                principal = resolve_credential(self.keys, token, self.gateway, resource)
+                principal = admit_credential(self.gateway, self.keys, source, secret, resource)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
-                self.gateway.source_limiter.refund(source)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}

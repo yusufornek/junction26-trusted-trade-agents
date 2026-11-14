@@ -1,4 +1,5 @@
 """Public audit checkpoints via locally signed EIP-1559 JSON-RPC transactions."""
+from .telemetry import traced, metric
 import fcntl
 import threading
 from dataclasses import dataclass, field
@@ -107,6 +108,7 @@ class Anchoring:
         if not isinstance(tx_hash, str) or tx_hash.lower() != expected_hash.lower():
             raise AnchorError("Anchoring transaction hash mismatch")
 
+    @traced("audit.anchor")
     def anchor_once(self, *, current_head=False):
         if not self.config.enabled:
             raise AnchorError("Missing anchoring variables: " + ", ".join(self.config.missing))
@@ -121,6 +123,8 @@ class Anchoring:
                 if checkpoint is not None and not checkpoint["valid"]:
                     raise AnchorError("Audit chain is invalid")
                 with httpx.Client(timeout=10, trust_env=False) as client:
+                    if getattr(self, "telemetry", None):
+                        self.telemetry.instrument_client(client)
                     chain_id = int(self.config.chain_id)
                     with self.db.connect() as conn:
                         # Prefer an already submitted CLI target so repeated calls
@@ -200,6 +204,8 @@ class Anchoring:
                     return result
                 selector = row[0]
             with httpx.Client(timeout=10, trust_env=False) as client:
+                if getattr(self, "telemetry", None):
+                    self.telemetry.instrument_client(client)
                 if int(self._rpc(client, "eth_chainId", []), 16) != int(self.config.chain_id):
                     return result
                 tx = self._rpc(client, "eth_getTransactionByHash", [selector])
