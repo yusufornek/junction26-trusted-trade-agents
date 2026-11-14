@@ -32,7 +32,7 @@ from starlette.routing import Route
 logger = logging.getLogger(__name__)
 
 
-def create_app(gateway=None, *, settings=None, keys=None):
+def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
@@ -50,6 +50,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
                     pass
+        if not serve_mcp:
+            worker = asyncio.create_task(deliver_notifications())
+            try:
+                yield
+            finally:
+                stop.set()
+                await worker
+                if gateway is None:
+                    service.close()
+            return
         from .mcp_server import create_server
         app.state.mcp_server = create_server(service, agent_id=None)
         app.state.mcp_server.keys = keys
@@ -76,6 +86,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
+    app.state.mcp_served = serve_mcp
+    from .connections import router as connections_router
+    app.include_router(connections_router)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)
@@ -87,7 +100,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
     install_discovery(app)
     from .developer_docs import install_routes as install_developer_docs
     install_developer_docs(app)
-    app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+    if serve_mcp:
+        app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

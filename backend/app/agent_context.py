@@ -42,7 +42,7 @@ def agent_context(service, principal, mandate=None):
         summary["autonomy"] = level
     else:
         per_order, daily = 0, 0
-    operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "cancel_order"]
+    operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "get_order_evidence", "cancel_order"]
     if row:
         operations += ["find_offers", "create_quote", "place_order"]
     return AgentContext(principal=principal.public(), customer_ids=customers, mandate=summary,

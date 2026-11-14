@@ -36,7 +36,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     agent = principal.id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
     if route == "autonomy.change":
         gateway.autonomy._target(conn, arguments["agent_id"], principal or arguments["principal"], change=True)
-    elif route == "policy.update":
+    elif route in {"policy.update", "connections.create"}:
         if principal is not None:
             require_operator(principal)
     elif route == "mandates.revoke":
@@ -112,14 +112,18 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                           "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
                            "buyer.control", "buyer.revoke",
-                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"})
+                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"})
 
 
 def fingerprint(scope, route, arguments):
     # agent_id may identify a route target (autonomy), so it is never discarded.
     # Principal metadata and presented credentials are authority, not request payload.
+    excluded = {"principal", "actor", "operator", "mandate", "idempotency_key"}
+    if route == "connections.create":
+        # The replay binds the submitted body, not the host alias or current transport setup.
+        excluded.update({"origin", "mcp_served"})
     payload = {"principal": scope, "route": route, "arguments": json_value({k: v for k, v in arguments.items()
-               if k not in {"principal", "actor", "operator", "mandate", "idempotency_key"}})}
+               if k not in excluded})}
     return sha256(canonical_json(payload)).hexdigest()
 
 
@@ -141,7 +145,7 @@ def matches_command(previous, digest, name, route, arguments, saved):
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "connections") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")
@@ -204,9 +208,13 @@ def install(gateway, target, name, category):
                 except DomainError as caught:
                     error = caught
                 else:
+                    saved_value = json_value(result)
+                    if route == "connections.create":
+                        # The command replay is durable; the credential never is.
+                        saved_value["key"] = None
                     conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
                                  (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
-                                                                     "value": json_value(result), "fingerprint_version": 2})))
+                                                                     "value": saved_value, "fingerprint_version": 2})))
             if error:
                 raise error
             return result

@@ -103,6 +103,11 @@ class Database:
             conn.executescript(WEBHOOK_SCHEMA + A2A_SCHEMA)
         # Serialize additive migrations across gateway processes, including first start.
         with self.connect(write=True) as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS connections (
+                connection_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, client TEXT NOT NULL,
+                label TEXT, key_prefix TEXT NOT NULL, key_digest TEXT NOT NULL UNIQUE,
+                customer_ids TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT
+            )""")
             # A subsequent build replaces catalog rows only.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
             for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",

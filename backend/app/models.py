@@ -516,6 +516,7 @@ class Health(Model):
 
 
 class ApprovalPolicy(Model):
+    max_auto_daily_total_eur: float = Field(default=5000, ge=0, description="Default rolling 24-hour autonomous EUR ceiling for newly connected agents.")
     max_auto_total_eur: float = Field(ge=0, description="Net EUR ceiling for automatic confirmation.")
     min_fit_probability: float = Field(ge=0, le=1, description="Minimum fit probability for automatic confirmation.")
     warnings_need_approval: list[str] = Field(description="Known warning codes requiring human review.")
@@ -580,6 +581,33 @@ class AgentMandate(Model):
         if any(not customer.strip() for customer in self.customer_ids):
             raise ValueError("customer_ids must contain non-blank customer identifiers")
         return self
+
+
+ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest"]
+
+
+class ConnectionRequest(Model):
+    agent_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
+    client: ClientKind
+    customer_ids: list[str] = Field(min_length=1)
+    label: str | None = None
+
+
+class Connection(Model):
+    connection_id: str
+    agent_id: str
+    client: ClientKind
+    key_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class NewConnection(Connection):
+    key: str | None = Field(repr=False, description="Secret returned only on initial creation; null on an idempotent replay.")
+    mcp_url: str | None
+    rest_base_url: str
+    mandate: AgentMandate
 
 
 class BuyerJWK(Model):

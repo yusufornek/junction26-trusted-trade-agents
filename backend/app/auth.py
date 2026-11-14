@@ -80,6 +80,24 @@ class Credentials:
 bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")
 
 
+def resolve_credential(keys, secret, service):
+    policy = service.policy.get()
+    try:
+        return keys.resolve(secret, policy)
+    except DomainError as error:
+        if error.status != 401:
+            raise
+    principal = service.connections.resolve(secret)
+    # Issued connections have exactly the same policy-derived identity as env keys.
+    identity = policy.identities.get(principal.id)
+    organisation = identity.organisation_id if identity else None
+    customers = policy.organisations[organisation].customer_ids if organisation in policy.organisations else (
+        policy.agents[principal.id].customer_ids if principal.id in policy.agents else [])
+    return Principal(principal.id, kind=identity.kind if identity else "agent", organisation_id=organisation,
+                     customer_ids=tuple(customers), role=identity.role if identity else "agent",
+                     credential_ref=principal.credential_ref)
+
+
 def check_source(service, source):
     try:
         service.source_limiter.check(source)
@@ -98,7 +116,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     check_source(service, source)
     if credential is None:
         raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
-    principal = request.app.state.keys.resolve(credential.credentials, service.policy.get())
+    principal = resolve_credential(request.app.state.keys, credential.credentials, service)
     service.source_limiter.refund(source)
     request.state.principal = principal
     PRINCIPAL.set(principal)
@@ -147,7 +165,7 @@ class MCPBearerMiddleware:
                 scheme, _, token = value.partition(" ")
                 if scheme.lower() != "bearer" or not token:
                     raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
-                principal = self.keys.resolve(token, self.gateway.policy.get())
+                principal = resolve_credential(self.keys, token, self.gateway)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 self.gateway.source_limiter.refund(source)

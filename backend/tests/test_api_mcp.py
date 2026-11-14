@@ -162,10 +162,10 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/buyer/approvals", "/v1/buyer/activity", "/v1/buyer/agents/{agent_id}/suspend",
                                     "/v1/buyer/agents/{agent_id}/resume", "/v1/buyer/mandates/{jti}/revoke",
                                     "/v1/buyer/approvals/{order_id}/approve", "/v1/buyer/approvals/{order_id}/reject",
-                                    "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt"}
+                                    "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connections", "/v1/connections/{connection_id}"}
     for path in schema["paths"].values():
         for operation in path.values():
-            content = operation["responses"]["200"]["content"]
+            content = operation["responses"].get("200", operation["responses"].get("201"))["content"]
             assert content and all(media["schema"] for media in content.values())
     # Route inventory includes spec 10, 11 and 13 trust and UBL endpoints.
     models = schema["components"]["schemas"]
