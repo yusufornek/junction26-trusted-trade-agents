@@ -172,6 +172,8 @@ def test_AC_5_sdk_elicitation_and_input_required_tier_substitute_and_decision(ga
 def test_AC_6_a2a_schema_examples_and_cards_match_live_sdk(gateway):
     from app.a2a import agent_card
     from app.discovery import EXTENSION as MCP_EXTENSION, BACKEND
+    schema = json.loads((BACKEND / "vendor/mcp-server-card/schema.json").read_text())
+    validator = Draft202012Validator({**schema, "$ref": "#/$defs/ServerCard"})
     async def run():
         for audience in ("buyer", "tenant", "operator"):
             value = MessageToDict(await agent_card(gateway, audience=audience))
@@ -179,12 +181,14 @@ def test_AC_6_a2a_schema_examples_and_cards_match_live_sdk(gateway):
             schemas = next(e["params"]["schemas"] for e in value["capabilities"]["extensions"] if e["uri"] == EXTENSION)
             assert all(skill["examples"] and schemas[skill["id"]]["input"] and schemas[skill["id"]]["output"] for skill in value["skills"])
             assert set(value["securitySchemes"]) == {"BearerAuth", "OAuth2"}
-        card = await mcp_card(gateway)
-        tools = await create_server(gateway, "external").list_tools()
-        assert card["_meta"][MCP_EXTENSION]["tools"] == [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools]
-        assert len(card["_meta"][MCP_EXTENSION]["prompts"]) == 6
-        schema = json.loads((BACKEND / "vendor/mcp-server-card/schema.json").read_text())
-        Draft202012Validator({**schema, "$ref": "#/$defs/ServerCard"}).validate(card)
+            card = await mcp_card(gateway, audience=audience)
+            advertised = card["_meta"][MCP_EXTENSION]["tools"]
+            # Binding an identity must not silently hide registered capabilities.
+            for agent_id in ("external", None):
+                tools = await create_server(gateway, agent_id, audience=audience).list_tools()
+                assert advertised == [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools]
+            assert len(card["_meta"][MCP_EXTENSION]["prompts"]) == 6
+            validator.validate(card)
     asyncio.run(run())
 
 

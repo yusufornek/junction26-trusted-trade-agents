@@ -383,7 +383,7 @@ def a2a_skill(gateway, params, p, audience, mandate=None):
         async def invoke():
             token = PRINCIPAL.set(p)
             try:
-                server = create_server(gateway, p.agent_id, mandate=mandate, audience=audience, full_surface=True)
+                server = create_server(gateway, p.agent_id, mandate=mandate, audience=audience)
                 tools = {t.name: t for t in await server.list_tools()}
                 if name not in tools:
                     raise DomainError("TOOL_NOT_FOUND", "Skill unavailable for this audience", 404)

@@ -71,8 +71,6 @@ class GatewayMCPServer(MCPServer):
         if audience != self.audience:
             return await create_server(self.gateway, agent_id=None, audience=audience).list_tools()
         tools = await super().list_tools()
-        if self.compatibility_tools is not None:
-            tools = [tool for tool in tools if tool.name in self.compatibility_tools]
         # SDK defaults to validation schemas; Order's computed recovery guidance is
         # emitted on the wire and must also appear in the advertised output schema.
         for tool in tools:
@@ -208,11 +206,11 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=None):
-    """Keep bound buyer discovery stable; shared gateways expose the full surface.
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer"):
+    """Use the same live inventory for bound clients, shared transports and cards.
 
-    Standalone callers can opt in with full_surface=True. All registered tools
-    continue to use the same authorization and execution paths.
+    Binding an identity changes authorization, never the registered capabilities.
+    Audience and current-principal scope filtering still apply on discovery/calls.
     """
     if audience != "buyer":
         server = GatewayMCPServer(NAME+"-"+audience, title=TITLE+" — "+audience, version=VERSION,
@@ -224,7 +222,6 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
             "EVIDENCE_CHANGED requires reviewing fresh evidence and a new confirmation. Never invent confirmation answers.")
         server.keys, server.gateway, server.agent_id = gateway.settings.keys or Credentials(), gateway, agent_id
         server.mandate, server.audience = mandate, audience
-        server.compatibility_tools = None
         from .human_tools import register_tools
         register_tools(server, audience)
         if audience == "tenant":
@@ -410,8 +407,6 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
     from .agent_surface import register
-    expanded = agent_id is None if full_surface is None else full_surface
-    server.compatibility_tools = None if expanded else frozenset(server._tool_manager._tools)
     register(server)
     check_server(server)
     return server
@@ -429,7 +424,7 @@ def main():
     gateway = Gateway()
     gateway.recurring.start()
     try:
-        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience, full_surface=True)
+        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience)
         import os
         server.local_credential = os.environ.get("VTG_CONNECTION_KEY")
         if args.audience != "buyer":

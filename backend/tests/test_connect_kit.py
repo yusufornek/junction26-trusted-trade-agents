@@ -197,6 +197,9 @@ def test_ac_5_generated_tables_equal_live_tool_schemas(sandbox, monkeypatch):
     env_name, env_value = command[0].split("=", 1)
     assert env_value == config["args"][-1]
     monkeypatch.setenv(env_name, "external")
+    # The real CLI loader prepends app/; do not leak it into later imports of
+    # the separate backend/suppliers package (app/suppliers.py has the same name).
+    monkeypatch.setattr(sys, "path", sys.path.copy())
     assert _import_server(BACKEND / command[-1], None).agent_id == "external"
 
 

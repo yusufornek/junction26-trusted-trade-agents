@@ -235,11 +235,14 @@ def test_ac_1_card_valid_1_0_bearer_shared_skills(gateway):
             assert card.security_schemes["BearerAuth"].http_auth_security_scheme.scheme == "bearer"
             assert "BearerAuth" in card.security_requirements[0].schemes
             assert card.capabilities.streaming and card.capabilities.push_notifications
-            assert {s.id for s in card.skills} == {"find_offers", "find_basket_offers", "quote_and_order", "order_status", "cancel_order", "get_evidence"}
             from app.mcp_server import create_server
             tools = {tool.name: tool for tool in await create_server(gateway).list_tools()}
+            # Spec 60 advertises the live inventory plus the established A2A aliases.
+            assert {s.id for s in card.skills} == set(tools) | {"quote_and_order", "order_status", "get_evidence"}
             schemas = MessageToDict(card.capabilities.extensions[0])["params"]["schemas"]
-            assert schemas["find_offers"]["input"] == tools["find_offers"].input_schema
+            for name, tool in tools.items():
+                assert schemas[name]["input"] == tool.input_schema
+                assert schemas[name]["output"] == tool.output_schema
             # The SDK's proto-derived JSON schema validates the public card too.
             from a2a.server.routes._proto_schema import message_schema
             import jsonschema
