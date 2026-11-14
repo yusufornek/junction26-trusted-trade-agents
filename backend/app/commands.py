@@ -125,6 +125,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     elif route == "buyer.revoke":
         gateway.buyer.authorize_revocation(arguments["jti"], principal or arguments["principal"])
     elif route.startswith("recurring."):
+        from .recurring import recurring_supplier
         who = principal or arguments["principal"]
         recurring_id = saved["value"]["id"] if route == "recurring.create" else arguments["id"]
         row = gateway.recurring.get(recurring_id, who)
@@ -138,7 +139,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
                 raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
         else:
             token = arguments.get("mandate") or gateway.mandates.stored(conn, "recurring", row["id"])
-            gateway.recurring.workflow_authority(who, row["customer_id"], token)
+            gateway.recurring.workflow_authority(who, row["customer_id"], token, supplier_id=recurring_supplier(row))
         gateway.recurring.authority(conn, row)
     elif route == "proposals.submit":
         who = principal or arguments["principal"]
@@ -176,25 +177,33 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         else:
             customer = value["customer_id"]
             product = value.get("product_id") or value["baseline"]["lines"][0]["product"]
+        supplier = value.get("supplier_id") or (value.get("need") or value.get("template") or {}).get("supplier_id")
+        if supplier is None and value.get("evidence"):
+            historical = conn.execute("SELECT data FROM orders WHERE id=?", (value["evidence"][0]["order_id"],)).fetchone()
+            if historical:
+                supplier = json.loads(historical[0]).get("supplier_id")
+        supplier = supplier or "valio"
         from .purchase_memory import preferences
         prefs = preferences(conn, customer)
         if (not scoped.operator and customer not in scoped.customer_ids or not prefs.get("enabled", True)
                 or prefs.get("forgotten_at") or product in prefs.get("excluded_products", [])):
             raise DomainError("SUGGESTION_NOT_FOUND", "Suggestion was not found", 404)
         pattern = {"customer_id": customer, "product_id": product}
+        if not gateway.memory.visible_item(scoped, {**pattern, "supplier_id": supplier}, arguments.get("mandate")):
+            raise DomainError("SUGGESTION_NOT_FOUND", "Suggestion was not found", 404)
         if who.kind == "agent" and arguments.get("mandate"):
-            gateway.mandates.authorize(conn, arguments["mandate"], who.id, customer, products=[product] if product else [])
+            gateway.mandates.authorize(conn, arguments["mandate"], who.id, customer, products=[product] if product else [], supplier_id=supplier)
         if who.kind == "buyer_user" and who.role not in {"buyer_admin", "buyer_approver"}:
             raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
         if arguments["action"] in {"prepared", "made_recurring"}:
             body = arguments.get("body")
             agent = gateway.memory.purchasing_agent(who, pattern["customer_id"], body.buyer_agent_id if body else None)
-            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, pattern["customer_id"], products=[pattern["product_id"]])
+            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, pattern["customer_id"], products=[pattern["product_id"]], supplier_id=supplier)
             if arguments["action"] == "made_recurring":
                 row = gateway.recurring.get(saved["value"]["id"])
                 from .auth import Principal
                 token = arguments.get("mandate") or gateway.mandates.stored(conn, "recurring", row["id"])
-                gateway.recurring.workflow_authority(Principal(agent, customer_ids=(customer,)), customer, token)
+                gateway.recurring.workflow_authority(Principal(agent, customer_ids=(customer,)), customer, token, supplier_id=supplier)
                 gateway.recurring.authority(conn, row)
     elif route in {"memory.put_preferences", "proposals.put_preferences"}:
         gateway.proposals.scope(principal or arguments["principal"], arguments.get("customer", arguments.get("customer_id")), admin=True)

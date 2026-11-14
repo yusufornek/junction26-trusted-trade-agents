@@ -185,7 +185,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         principal = PRINCIPAL.get()
         gateway.limiter.consume(principal.id, "read")
         return agent_context(gateway, principal, PRESENTED_MANDATE.get())
-    @server.tool(description="List customer-scoped purchase rhythms predicted within horizon days (default buyer preference, normally 14). Returns confirmed-order dates, quantities, total paid, predicted date, confidence with reason and a plain-language suggestion. Supplier agents cannot read memory; shown suggestions are audited and emit suggestion.shown. Never buys.")
+    @server.tool(description="List purchase rhythms within your current customer grants, supplier scope and buyer-mandate categories, predicted within horizon days (default buyer preference, normally 14). Returns confirmed-order dates, quantities, total paid, supplier_id, predicted date, confidence with reason and a plain-language suggestion. Supplier agents cannot read memory; shown suggestions are audited and emit suggestion.shown. Never buys.")
     def get_replenishment_suggestions(horizon: int | None = None) -> list[dict]:
         if horizon is not None and (isinstance(horizon, bool) or not 1 <= horizon <= 365):
             raise DomainError("INVALID_LIMIT", "Horizon must be 1 through 365 days", 422)
@@ -212,14 +212,15 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         order, quote, _, _ = gateway.recurring.approved(request.approved_order_id)
         if principal.kind != "agent" or order.agent_id != principal.id:
             raise DomainError("RECURRING_FORBIDDEN", "Use your own confirmed order", 403)
-        gateway.recurring.workflow_authority(principal, quote.customer_id, PRESENTED_MANDATE.get())
+        gateway.recurring.workflow_authority(principal, quote.customer_id, PRESENTED_MANDATE.get(), supplier_id=quote.supplier_id)
         return gateway.recurring.create(request, principal, PRESENTED_MANDATE.get(), command_key=idempotency_key)
 
     @server.tool(description="Run one standing workflow occurrence now. Requires current recurring permission. Occurrences deduplicate by workflow and local date; fresh lookup/quote/order uses the stored mandate and baseline. Drift or policy exceptions require approval. Paused workflows refuse execution. Optional idempotency_key replays the same result after current-authority checks." + MANDATE_HELP)
     def run_recurring_order_now(recurring_order_id: str, idempotency_key: str | None = None) -> dict[str, Any]:
         principal = PRINCIPAL.get()
         row = gateway.recurring.get(recurring_order_id, principal)
-        gateway.recurring.workflow_authority(principal, row["customer_id"], PRESENTED_MANDATE.get())
+        from .recurring import recurring_supplier
+        gateway.recurring.workflow_authority(principal, row["customer_id"], PRESENTED_MANDATE.get(), supplier_id=recurring_supplier(row))
         return gateway.recurring.run(recurring_order_id, principal=principal, command_key=idempotency_key)
 
     @server.tool(description="Pause your standing workflow under current recurring permission. The scheduler and run-now stop purchasing; history stays visible. Optional idempotency_key prevents repeated pause records." + MANDATE_HELP)

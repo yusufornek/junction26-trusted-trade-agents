@@ -18,6 +18,7 @@ from app.sandbox import scenario_gateway
 from conftest import OPERATOR_HEADERS, agent_headers, raw_product
 from test_verifiable_mandate import buyer as vc_issuer, issue
 from test_webhooks import receiver, subscribe
+from test_supplier_adapters import nordfood, prepare as prepare_nordfood, reference
 
 
 @pytest.fixture
@@ -112,6 +113,9 @@ def test_ac_2_two_orders_have_no_pattern_irregular_intervals_explain_low_confide
     mixed = deepcopy(purchases[:3])
     mixed[0]["unit"] = "KG"
     assert detect_patterns(mixed) == []
+    mixed = deepcopy(purchases[:3])
+    mixed[0]["supplier_id"] = "nordfood"
+    assert detect_patterns(mixed) == []  # Matching SKUs from two suppliers never form one series.
 
 
 def test_ac_3_horizon_scopes_agents_buyers_operator_and_mcp_without_cross_org_leaks(gateway, memory_setup):
@@ -160,7 +164,16 @@ def test_ac_4_prepare_only_looks_up_then_normal_quote_and_order_apply_mandate_an
         assert refused.status_code == 403 and refused.json()["next_action"] == "CONTACT_ADMIN"
 
 
-def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp_pause(gateway, memory_setup, upstream):
+@pytest.mark.parametrize("monthly_day", [1, 30])
+def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp_pause(gateway, memory_setup, upstream, monthly_day):
+    from app.recurring import rule_for
+    from app.runtime import CLOCK
+    if monthly_day != 1:
+        with gateway.db.connect(write=True) as conn:
+            for row in conn.execute("SELECT id,data FROM purchase_memory").fetchall():
+                item = json.loads(row["data"])
+                item["date"] = item["date"][:8] + str(monthly_day)
+                conn.execute("UPDATE purchase_memory SET data=? WHERE id=?", (json.dumps(item), row["id"]))
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
         id = suggestions(client)[0]["id"]
         before = counts(gateway)
@@ -171,7 +184,10 @@ def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp
         assert row["template"]["quantity"] == {"value": 1000, "unit": "L"}
         assert row["baseline"]["lines"][0]["quantity"] == 200
         assert row["baseline"]["basket_cost"] == pytest.approx(1010)
-        assert row["cadence"]["rrule"] == "FREQ=MONTHLY;BYMONTHDAY=1"
+        expected = "FREQ=MONTHLY;BYMONTHDAY=1" if monthly_day == 1 else "FREQ=MONTHLY;BYMONTHDAY=28,29,30;BYSETPOS=-1"
+        assert row["cadence"]["rrule"] == expected
+        scheduled = datetime.fromisoformat(row["next_run_at"])
+        assert rule_for(row).after(scheduled, inc=True) == scheduled
         assert not tool(gateway, "list_recurring_orders", {}).is_error
         assert suggestions(client) == []
         upstream.need.deliver_by = audit.utcnow().date()
@@ -184,6 +200,22 @@ def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp
         second = gateway.recurring.run(row["id"], when)
         assert second["status"] == "PENDING_APPROVAL"
         assert any(h.rule == "recurring_drift" for h in gateway.orders.get_order(second["order_id"]).policy.hits)
+        upstream.need.deliver_by = scheduled.date()
+        upstream.cutoff = scheduled + timedelta(hours=1)
+        token = CLOCK.set(lambda: scheduled)
+        class ScheduledDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return scheduled.astimezone(tz) if tz else scheduled.replace(tzinfo=None)
+        try:
+            with patch("app.audit.utcnow", return_value=scheduled), patch("app.models.datetime", ScheduledDateTime):
+                gateway.recurring.due(scheduled)
+                gateway.recurring.due(scheduled)
+        finally:
+            CLOCK.reset(token)
+        scheduled_runs = [r for r in gateway.recurring.runs(row["id"]) if datetime.fromisoformat(r["occurrence_at"]) == scheduled]
+        assert len(scheduled_runs) == 1 and scheduled_runs[0]["status"] == "PENDING_APPROVAL"
+        assert any(h.rule == "recurring_drift" for h in gateway.orders.get_order(scheduled_runs[0]["order_id"]).policy.hits)
         paused = tool(gateway, "pause_recurring_order", {"recurring_order_id": row["id"]})
         assert not paused.is_error and paused.structured_content["status"] == "PAUSED"
         assert tool(gateway, "run_recurring_order_now", {"recurring_order_id": row["id"]}).is_error
@@ -303,6 +335,9 @@ def test_review_suggestion_action_replay_is_atomic_and_authorized(gateway, memor
 
 
 def test_review_memory_interfaces_and_mcp_workflows_remain_registered(gateway):
+    import yaml
+    from app.config import BACKEND
+    from app.developer_docs import generated, tool_schemas
     schema = create_app(gateway).openapi()
     for path, method in [("/v1/suggestions", "get"), ("/v1/buyer/memory-preferences", "put"),
                          *[(f"/v1/suggestions/{{id}}/{name}", "post") for name in ("prepare", "make-recurring", "dismiss", "snooze")]]:
@@ -310,6 +345,10 @@ def test_review_memory_interfaces_and_mcp_workflows_remain_registered(gateway):
     names = {t.name for t in asyncio.run(create_server(gateway, "external").list_tools())}
     assert {"get_replenishment_suggestions", "prepare_suggestion", "create_recurring_from_suggestion",
             "list_recurring_orders", "create_recurring_order", "run_recurring_order_now", "pause_recurring_order"} <= names
+    schemas = asyncio.run(tool_schemas())
+    assert (BACKEND / "static/developers.html").read_text() == generated(schemas)
+    assert json.loads((BACKEND / "static/tools.json").read_text()) == schemas
+    assert yaml.safe_load((BACKEND.parent / "contracts/openapi.yaml").read_text()) == schema
 
 
 def test_review_preparation_replay_survives_a_new_purchase(gateway, memory_setup, upstream, need):
@@ -327,3 +366,193 @@ def test_review_preparation_replay_survives_a_new_purchase(gateway, memory_setup
         replay = client.post(path, headers=headers)
         assert replay.status_code == 200, replay.text
         assert replay.json()["lookup_id"] == prepared.json()["lookup_id"]
+
+
+def memory_token(key, **scope):
+    from app.mandates import decode, sign_jwt
+    claims = decode(issue(key))[1]
+    claims["sub"] = claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    claims["vc"]["credentialSubject"].update(scope)
+    return sign_jwt(key, claims, kid="buyer-1")
+
+
+@pytest.fixture
+def nordfood_history(gateway, memory_setup, need, upstream, nordfood):
+    request = reference(need, quantity=Quantity(value=24, unit="L"))
+    for month in (9, 10, 11):
+        with patch("app.audit.utcnow", return_value=datetime(2026, month, 1, 9, tzinfo=timezone.utc)):
+            quote = prepare_nordfood(gateway, request)
+            order = gateway.orders.place_order(quote.id, f"nf-history:{month}")
+            if order.status == "PENDING_APPROVAL":
+                order = gateway.orders.approve(order.id, "Historical buyer")
+            assert order.status == "CONFIRMED"
+    return order
+
+
+@pytest.mark.parametrize("withdrawal", ["customer", "grant"])
+def test_review_memory_current_customer_grant(gateway, memory_setup, withdrawal):
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        id = suggestions(client)[0]["id"]
+        policy = gateway.policy._editable(gateway.policy.get())
+        if withdrawal == "customer":
+            policy["agents"]["external"]["customer_ids"] = ["2"]
+        else:
+            del policy["agents"]["external"]
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Revoke access"))
+        code = "CUSTOMER_NOT_IN_MANDATE" if withdrawal == "customer" else "AGENT_NOT_REGISTERED"
+        response = client.get("/v1/suggestions?horizon=60")
+        assert response.status_code == 403 and response.json()["code"] == code
+        result = tool(gateway, "get_replenishment_suggestions", {"horizon": 60})
+        assert result.is_error and result.structured_content["code"] == code
+        for action, payload in (("dismiss", None), ("snooze", {"days": 2}), ("prepare", {}), ("make-recurring", {})):
+            assert client.post(f"/v1/suggestions/{id}/{action}", json=payload).status_code == 403
+        assert tool(gateway, "prepare_suggestion", {"suggestion_id": id}).is_error
+        assert suggestions(client, headers=agent_headers("observer"))[0]["id"] == id
+
+
+@pytest.mark.parametrize("authority", ["policy", "vc"])
+def test_review_memory_supplier_scope(gateway, nordfood_history, vc_issuer, authority):
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        nf_id = next(r["id"] for r in suggestions(client) if r["product_id"] == "NF-001")
+        prepared = client.post(f"/v1/suggestions/{nf_id}/prepare", headers={"Idempotency-Key": "before-supplier-revocation"})
+        assert prepared.status_code == 200
+    headers = agent_headers("external")
+    if authority == "vc":
+        headers["Agent-Mandate"] = memory_token(vc_issuer, supplier_ids=["valio"])
+    else:
+        policy = gateway.policy._editable(gateway.policy.get())
+        policy["agents"]["external"]["supplier_ids"] = ["valio"]
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Supplier restriction"))
+    with TestClient(create_app(gateway), headers=headers) as client:
+        rows = suggestions(client)
+        assert [r["product_id"] for r in rows] == ["1"]
+        result = tool(gateway, "get_replenishment_suggestions", {"horizon": 60}, mandate=headers.get("Agent-Mandate"))
+        assert not result.is_error
+        assert [r["product_id"] for r in result.structured_content["result"]] == ["1"]
+        assert client.post(f"/v1/suggestions/{nf_id}/prepare", headers={"Idempotency-Key": "before-supplier-revocation"}).status_code == 404
+        assert client.post(f"/v1/suggestions/{nf_id}/dismiss").status_code == 404
+        assert any(r["id"] == nf_id for r in suggestions(client, headers=agent_headers("observer")))
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("purchase_count", [1, 3])
+def test_review_memory_categories_use_historical_supplier(gateway, nordfood_history, vc_issuer, legacy, purchase_count):
+    if purchase_count == 1:
+        with gateway.db.connect(write=True) as conn:
+            ids = [r[0] for r in conn.execute("SELECT id FROM purchase_memory WHERE json_extract(data,'$.supplier_id')='nordfood' ORDER BY id")]
+            for id in ids[1:]:
+                conn.execute("DELETE FROM purchase_memory WHERE id=?", (id,))
+    if legacy:
+        # Old memory entries did not carry a top-level supplier; the stored need did.
+        with gateway.db.connect(write=True) as conn:
+            for row in conn.execute("SELECT id,data FROM purchase_memory").fetchall():
+                item = json.loads(row["data"])
+                item.pop("supplier_id", None)
+                conn.execute("UPDATE purchase_memory SET data=? WHERE id=?", (json.dumps(item), row["id"]))
+    token = memory_token(vc_issuer, categories=["10400"])
+    with TestClient(create_app(gateway), headers={**agent_headers("external"), "Agent-Mandate": token}) as client:
+        expected = {"1", "NF-001"} if purchase_count == 3 else {"1"}
+        assert {r["product_id"] for r in suggestions(client)} == expected
+
+
+@pytest.mark.parametrize("authority", ["policy", "vc"])
+def test_review_prepare_historical_supplier(gateway, nordfood_history, vc_issuer, authority):
+    headers = agent_headers("external")
+    if authority == "vc":
+        headers["Agent-Mandate"] = memory_token(vc_issuer, supplier_ids=["nordfood"])
+    else:
+        policy = gateway.policy._editable(gateway.policy.get())
+        policy["agents"]["external"]["supplier_ids"] = ["nordfood"]
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Nordfood authority"))
+    with TestClient(create_app(gateway), headers=headers) as client:
+        id = next(r["id"] for r in suggestions(client) if r["product_id"] == "NF-001")
+        before = counts(gateway)
+        response = client.post(f"/v1/suggestions/{id}/prepare", headers={"Idempotency-Key": "nf-prepare"})
+        assert response.status_code == 200, response.text
+        assert response.json()["supplier_id"] == "nordfood" and response.json()["plans"]
+        assert counts(gateway) == before
+        replay = client.post(f"/v1/suggestions/{id}/prepare", headers={"Idempotency-Key": "nf-prepare"})
+        assert replay.status_code == 200 and replay.json() == response.json()
+
+
+def test_review_pause_wins_before_run_transaction(gateway, memory_setup, monkeypatch):
+    from app.db import DomainError
+    from app.purchase_memory import MakeRecurring
+    principal = Principal("external", customer_ids=("1",))
+    pattern = gateway.memory.suggestions(principal, 60)[0]
+    row = gateway.memory.act(pattern["id"], "made_recurring", principal, MakeRecurring())
+    original = gateway.limiter.consume
+    paused = False
+    def admission(agent, category):
+        nonlocal paused
+        if category == "mutation" and not paused:
+            paused = True
+            gateway.recurring.pause(row["id"], principal)
+            assert gateway.recurring.get(row["id"])["status"] == "PAUSED"
+        return original(agent, category)
+    before = counts(gateway)
+    monkeypatch.setattr(gateway.limiter, "consume", admission)
+    with pytest.raises(DomainError, match="INVALID_TRANSITION"):
+        gateway.recurring.run(row["id"], principal=principal)
+    assert paused and counts(gateway) == before and gateway.recurring.runs(row["id"]) == []
+
+
+def test_review_month_end_prediction_is_scheduled(gateway, memory_setup, upstream):
+    from app.purchase_memory import MakeRecurring
+    from app.recurring import rule_for
+    from app.runtime import CLOCK
+    principal = Principal("external", customer_ids=("1",))
+    with gateway.db.connect(write=True) as conn:
+        rows = conn.execute("SELECT id,data FROM purchase_memory ORDER BY rowid").fetchall()
+        for row, when in zip(rows, ["2026-08-30", "2026-09-30", "2026-10-30", "2026-11-30", "2026-12-30", "2027-01-30"]):
+            item = json.loads(row["data"])
+            item["date"] = when
+            conn.execute("UPDATE purchase_memory SET data=? WHERE id=?", (json.dumps(item), row["id"]))
+    pattern = gateway.memory.patterns(principal)[0]
+    assert pattern["predicted_next_need_date"] == "2027-02-28"
+    when = datetime(2027, 2, 28, tzinfo=timezone.utc)
+    token = CLOCK.set(lambda: when)
+    try:
+        with patch("app.audit.utcnow", return_value=when):
+            row = gateway.recurring.from_suggestion(pattern, gateway.memory.need(pattern), "external", MakeRecurring())
+    finally:
+        CLOCK.reset(token)
+    predicted = datetime.fromisoformat(row["next_run_at"])
+    assert rule_for(row).after(predicted, inc=True) == predicted
+    assert rule_for(row).after(predicted).date().isoformat() == "2027-03-30"
+    upstream.need.deliver_by = predicted.date()
+    upstream.cutoff = when + timedelta(hours=1)
+    class ScheduledDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when.astimezone(tz) if tz else when.replace(tzinfo=None)
+    token = CLOCK.set(lambda: when)
+    try:
+        with patch("app.audit.utcnow", return_value=when), patch("app.models.datetime", ScheduledDateTime):
+            gateway.recurring.due(when)
+            gateway.recurring.due(when)
+    finally:
+        CLOCK.reset(token)
+    runs = gateway.recurring.runs(row["id"])
+    assert len(runs) == 1 and runs[0]["status"] == "CONFIRMED"
+    assert datetime.fromisoformat(runs[0]["occurrence_at"]) == predicted
+
+
+def test_review_pattern_scaling_does_not_invent_drift(gateway, memory_setup, upstream):
+    from app.purchase_memory import MakeRecurring
+    principal = Principal("external", customer_ids=("1",))
+    with gateway.db.connect(write=True) as conn:
+        rows = conn.execute("SELECT id,data FROM purchase_memory ORDER BY rowid").fetchall()
+        for index, row in enumerate(rows):
+            item = json.loads(row["data"])
+            item["quantity"] = 970 if index == len(rows) - 1 else 1000
+            item["baseline"]["lines"][0]["quantity"] = item["quantity"] / 5
+            item["baseline"]["basket_cost"] = float(str(item["quantity"])) * 1.01
+            conn.execute("UPDATE purchase_memory SET data=? WHERE id=?", (json.dumps(item), row["id"]))
+    pattern = gateway.memory.suggestions(principal, 60)[0]
+    row = gateway.memory.act(pattern["id"], "made_recurring", principal, MakeRecurring())
+    assert row["baseline"]["lines"][0]["quantity"] == 200
+    assert row["baseline"]["basket_cost"] == 1010
+    upstream.need.deliver_by = audit.utcnow().date()
+    result = gateway.recurring.run(row["id"], principal=principal)
+    assert result["status"] == "CONFIRMED" and result["comparison"]["diff"] == []

@@ -86,7 +86,7 @@
     }
   },
   "get_replenishment_suggestions": {
-    "description": "List customer-scoped purchase rhythms predicted within horizon days (default buyer preference, normally 14). Returns confirmed-order dates, quantities, total paid, predicted date, confidence with reason and a plain-language suggestion. Supplier agents cannot read memory; shown suggestions are audited and emit suggestion.shown. Never buys.",
+    "description": "List purchase rhythms within your current customer grants, supplier scope and buyer-mandate categories, predicted within horizon days (default buyer preference, normally 14). Returns confirmed-order dates, quantities, total paid, supplier_id, predicted date, confidence with reason and a plain-language suggestion. Supplier agents cannot read memory; shown suggestions are audited and emit suggestion.shown. Never buys.",
     "inputSchema": {
       "properties": {
         "horizon": {
@@ -1752,6 +1752,7 @@
           "properties": {
             "rrule": {
               "default": "FREQ=WEEKLY",
+              "description": "Daily, weekly weekdays, or monthly RRULE. Monthly clamping uses BYMONTHDAY=28,...,preferred_day;BYSETPOS=-1.",
               "maxLength": 4000,
               "title": "Rrule",
               "type": "string"
