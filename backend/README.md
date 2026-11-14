@@ -1,5 +1,48 @@
 # Trusted Trade Agents backend MVP
 
+## Remote MCP OAuth (spec 43 R-9/R-10, operator stage)
+
+ChatGPT and claude.ai can connect through OAuth at `GATEWAY_PUBLIC_URL` + `/mcp`; no agent key is copied.
+Set `GATEWAY_PUBLIC_URL` to the gateway's public HTTPS origin and run the existing gateway process.
+The server implements the vendored MCP authorization revision 2026-07-28 and accepts 2025-11-25 clients.
+Accounts and tenants are deferred: the human signing in and consenting is the operator.
+
+Public discovery: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`
+and `/.well-known/oauth-authorization-server`. MCP 401s advertise `resource_metadata`. OAuth uses
+`/oauth/authorize`, `/oauth/token` and `/oauth/register`, authorization codes, PKCE S256 only,
+exact registered redirect URI matching, `state`, response `iss` and required `resource=<public origin>/mcp`.
+`mcp` is the buyer scope; `offline_access` is optional and advertised only by the authorization server.
+Both public clients (`none`) and DCR confidential clients (`client_secret_post`, `client_secret_basic`)
+are supported. DCR requires `application_type`. An operator may pre-register a client with
+`POST /v1/oauth/clients` (same metadata plus a chosen `client_id`). Client secrets are returned once.
+
+HTTPS URL client IDs use Client ID Metadata Documents: exact `client_id`, `client_name` and
+`redirect_uris` are required. Fetches use httpx, a 64 KiB decompressed limit, a five-second HTTP timeout
+and stream deadline, no redirects/proxies or forwarded credentials, validated public DNS addresses pinned
+to the request with original Host/SNI. CIMD clients use `token_endpoint_auth_method: none`.
+Metadata is revalidated on each authorization, avoiding stale redirect registration.
+
+The plain backend consent page signs in with the operator token, then shows agent/customer/scope choices.
+Its request-bound, short-lived HttpOnly cookie and CSRF token protect the decision. New agents use the
+same approval-first mandate rules as API-key connections; existing agents keep their authority.
+Set optional `FRONTEND_CONSENT_URL` to an HTTPS console page to receive `request_id` instead.
+The console uses operator Bearer `GET /v1/oauth/requests/{request_id}` and
+`POST /v1/oauth/requests/{request_id}/decision` with `{decision, agent_id?, customer_ids?, scopes?}`.
+The one-time `redirect_url` must be navigated to, never stored or logged. Denial returns `access_denied`.
+
+Approved consents appear in `/v1/connections` with `credential_kind: oauth` and the non-secret label
+`key_prefix: oauth`; DELETE revokes all related token families. Tokens resolve only on `/mcp`, as the
+selected agent, with customer access intersected with its current mandate. Business audit actors remain
+`agent:<agent_id>`. Access tokens expire in one hour; refresh tokens in 30 days from issue, with rotation and
+reuse detection revoking the entire family. Rotation also invalidates prior access tokens. Codes expire
+in five minutes; pending consents and browser sessions in ten. Credentials are kept only as SHA-256
+digests and are absent from consent views, audit, errors and ordinary responses after issuance.
+Existing environment and connection keys continue to work.
+
+From `backend/`, verify offline with `.venv/bin/python -m pytest tests/test_spec43_oauth_operator.py -q`
+(httpx CIMD fetches are mocked with respx) and regenerate the contract with
+`.venv/bin/python scripts/export_openapi.py`. Full console details: `docs/CONNECT-API.md`.
+
 ## Agent connections (spec 42)
 
 The console's Connect page uses operator-only `POST /v1/connections` with a required
@@ -31,8 +74,8 @@ at most once per minute per key. Operator credentials are required for all three
 connection-management endpoints; agent keys cannot issue or revoke credentials.
 
 The gateway serves Streamable HTTP MCP at exactly `/mcp`, with its session manager in
-the gateway lifespan and an authenticated principal for each request. Bearer keys are
-required even for ping and tool listing; tools audit as `agent:<agent_id>`. No agent is
+the gateway lifespan and an authenticated principal for each request. Bearer credentials
+(agent keys or OAuth access tokens) are required even for ping and tool listing; tools audit as `agent:<agent_id>`. No agent is
 bound at gateway startup. `GATEWAY_PUBLIC_URL` supplies the public origin for `mcp_url`
 (`<origin>/mcp`) and `rest_base_url` (`<origin>/v1`). Without it, REST uses the request
 origin; MCP advertises only loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). External
@@ -40,8 +83,8 @@ request hosts receive `mcp_url: null` and use REST until a public origin is conf
 `create_app(..., serve_mcp=False)` disables MCP, returns `mcp_url: null`, and removes
 the MCP catalog entry and server-card route.
 Run one gateway process per database; do not start a second MCP process on its database.
-The `chatgpt` client value records a preference only: OAuth sign-in is not implemented
-by this connection API. Tests run offline against isolated databases and in-process MCP:
+The `chatgpt` client value on an API-key connection records a preference only. For OAuth
+sign-in, use the authorization flow described above. Tests run offline against isolated databases and in-process MCP:
 `.venv/bin/python -m pytest tests/test_spec42_agent_connections.py -q`.
 
 ## Buyer view and portable evidence (specs 28–29)
@@ -577,7 +620,7 @@ MCP stdio is unchanged: launch `python -m app.mcp_server --agent-id hotel-chain-
 `demo/run_buyer_agent.sh` continues to provision this identity). For `--http`, configure that agent
 in `AGENT_KEYS` and send `Authorization: Bearer <that agent's secret>` on **every** HTTP request,
 including initialization, GET and DELETE. Another agent's key or the operator token is refused.
-OAuth for remote MCP and named operator accounts are production follow-ups.
+Remote MCP supports the operator-consented OAuth flow described above; named operator accounts remain a follow-up.
 
 ## UBL 2.1 / Peppol BIS Ordering 3 mapping
 
@@ -856,7 +899,7 @@ when an issuer ID or key ID is reused with different keys. Legacy unscoped
 revocations retain their prior denial through migration because their signer
 scope was not recorded; migration never silently restores revoked authority.
 The JWT itself is not returned in objects or audit entries. Holder binding uses
-the existing agent secret; key-bound proof of possession and OAuth remain follow-ups.
+the authenticated agent credential (key or MCP OAuth token); key-bound proof of possession remains a follow-up.
 
 ## Public audit anchoring (spec 21)
 

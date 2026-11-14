@@ -217,6 +217,8 @@ class Recurring:
         if row is None or (principal and not (principal.id == row["agent_id"] and principal.kind == "agent"
                 or principal.kind == "buyer_user" and row["customer_id"] in principal.customer_ids)):
             raise DomainError("RECURRING_NOT_FOUND", "Recurring order was not found", 404)
+        if principal and principal.resource is not None and row["customer_id"] not in principal.customer_ids:
+            raise DomainError("RECURRING_NOT_FOUND", "Recurring order was not found", 404)
         return row
 
     def save(self, conn, row):

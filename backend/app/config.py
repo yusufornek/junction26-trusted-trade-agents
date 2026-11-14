@@ -20,7 +20,7 @@ def load_env(path: Path = ROOT / ".env.local") -> None:
         if line.startswith("export "):
             line = line[7:]
         key, sep, value = line.partition("=")
-        if sep and key.strip() in {"DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES", "WEBHOOK_SANDBOX", "GATEWAY_ENVIRONMENT", "GATEWAY_PUBLIC_URL", "MCP_AGENT_ID", "NORDFOOD_API_BASE", "SANDBOX_DB_PATH", "SANDBOX_AGENT_KEYS", "SANDBOX_ADMIN_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_CONSOLE"}:
+        if sep and key.strip() in {"DB_PATH", "SIGNING_KEY_DIR", "VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID", "ANCHOR_RPC_URL", "ANCHOR_CHAIN_ID", "ANCHOR_PRIVATE_KEY", "ANCHOR_EXPLORER_TX_URL", "ANCHOR_EVERY_N_ENTRIES", "WEBHOOK_SANDBOX", "GATEWAY_ENVIRONMENT", "GATEWAY_PUBLIC_URL", "FRONTEND_CONSENT_URL", "MCP_AGENT_ID", "NORDFOOD_API_BASE", "SANDBOX_DB_PATH", "SANDBOX_AGENT_KEYS", "SANDBOX_ADMIN_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_CONSOLE"}:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -41,6 +41,7 @@ class Settings:
     signing_key_dir: Path | None = None  # Defaults to db_path.parent / keys; fixtures stay isolated.
     environment: str = "live"  # A deployment and its credentials/storage belong to one environment.
     public_url: str = ""  # Explicit public origin allowed by MCP DNS rebinding protection.
+    frontend_consent_url: str = ""
     webhook_sandbox: bool = False  # Only this explicit sandbox permits http://localhost destinations.
     nordfood_api_base: str = "http://127.0.0.1:8002"
 
@@ -62,6 +63,7 @@ class Settings:
         return cls(
             environment=environment,
             public_url=os.getenv("GATEWAY_PUBLIC_URL", ""),
+            frontend_consent_url=os.getenv("FRONTEND_CONSENT_URL", ""),
             db_path=Path((os.getenv("SANDBOX_DB_PATH") or str(BACKEND / "sandbox-state/app.db")) if sandbox else (os.getenv("DB_PATH") or cls.db_path)),
             webhook_sandbox=os.getenv("WEBHOOK_SANDBOX", "").lower() == "true",
             signing_key_dir=Path(os.environ["SIGNING_KEY_DIR"]) if os.getenv("SIGNING_KEY_DIR") and not sandbox else None,

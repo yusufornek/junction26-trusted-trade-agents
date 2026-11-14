@@ -56,27 +56,11 @@ class Connections:
     def create(self, body: ConnectionRequest, principal: Principal, origin: str, mcp_served: bool):
         require_operator(principal)
         with self.gateway.db.connect(write=True) as conn:
-            policy = self.gateway.policy.get()
-            known = set(policy.customers)
-            for mandate in policy.agents.values():
-                known.update(mandate.customer_ids)
-            for organisation in policy.organisations.values():
-                known.update(organisation.customer_ids)
-            if any(customer not in known for customer in body.customer_ids):
-                raise DomainError("VALIDATION_ERROR", "customer_ids must contain known customer identifiers", 422)
-            mandate = self._existing_mandate(conn, body.agent_id, policy)
-            if mandate is None:
-                mandate = AgentMandate(customer_ids=body.customer_ids, autonomy="approval_required",
-                    max_auto_daily_total_eur=policy.approval.max_auto_daily_total_eur)
-                # Enlist the policy projection in the enclosing command transaction.
-                # Do not emit a policy diff containing optional free-text input.
-                import yaml
-                policy.agents[body.agent_id] = mandate
-                self.gateway.policy._replace(yaml.safe_dump(
-                    policy.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
+            mandate = self.prepare_agent(conn, body.agent_id, body.customer_ids)
             secret = "vak_" + token_urlsafe(32)
             connection_id, now = "con_" + token_hex(4), audit.utcnow()
-            conn.execute("INSERT INTO connections VALUES(?,?,?,?,?,?,?,?,?,?)",
+            conn.execute("INSERT INTO connections (connection_id,agent_id,client,label,key_prefix,key_digest,"
+                         "customer_ids,created_at,last_used_at,revoked_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (connection_id, body.agent_id, body.client, body.label, secret[:8],
                  sha256(secret.encode()).hexdigest(), json.dumps(body.customer_ids), now.isoformat(), None, None))
             audit.append(conn, "human:operator", "CONNECTION_CREATED", "Issued an agent connection.",
@@ -87,7 +71,29 @@ class Connections:
                 mcp_url=origin + "/mcp" if mcp_served and (self.gateway.settings.public_url or
                     urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}) else None,
                 rest_base_url=origin + "/v1",
-                mandate=mandate.model_copy(update={"autonomy": mandate.autonomy or policy.autonomy.default}))
+                mandate=mandate.model_copy(update={"autonomy": mandate.autonomy or self.gateway.policy.get().autonomy.default}))
+
+    def prepare_agent(self, conn, agent_id, customer_ids):
+        """Shared API-key / OAuth consent authority rules, in the caller's transaction."""
+        policy = self.gateway.policy.get()
+        known = set(policy.customers)
+        for mandate in policy.agents.values():
+            known.update(mandate.customer_ids)
+        for organisation in policy.organisations.values():
+            known.update(organisation.customer_ids)
+        if any(customer not in known for customer in customer_ids):
+            raise DomainError("VALIDATION_ERROR", "customer_ids must contain known customer identifiers", 422)
+        mandate = self._existing_mandate(conn, agent_id, policy)
+        if mandate is None:
+            mandate = AgentMandate(customer_ids=customer_ids, autonomy="approval_required",
+                max_auto_daily_total_eur=policy.approval.max_auto_daily_total_eur)
+            # Enlist the policy projection in the enclosing command transaction.
+            # Do not emit a policy diff containing optional free-text input.
+            import yaml
+            policy.agents[agent_id] = mandate
+            self.gateway.policy._replace(yaml.safe_dump(
+                policy.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
+        return mandate
 
     def list(self, principal):
         require_operator(principal)
@@ -105,6 +111,7 @@ class Connections:
             if row["revoked_at"] is None:
                 conn.execute("UPDATE connections SET revoked_at=? WHERE connection_id=?",
                              (audit.utcnow().isoformat(), connection_id))
+                self.gateway.oauth.revoke_connection(conn, connection_id)
                 audit.append(conn, "human:operator", "CONNECTION_REVOKED", "Revoked an agent connection.",
                     data={"connection_id": connection_id, "agent_id": row["agent_id"],
                           "client": row["client"], "key_prefix": row["key_prefix"]})
@@ -115,7 +122,7 @@ class Connections:
         digest = sha256(secret.encode()).hexdigest()
         with self.gateway.db.connect() as conn:
             row = conn.execute("SELECT * FROM connections WHERE key_digest=?", (digest,)).fetchone()
-        if row is None or not compare_digest(digest, row["key_digest"]) or row["revoked_at"] is not None:
+        if row is None or row["credential_kind"] != "api_key" or not compare_digest(digest, row["key_digest"]) or row["revoked_at"] is not None:
             raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
         now = audit.utcnow()
         cutoff = (now - timedelta(minutes=1)).isoformat()
@@ -148,6 +155,6 @@ def list_connections(request: Request, principal: Principal = Depends(require_op
 
 
 @router.delete("/{connection_id}", response_model=Connection,
-               summary="Revoke a key immediately; retain agent mandate and history")
+               summary="Revoke a connection and its OAuth token families immediately; retain agent mandate and history")
 def revoke_connection(connection_id: str, request: Request, principal: Principal = Depends(require_operator)):
     return request.app.state.gateway.connections.revoke(connection_id, principal)

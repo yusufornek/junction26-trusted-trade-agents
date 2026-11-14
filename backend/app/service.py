@@ -84,6 +84,8 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         from .connections import Connections
         self.connections = Connections(self)
+        from .oauth import OAuth
+        self.oauth = OAuth(self)
         for name in ("create", "baseline", "pause", "run"):
             install(self, self.recurring, name, "mutation")
         for name in ("put_preferences", "submit", "action"):

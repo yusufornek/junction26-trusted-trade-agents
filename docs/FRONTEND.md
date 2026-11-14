@@ -53,6 +53,21 @@ Background: `docs/CHALLENGE.md`, `docs/DECISIONS.md`.
 | Agent mandates | `GET /v1/policy` → `agents {<id>: {customer_ids, max_auto_total_eur?, max_auto_daily_total_eur, note}}`, `shortlist.live_max`; `PUT` without them keeps the current values | New rule hit: `max_auto_daily_total_eur`; an agent without a mandate can look and quote, its order answers `403 AGENT_NOT_REGISTERED` and its plan previews show `REJECTED` with `unregistered_agent` (changed 14.11); `403 CUSTOMER_NOT_IN_MANDATE` for a foreign customer (spec 06) |
 | Who is registered | `GET /v1/stats` → `agents_seen[].registered` | The console's own flow is `agent:web-console` (registered); lookups now carry that id too |
 
+## ChatGPT and claude.ai OAuth (spec 43 R-9/R-10, operator stage)
+
+On Connect, show the public `/mcp` URL to paste and "Sign in with OAuth"; this path has no key to copy.
+The operator signs in and consents in the gateway window, choosing an agent, allowed customers and scopes.
+OAuth connections carry `credential_kind: "oauth"` and `key_prefix: "oauth"` in the existing connection
+list; DELETE revokes the grant immediately. API-key connection shapes are unchanged.
+
+The backend serves the consent page until the console supplies one. `FRONTEND_CONSENT_URL` selects an HTTPS
+console page receiving `request_id` only. Operator-authenticated `GET /v1/oauth/requests/{request_id}` supplies
+the client name, redirect host, scopes, resource, expiry, status and agent/customer choices. POST its `/decision`
+with `{decision: "approve", agent_id, customer_ids, scopes?}` or `{decision: "deny"}`, then navigate to
+the returned one-time `redirect_url`. Never store or log that URL; it carries the authorization code.
+Full field descriptions are in `CONNECT-API.md` and generated OpenAPI. Accounts and tenant sign-in remain
+future work; the current consent authority is the operator token.
+
 ## Authentication and newer backend behaviour (14.11, specs 15–20 — details in `docs/specs/`)
 | What | Where | Observed while testing |
 |---|---|---|

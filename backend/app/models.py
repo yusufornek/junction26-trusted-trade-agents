@@ -838,6 +838,9 @@ class Connection(Model):
     created_at: datetime
     last_used_at: datetime | None = None
     revoked_at: datetime | None = None
+    credential_kind: Literal["api_key", "oauth"] = Field(
+        default="api_key", exclude_if=lambda value: value == "api_key",
+        description="OAuth grants have no copyable key. Omitted for legacy API-key connections.")
 
 
 class NewConnection(Connection):

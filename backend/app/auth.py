@@ -19,13 +19,14 @@ class Principal:
     customer_ids: tuple[str, ...] = ()
     role: str = "agent"
     credential_ref: str | None = None
+    resource: str | None = None
 
     @property
     def id(self):
         return self.agent_id
 
     def public(self):
-        return {"id": self.id, **{k: v for k, v in asdict(self).items() if k not in {"agent_id", "operator"}}}
+        return {"id": self.id, **{k: v for k, v in asdict(self).items() if k not in {"agent_id", "operator", "resource"}}}
 
     @property
     def owner(self):
@@ -94,16 +95,18 @@ class Credentials:
                          ("operator:" if principal.operator else "agent:") + principal.id + ":key:1")
 
 
-bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token.")
+bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key or operator token. OAuth access tokens are accepted only on /mcp.")
 
 
-def resolve_credential(keys, secret, service):
+def resolve_credential(keys, secret, service, resource=None):
     policy = service.policy.get()
     try:
         return keys.resolve(secret, policy)
     except DomainError as error:
         if error.status != 401:
             raise
+    if secret.startswith(("oat_", "ort_")):
+        return service.oauth.resolve(secret, resource)
     principal = service.connections.resolve(secret)
     # Issued connections have exactly the same policy-derived identity as env keys.
     identity = policy.identities.get(principal.id)
@@ -126,12 +129,12 @@ def check_source(service, source):
         raise
 
 
-def admit_credential(service, keys, source, secret):
+def admit_credential(service, keys, source, secret, resource=None):
     """Unknown credentials spend source tokens; known credentials retain principal limits."""
     known = keys.recognizes(secret)
     if not known:
         check_source(service, source)
-    principal = resolve_credential(keys, secret, service)
+    principal = resolve_credential(keys, secret, service, resource)
     if not known:
         service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
@@ -144,10 +147,11 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     service = request.app.state.gateway
     source = request.client.host if request.client else "unknown"
     secret = credential.credentials if credential is not None else ""
-    principal = admit_credential(service, request.app.state.keys, source, secret)
+    path = request.url.path
+    resource = service.settings.public_url + "/mcp" if path == "/mcp" and service.settings.public_url else None
+    principal = admit_credential(service, request.app.state.keys, source, secret, resource)
     request.state.principal = principal
     PRINCIPAL.set(principal)
-    path = request.url.path
     if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes", "/v1/lookups/")) or path in {"/v1/me", "/v1/approvals"}):
         service.limiter.consume(principal.id, "read")
     return principal
@@ -169,7 +173,25 @@ def check_owner(obj, agent_id, code):
     # Missing ownership on a legacy record never grants an agent access.
     if agent_id is not None and obj.agent_id != agent_id:
         raise DomainError(code, "Object was not found", 404)
+    customer_id = getattr(obj, "customer_id", None)
+    if customer_id is None:
+        customer_id = getattr(getattr(obj, "need", None) or getattr(obj, "request", None), "customer_id", None)
+    if agent_id is not None and customer_id is not None:
+        check_customer_scope(agent_id, customer_id)
     return obj
+
+
+def check_customer_scope(agent_id, customer_id):
+    """OAuth consent may narrow, never expand, an agent's current mandate."""
+    if not customer_in_scope(agent_id, customer_id):
+        raise DomainError("CUSTOMER_NOT_IN_MANDATE", "This connection does not allow the customer", 403)
+
+
+def customer_in_scope(agent_id, customer_id):
+    from .foundation import PRINCIPAL
+    principal = PRINCIPAL.get()
+    return (principal is None or principal.resource is None or principal.id != agent_id or
+            customer_id in principal.customer_ids)
 
 
 class MCPBearerMiddleware:
@@ -190,13 +212,18 @@ class MCPBearerMiddleware:
                 value = headers.get(b"authorization", b"").decode("latin-1")
                 scheme, _, token = value.partition(" ")
                 secret = token if scheme.lower() == "bearer" else ""
-                principal = admit_credential(self.gateway, self.keys, source, secret)
+                from .oauth import OAuthError
+                try:
+                    resource = self.gateway.oauth.resource if scope.get("path") == "/mcp" else None
+                except OAuthError:
+                    resource = None
+                principal = admit_credential(self.gateway, self.keys, source, secret, resource)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
-                response_headers.update({"WWW-Authenticate": "Bearer"} if error.status == 401 else {"Retry-After": str(error.data["retry_after_seconds"])})
+                response_headers.update({"WWW-Authenticate": self.gateway.oauth.www_authenticate()} if error.status == 401 else {"Retry-After": str(error.data["retry_after_seconds"])})
                 await JSONResponse(problem(error, scope.get("path")), status_code=error.status,
                                    media_type="application/problem+json", headers=response_headers)(scope, receive, send)
                 CORRELATION.reset(correlation_token)
