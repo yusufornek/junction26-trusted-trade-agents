@@ -36,6 +36,7 @@ class Settings:
     valio_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
     keys: Credentials | None = field(default=None, repr=False)
+    signing_key_dir: Path | None = None  # Defaults to db_path.parent / keys; fixtures stay isolated.
 
     @classmethod
     def from_env(cls):

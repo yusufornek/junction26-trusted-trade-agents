@@ -58,6 +58,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /.well-known/jwks.json:
+    get:
+      summary: Public Ed25519 signing keys for detached quote, receipt and audit-head
+        JWS
+      operationId: jwks__well_known_jwks_json_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JWKSet'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /v1/offers:
     post:
       summary: Rank live offers and substitutes; propose fulfilment plans with caller
@@ -803,6 +857,80 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Service Unavailable
+  /v1/orders/{id}/ubl:
+    get:
+      summary: Export UBL 2.1 Order or OrderResponse; agent owns order, operator sees
+        all
+      operationId: order_ubl_v1_orders__id__ubl_get
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Id
+      - name: document
+        in: query
+        required: false
+        schema:
+          enum:
+          - order
+          - response
+          type: string
+          default: order
+          title: Document
+      responses:
+        '200':
+          description: UBL 2.1 XML; party endpoint placeholders need data from Valio
+            Aimo.
+          content:
+            application/xml:
+              schema:
+                type: string
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
   /v1/orders/{order_id}/timeline:
     get:
       summary: Read the full lookup-to-order audit story and call totals without upstream
@@ -1211,6 +1339,137 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Service Unavailable
+  /v1/audit/head:
+    get:
+      summary: Signed chain head for an independently held checkpoint; any authenticated
+        principal
+      operationId: audit_head_v1_audit_head_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditHead'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
+  /v1/audit/verify:
+    get:
+      summary: Verify the gateway chain and optional external checkpoint; hashes/counts
+        only
+      operationId: audit_verify_v1_audit_verify_get
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: checkpoint_entries
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Checkpoint Entries
+      - name: checkpoint_hash
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+          title: Checkpoint Hash
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerification'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
 components:
   schemas:
     AgentMandate:
@@ -1345,6 +1604,14 @@ components:
         id:
           type: integer
           title: Id
+        prev_hash:
+          type: string
+          title: Prev Hash
+          default: ''
+        hash:
+          type: string
+          title: Hash
+          default: ''
         ts:
           type: string
           format: date-time
@@ -1384,6 +1651,58 @@ components:
       - summary
       - data
       title: AuditEntry
+    AuditHead:
+      properties:
+        entries:
+          type: integer
+          title: Entries
+        head_hash:
+          type: string
+          title: Head Hash
+        at:
+          type: string
+          title: At
+        jws:
+          type: string
+          title: Jws
+          description: Detached Ed25519 JWS over canonical {entries, head_hash, at};
+            keep outside the gateway as a checkpoint.
+      additionalProperties: false
+      type: object
+      required:
+      - entries
+      - head_hash
+      - at
+      - jws
+      title: AuditHead
+    AuditVerification:
+      properties:
+        valid:
+          type: boolean
+          title: Valid
+        entries:
+          type: integer
+          title: Entries
+        head_hash:
+          type: string
+          title: Head Hash
+        first_break:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: First Break
+        checkpoint_match:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Checkpoint Match
+      additionalProperties: false
+      type: object
+      required:
+      - valid
+      - entries
+      - head_hash
+      title: AuditVerification
     Availability:
       properties:
         available_amount:
@@ -1638,6 +1957,18 @@ components:
       - approved
       - rejected
       title: HumanDecisions
+    JWKSet:
+      properties:
+        keys:
+          items:
+            $ref: '#/components/schemas/PublicJWK'
+          type: array
+          title: Keys
+      additionalProperties: false
+      type: object
+      required:
+      - keys
+      title: JWKSet
     LiveCalls:
       properties:
         price:
@@ -1810,6 +2141,12 @@ components:
         product_id:
           type: string
           title: Product Id
+        gtin:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Gtin
+          description: GS1 GTIN of the sales unit, from salesUnitGtin.
         name:
           type: string
           title: Name
@@ -1984,6 +2321,47 @@ components:
         id:
           type: string
           title: Id
+        customer_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Customer Id
+        commitment:
+          type: string
+          const: gateway-simulated
+          title: Commitment
+          description: Recorded locally; no supplier order transmitted. Included in
+            the signed receipt.
+          default: gateway-simulated
+        quote_signature_digest:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quote Signature Digest
+          description: SHA-256 hex digest of the quote's detached JWS.
+        receipt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Receipt
+          description: Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload;
+            total is a decimal string. Verifiable via the public JWKS. Present for
+            new order decisions.
+        decided_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Decided At
+        decided_by_kind:
+          anyOf:
+          - type: string
+            enum:
+            - agent
+            - operator
+            - system
+          - type: 'null'
+          title: Decided By Kind
         quote_id:
           type: string
           title: Quote Id
@@ -2356,6 +2734,18 @@ components:
         id:
           type: string
           title: Id
+        gtin:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Gtin
+          description: Catalog salesUnitGtin, preserving leading zeros.
+        unit_gtins:
+          additionalProperties:
+            type: string
+          type: object
+          title: Unit Gtins
+          description: Catalog units[].unitId to gtin.
         name_en:
           type: string
           title: Name En
@@ -2519,6 +2909,40 @@ components:
       - source
       - fetched_at
       title: Provenance
+    PublicJWK:
+      properties:
+        kid:
+          type: string
+          title: Kid
+        kty:
+          type: string
+          const: OKP
+          title: Kty
+        crv:
+          type: string
+          const: Ed25519
+          title: Crv
+        alg:
+          type: string
+          const: EdDSA
+          title: Alg
+        use:
+          type: string
+          const: sig
+          title: Use
+        x:
+          type: string
+          title: X
+      additionalProperties: false
+      type: object
+      required:
+      - kid
+      - kty
+      - crv
+      - alg
+      - use
+      - x
+      title: PublicJWK
     Quantity:
       properties:
         value:
@@ -2546,6 +2970,22 @@ components:
         id:
           type: string
           title: Id
+        signature:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Signature
+          description: Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload (decimal-string
+            units and money, line provenance and price_commitment). kid is in the
+            protected header; public keys at /.well-known/jwks.json. Legacy unsigned
+            quotes cannot be placed.
+        price_commitment:
+          type: string
+          const: gateway-locked
+          title: Price Commitment
+          description: Gateway holds the fixed price until expires_at; included in
+            the signature.
+          default: gateway-locked
         agent_id:
           anyOf:
           - type: string
@@ -2887,6 +3327,11 @@ components:
       title: Stats
     TimelineStep:
       properties:
+        hash:
+          type: string
+          title: Hash
+          description: SHA-256 hash of this step's audit entry in the gateway chain.
+          default: ''
         ts:
           type: string
           format: date-time

@@ -53,6 +53,19 @@ Background: `docs/CHALLENGE.md`, `docs/DECISIONS.md`.
 | Agent mandates | `GET /v1/policy` → `agents {<id>: {customer_ids, max_auto_total_eur?, max_auto_daily_total_eur, note}}`, `shortlist.live_max`; `PUT` without them keeps the current values | New rule hit: `max_auto_daily_total_eur`; an agent without a mandate can look and quote, its order answers `403 AGENT_NOT_REGISTERED` and its plan previews show `REJECTED` with `unregistered_agent` (changed 14.11); `403 CUSTOMER_NOT_IN_MANDATE` for a foreign customer (spec 06) |
 | Who is registered | `GET /v1/stats` → `agents_seen[].registered` | The console's own flow is `agent:web-console` (registered); lookups now carry that id too |
 
+## Authentication and newer backend behaviour (14.11, specs 15–20 — details in `docs/specs/`)
+| What | Where | Observed while testing |
+|---|---|---|
+| Every call needs a credential | `Authorization: Bearer <token>`; without it `401 UNAUTHENTICATED` (`/health` stays open) | Keys are generated once with `backend/.venv/bin/python scripts/gen_keys.py --write` (adds `OPERATOR_TOKEN` and `AGENT_KEYS` to the repo-root `.env.local`); the API refuses to start without them |
+| Console sign-in | `frontend/src/api.ts`, `Shell.tsx`, `Approvals.tsx` carry a small patch from the backend side for review | The operator token is typed into a field and kept in memory only — a full page reload asks again; the buyer page runs as `agent:web-console` under that agent's mandate; `X-Agent-Id` is ignored |
+| Operator actions | approve / reject / cancel / policy / audit / stats / approvals need the operator token | Audit actor is `human:operator`; the typed name stays on the order (`approver`, `cancelled_by`) and in audit `data.stated_name` |
+| Approval may come back | `POST …/approve` accepts `evidence_revision`; `409 EVIDENCE_CHANGED` with `data {evidence_revision, changes[]}` | Happens when stock or rule hits changed since the order was placed; the order stays pending with the refreshed warnings (`order.evidence_revision`) |
+| Evidence wording | `matched_because[]` now names the source: "AE not listed in the catalog allergen declaration (request)", "reliability: no data (neutral)" | Products without allergen data no longer pass an allergen exclusion; unknown codes answer `422 UNKNOWN_CODE` with the valid values |
+| Totals and ranking | `OfferCard.purchase_total`, `overbuy {amount, unit}`, `score_breakdown`; `rank_label` is empty for offers that cannot be ordered | Cards rank by what the packs cost in total |
+| How much was looked at | `LookupResult.matched_count`, `retrieval {mode, terms_used}`, lookup `warnings[]` (`POOL_TRUNCATED`, `RETRIEVAL_BROADENED`) | "40 of 1,443 matching products screened" |
+| New warning codes | `SIZE_UNCONFIRMED`, `UNIT_MISMATCH`, `STOCK_MODEL_UNKNOWN`, `CUTOFF_UNKNOWN`, `NO_STOCK`, `VARIABLE_WEIGHT`, `DEPOSIT` | Policy has `approval.ignored_warnings` (informational codes) and `customers` (standing constraints per customer, shown in `LookupResult.effective_constraints`) |
+| Quotes | `need_ref` or `plan_ref` is required (`422 NEED_REF_REQUIRED` otherwise) | The console already sends `need_ref` |
+
 ## Demo context (from `docs/DECISIONS.md`)
 The pitch opens by giving the challenge sentence ("1,000 L lactose-free milk by Monday …") to A.I.mo in My Aimo
 and then to our agent; what our agent did is then shown through the UI.

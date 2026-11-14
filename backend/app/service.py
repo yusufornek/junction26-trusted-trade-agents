@@ -7,18 +7,20 @@ from .lookup import Lookup
 from .orders import Orders
 from .policy import Policy
 from .valio import ValioClient
+from .signing import SigningKeys
 
 
 class Gateway:
     def __init__(self, settings=None):
         self.settings = settings or Settings.from_env()
         self.db = Database(self.settings.db_path)
+        self.signing = SigningKeys(self.settings.signing_key_dir or self.settings.db_path.parent / "keys")
         self.catalog = Catalog(self.db)
         self.valio = ValioClient(self.settings.valio_api_base, self.settings.valio_api_key)
         self.decisions = OpenAIDecisions(self.settings.openai_api_key)
         self.policy = Policy(self.settings.policy_path, self.settings.db_path.parent / "policy.yaml", self.db)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy)
-        self.orders = Orders(self.db, self.catalog, self.valio, self.policy)
+        self.orders = Orders(self.db, self.catalog, self.valio, self.policy, self.signing)
 
     def find_offers(self, need, actor="agent:external"):
         self.orders.expire()

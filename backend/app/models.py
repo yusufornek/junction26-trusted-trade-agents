@@ -92,6 +92,8 @@ class LiveCalls(Model):
 
 class Product(Model):
     id: str
+    gtin: str | None = Field(default=None, description="Catalog salesUnitGtin, preserving leading zeros.")
+    unit_gtins: dict[str, str] = Field(default_factory=dict, description="Catalog units[].unitId to gtin.")
     name_en: str
     name_fi: str = ""
     category: str | None = None
@@ -137,6 +139,7 @@ class Availability(Model):
 
 class OfferCard(Model):
     product_id: str
+    gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
     sales_unit: str
     size_per_sales_unit: float | None = Field(default=None, description="Quantity unit per sales unit; null when conversion is unknown.")
@@ -259,6 +262,8 @@ class QuoteRequest(RequestScope):
 
 class Quote(Model):
     id: str
+    signature: str | None = Field(default=None, description="Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload (decimal-string units and money, line provenance and price_commitment). kid is in the protected header; public keys at /.well-known/jwks.json. Legacy unsigned quotes cannot be placed.")
+    price_commitment: Literal["gateway-locked"] = Field(default="gateway-locked", description="Gateway holds the fixed price until expires_at; included in the signature.")
     agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     customer_id: str
     deliver_by: date
@@ -281,6 +286,12 @@ class OrderRequest(Model):
 
 class Order(Model):
     id: str
+    customer_id: str | None = None
+    commitment: Literal["gateway-simulated"] = Field(default="gateway-simulated", description="Recorded locally; no supplier order transmitted. Included in the signed receipt.")
+    quote_signature_digest: str | None = Field(default=None, description="SHA-256 hex digest of the quote's detached JWS.")
+    receipt: str | None = Field(default=None, description="Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload; total is a decimal string. Verifiable via the public JWKS. Present for new order decisions.")
+    decided_at: datetime | None = None
+    decided_by_kind: Literal["agent", "operator", "system"] | None = None
     quote_id: str
     agent_id: str
     idempotency_key: str
@@ -325,6 +336,8 @@ class ApprovalItem(Model):
 
 class AuditEntry(Model):
     id: int
+    prev_hash: str = ""
+    hash: str = ""
     ts: datetime
     actor: str
     action: str
@@ -335,6 +348,7 @@ class AuditEntry(Model):
 
 
 class TimelineStep(Model):
+    hash: str = Field(default="", description="SHA-256 hash of this step's audit entry in the gateway chain.")
     ts: datetime = Field(description="UTC audit event time; steps are oldest first, with audit ID breaking ties.")
     actor: str = Field(description="Recorded actor, such as agent:buyer, human:Ada or system.")
     action: str = Field(description="Original audit action, including EVIDENCE_CHANGED, replays and failed attempts.")
@@ -354,6 +368,34 @@ class OrderTimeline(Model):
     steps: list[TimelineStep] = Field(description="Related lookup, quote and order audit events, oldest first; each event appears once.")
     total_live_calls: LiveCalls = Field(description="Sum of actual Valio requests across all steps, including failed checks and human approval.")
     total_decision_calls: int = Field(description="Sum of actual Decisions requests across all steps.")
+
+
+class PublicJWK(Model):
+    kid: str
+    kty: Literal["OKP"]
+    crv: Literal["Ed25519"]
+    alg: Literal["EdDSA"]
+    use: Literal["sig"]
+    x: str
+
+
+class JWKSet(Model):
+    keys: list[PublicJWK]
+
+
+class AuditHead(Model):
+    entries: int
+    head_hash: str
+    at: str
+    jws: str = Field(description="Detached Ed25519 JWS over canonical {entries, head_hash, at}; keep outside the gateway as a checkpoint.")
+
+
+class AuditVerification(Model):
+    valid: bool
+    entries: int
+    head_hash: str
+    first_break: int | None = None
+    checkpoint_match: bool | None = None
 
 
 class ErrorResponse(Model):

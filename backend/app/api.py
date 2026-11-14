@@ -2,12 +2,12 @@ import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Request, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 
 from . import audit as audit_log
@@ -17,6 +17,7 @@ from .db import DomainError
 from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, ErrorResponse, Health,
                      LookupResult, NeedSpec, Order, OrderRequest, OrderTimeline, Product, Quote, QuoteRequest)
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
+from .models import JWKSet, AuditHead, AuditVerification
 from .service import Gateway
 from .stats import read_stats
 
@@ -94,6 +95,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return Health(status="ok" if count else "catalog_empty", catalog_rows=count,
                       coverage=svc(request).catalog.metadata("coverage"))
 
+    @app.get("/.well-known/jwks.json", response_model=JWKSet,
+             summary="Public Ed25519 signing keys for detached quote, receipt and audit-head JWS")
+    def jwks(request: Request):
+        return svc(request).signing.jwks()
+
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
     def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -151,6 +157,15 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def get_order(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_order(id, principal.owner)
 
+    @app.get("/v1/orders/{id}/ubl", response_class=Response,
+             summary="Export UBL 2.1 Order or OrderResponse; agent owns order, operator sees all",
+             responses={200: {"content": {"application/xml": {"schema": {"type": "string"}}},
+                              "description": "UBL 2.1 XML; party endpoint placeholders need data from Valio Aimo."}})
+    def order_ubl(id: str, request: Request, document: Literal["order", "response"] = "order",
+                  principal: Principal = Depends(resolve_principal)):
+        xml = svc(request).orders.get_order_ubl(id, document, principal.owner)
+        return Response(xml, media_type="application/xml")
+
     @app.get("/v1/orders/{order_id}/timeline", response_model=OrderTimeline,
              summary="Read the full lookup-to-order audit story and call totals without upstream requests")
     def order_timeline(order_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -185,6 +200,20 @@ def create_app(gateway=None, *, settings=None, keys=None):
     @app.get("/v1/audit", response_model=list[AuditEntry])
     def audit(request: Request, order_id: str | None = None, quote_id: str | None = None, principal: Principal = Depends(require_operator)):
         return svc(request).audit(order_id, quote_id)
+
+    @app.get("/v1/audit/head", response_model=AuditHead,
+             summary="Signed chain head for an independently held checkpoint; any authenticated principal")
+    def audit_head(request: Request, principal: Principal = Depends(resolve_principal)):
+        return audit_log.head(svc(request).db, svc(request).signing)
+
+    @app.get("/v1/audit/verify", response_model=AuditVerification,
+             summary="Verify the gateway chain and optional external checkpoint; hashes/counts only")
+    def audit_verify(request: Request, checkpoint_entries: int | None = Query(default=None, ge=0),
+                     checkpoint_hash: str | None = Query(default=None, pattern="^[0-9a-f]{64}$"),
+                     principal: Principal = Depends(resolve_principal)):
+        if (checkpoint_entries is None) != (checkpoint_hash is None):
+            raise DomainError("INVALID_CHECKPOINT", "Supply checkpoint_entries and checkpoint_hash together", 422)
+        return audit_log.verify(svc(request).db, checkpoint_entries, checkpoint_hash)
 
     return app
 

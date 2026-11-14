@@ -93,6 +93,8 @@ def extract(raw, reliability, carbon):
                 declaration |= status != "free_from"
     return Product(
         id=str(raw["id"]), name_en=localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi"),
+        gtin=str(raw["salesUnitGtin"]) if raw.get("salesUnitGtin") else None,
+        unit_gtins={u["unitId"]: str(u["gtin"]) for u in (raw.get("units") or []) if u.get("gtin")},
         name_fi=localized(synkka.get("names"), "fi"), category=str(raw["category"]) if raw.get("category") else None,
         sales_unit=raw.get("salesUnit") or "ST", base_unit=raw.get("baseUnit") or "ST",
         allowed_lot_size=number(raw.get("allowedLotSize")) or 1,

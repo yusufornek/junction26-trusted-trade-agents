@@ -1,5 +1,6 @@
 import argparse
 import json
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -62,7 +63,11 @@ def create_server(gateway, agent_id="mcp-agent"):
         "Every quote is bound to a stored request: quote a plan with plan_ref {lookup_id, plan_index}, or explicit lines with required need_ref. "
         "Current customer standing constraints are unioned with request constraints at lookup, quote, order and approval. "
         "customer_id is required; deliver_by must be today through +60 days (Europe/Helsinki); quantities are strict numbers >0 and <=1,000,000. "
-        "Unknown claim/allergen/label codes return UNKNOWN_CODE with valid values. " + WARNINGS))
+        "Unknown claim/allergen/label codes return UNKNOWN_CODE with valid values. "
+        "Quotes have Ed25519 detached JWS signatures: download public /.well-known/jwks.json, save the quote, "
+        "then run scripts/verify_quote.py quote.json --jwks jwks.json --customer ID offline. "
+        "RFC 8785 quote_payload uses decimal-string money/quantities, provenance and price_commitment=gateway-locked. "
+        "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS))
     server.keys = gateway.settings.keys or Credentials()
     server.agent_id = agent_id
 
@@ -76,7 +81,7 @@ def create_server(gateway, agent_id="mcp-agent"):
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{agent_id}")
 
-    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. No negotiation or signing in MVP.")
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over RFC 8785 quote_payload, decimal-string quantities/money and provenance; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation.")
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
         try:
@@ -95,6 +100,10 @@ def create_server(gateway, agent_id="mcp-agent"):
     @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
         return gateway.orders.get_order(order_id, agent_id)
+
+    @server.tool(description="Export this agent's own order as UBL 2.1 XML, identical to GET /v1/orders/{id}/ubl. document=order (default) or response; response codes AP confirmed, RE rejected/cancelled/expired, CA pending. Includes sales-unit GTINs and UN/ECE unit codes. Party endpoint placeholders need data from Valio Aimo; gateway-simulated, no supplier transmission. Another agent's order is ORDER_NOT_FOUND.")
+    def get_order_ubl(order_id: str, document: Literal["order", "response"] = "order") -> str:
+        return gateway.orders.get_order_ubl(order_id, document, agent_id)
 
     @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
     def cancel_order(order_id: str, reason: str = "") -> Order:

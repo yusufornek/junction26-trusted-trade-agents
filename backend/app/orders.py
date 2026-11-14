@@ -2,6 +2,8 @@ from datetime import timedelta
 from decimal import Decimal
 import json
 from uuid import uuid4
+from types import SimpleNamespace
+from cryptography.exceptions import InvalidSignature
 
 from . import audit
 from .auth import check_owner
@@ -10,6 +12,7 @@ from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
 from .models import LiveCalls, LookupResult, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
+from .signing import quote_payload, receipt_payload, signature_digest, verify_jws
 
 
 def evidence_changes(before, after):
@@ -42,8 +45,28 @@ def evidence_changes(before, after):
 
 
 class Orders:
-    def __init__(self, db, catalog, valio, policy):
+    def __init__(self, db, catalog, valio, policy, signing):
         self.db, self.catalog, self.valio, self.policy = db, catalog, valio, policy
+        self.signing = signing
+
+    def _sign_receipt(self, order, quote, kind):
+        order.customer_id = quote.customer_id
+        order.quote_signature_digest = signature_digest(quote.signature) if quote.signature else None
+        order.decided_at = audit.utcnow()
+        order.decided_by_kind = kind
+        order.receipt = self.signing.sign(receipt_payload(order))
+
+    def _verified_quote(self, conn, quote_id, agent_id):
+        row = conn.execute("SELECT data FROM quotes WHERE id=?", (quote_id,)).fetchone()
+        if row is None:
+            raise DomainError("QUOTE_NOT_FOUND", "Quote was not found", 404)
+        raw = json.loads(row[0])
+        check_owner(SimpleNamespace(agent_id=raw.get("agent_id")), agent_id, "QUOTE_NOT_FOUND")
+        try:
+            verify_jws(raw["signature"], quote_payload(raw), self.signing.jwks())
+            return Quote.model_validate(raw)
+        except (InvalidSignature, ValueError, TypeError, KeyError, AttributeError):
+            raise DomainError("QUOTE_SIGNATURE_INVALID", "Stored quote signature does not match its promise") from None
 
     def _run(self, action, actor, inputs, operation):
         counter = RequestCounter()
@@ -90,7 +113,12 @@ class Orders:
         now = audit.utcnow()
         with self.db.connect(write=True) as conn:
             for row in conn.execute("SELECT data FROM quotes WHERE status='OPEN'").fetchall():
-                quote = Quote.model_validate_json(row["data"])
+                try:
+                    quote = Quote.model_validate_json(row["data"])
+                except ValueError:
+                    # Malformed signed fields must reach placement's explicit
+                    # signature refusal rather than crashing its expiry sweep.
+                    continue
                 if quote.expires_at <= now:
                     quote.status = "EXPIRED"
                     self._save_quote(conn, quote)
@@ -99,6 +127,7 @@ class Orders:
                 order = Order.model_validate_json(row["data"])
                 if order.expires_at <= now:
                     order.status = "EXPIRED"
+                    self._sign_receipt(order, self._quote(conn, order.quote_id), "system")
                     self._save_order(conn, order)
                     conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
                     audit.append(conn, "system", "ORDER_EXPIRED", "Approval deadline passed; local reservations released.",
@@ -179,6 +208,7 @@ class Orders:
                           hard_constraint_violations=violations, live_calls=counter.live())
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
+            quote.signature = self.signing.sign(quote_payload(quote))
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
             audit.append(conn, actor, "CREATE_QUOTE", f"Locked {len(lines)} fixed-price lines for {quote.total:.2f} EUR.",
                          quote_id=quote.id, data={"inputs": request.model_dump(mode="json"),
@@ -201,8 +231,7 @@ class Orders:
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=?", (key,)).fetchone()
             if not existing and agent_id not in policy.agents:
                 raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
-            quote = self._quote(conn, quote_id)
-            check_owner(quote, None if operator else agent_id, "QUOTE_NOT_FOUND")
+            quote = self._verified_quote(conn, quote_id, None if operator else agent_id)
             if existing:
                 order = Order.model_validate_json(existing["data"])
                 if order.quote_id != quote_id or order.agent_id != agent_id:
@@ -230,6 +259,7 @@ class Orders:
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
                           policy=result, live_calls=counter.live())
+            self._sign_receipt(order, quote, "operator" if operator else "agent")
             conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
@@ -285,6 +315,15 @@ class Orders:
         with self.db.connect() as conn:
             return check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
 
+    def get_order_ubl(self, order_id, document="order", agent_id=None):
+        from .ubl import export
+        self.expire()
+        with self.db.connect() as conn:
+            conn.execute("BEGIN")
+            order = check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
+            quote = self._quote(conn, order.quote_id)
+            return export(order, quote, document)
+
     def timeline(self, order_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
@@ -299,7 +338,7 @@ class Orders:
                   "EVIDENCE_CHANGED": "decision",
                   "CANCEL": "cancellation"}
         steps = [TimelineStep(
-            ts=event.ts, actor=event.actor, action=event.action,
+            ts=event.ts, actor=event.actor, action=event.action, hash=event.hash,
             step=stages.get(event.action.removesuffix("_FAILED"), "system"),
             summary=event.summary, data=event.data,
             live_calls=LiveCalls.model_validate(event.data.get("live_calls") or {}),
@@ -377,6 +416,7 @@ class Orders:
             if not changes:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
+                self._sign_receipt(order, quote, "operator")
             self._save_order(conn, order)
             self._reserve(conn, order)
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
@@ -422,6 +462,8 @@ class Orders:
             order.status = "CANCELLED"
             order.cancelled_by = inputs.get("stated_name") or (actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor)
             order.cancel_reason = reason
+            self._sign_receipt(order, self._quote(conn, order.quote_id),
+                               "agent" if actor.startswith("agent:") else "operator" if actor.startswith("human:") else "system")
             self._save_order(conn, order)
             self._reserve(conn, order)
             audit.append(conn, actor, "CANCEL", "Confirmed order cancelled; local reservations released.",

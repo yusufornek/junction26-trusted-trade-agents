@@ -58,7 +58,7 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
-Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`.
+Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`, `get_order_ubl`.
 `cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
 reservations, preserves fixed prices, and records the actor and reason without upstream calls.
@@ -353,7 +353,8 @@ Old stored lookups without preferences/plans remain readable, including through 
 
 This prototype uses operator-issued shared Bearer secrets and one operator role.
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
-Signed quotes, verifiable-credential mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
+Signed quotes/receipts, hash chaining with external checkpoints and UBL 2.1 exports are implemented below.
+Verifiable-credential mandates, Peppol network delivery/certification, multiple approver roles, drift detection,
 automatic re-planning after commitment, recipe-aware substitutions, payments, deployment and separate buyer-agent code are deferred.
 The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}` with optional `data` for domain evidence.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.
@@ -407,3 +408,144 @@ MCP stdio is unchanged: launch `python -m app.mcp_server --agent-id hotel-chain-
 in `AGENT_KEYS` and send `Authorization: Bearer <that agent's secret>` on **every** HTTP request,
 including initialization, GET and DELETE. Another agent's key or the operator token is refused.
 OAuth for remote MCP and named operator accounts are production follow-ups.
+
+## UBL 2.1 / Peppol BIS Ordering 3 mapping
+
+Both interfaces use the same core: REST **OpenAPI 3.1.0** (the generated contract is
+`contracts/openapi.yaml`) and **MCP protocol 2026-07-28** (SDK 2.3.0; negotiated
+protocol versions are supported by the SDK). Exports target **OASIS UBL 2.1** Order
+and OrderResponse and map the **Peppol BIS Ordering 3** business fields below.
+Official XSD validation proves UBL structure; it does not certify Peppol business
+rules, routing, party identity or transmission. Placeholder endpoint identifiers
+make these demonstration documents unsuitable for delivery over Peppol.
+
+| Gateway field / business field | UBL Order / OrderResponse mapping | Source or missing data |
+|---|---|---|
+| Standard / process identifiers | UBLVersionID = 2.1; CustomizationID = urn:fdc:peppol.eu:poacc:trns:order:3 or order_response:3; ProfileID = urn:fdc:peppol.eu:poacc:bis:ordering:3 | Peppol BIS Ordering 3 identifiers; no certification claim |
+| Order.id / response ID | cbc:ID; response adds -response; OrderReference/ID identifies the order | Gateway-generated identifiers |
+| Quote.id | QuotationDocumentReference/ID | Locked quote reference in Order |
+| Order.created_at / decided_at | IssueDate, IssueTime | Creation for Order; decision time for OrderResponse |
+| Order.currency | DocumentCurrencyCode and currencyID on amounts | Upstream price currency (EUR) |
+| Quote.customer_id, Order.customer_id | BuyerCustomerParty/Party/PartyIdentification/ID; PartyName/Name | Internal customer identifier and display name; legal registered buyer name needs data from Valio Aimo |
+| Seller identity | SellerSupplierParty/Party/PartyIdentification/ID; PartyName/Name | Explicit gateway-simulated identity/name; seller legal registration identifier and legal name need data from Valio Aimo |
+| Buyer and seller electronic address (mandatory Peppol routing data) | BuyerCustomerParty and SellerSupplierParty / Party/EndpointID, schemeID=0088 | Literal placeholder: **needs data from Valio Aimo**; not an invented GLN |
+| Party legal registration, postal addresses, country codes, VAT identifiers, contacts | PartyLegalEntity, PostalAddress/Country, PartyTaxScheme, Contact | needs data from Valio Aimo; omit unavailable fields, including conditional Peppol fields |
+| Quote.deliver_by | Delivery/RequestedDeliveryPeriod/EndDate | Requested delivery deadline; delivery location/address and recipient identity need data from Valio Aimo |
+| Line index | OrderLine/LineItem/ID | Stable 1-based line identifier |
+| Line.product_id / GTIN | Item/SellersItemIdentification/ID; StandardItemIdentification/ID schemeID=0160 | GS1 salesUnitGtin; catalog also stores units[].gtin by unitId. Missing GTIN is omitted, seller item ID remains |
+| Line.name | Item/Name | synkkaData.names[] (English, then Finnish) |
+| Line.units_needed | LineItem/Quantity with unitCode | Sales-unit quantity, decimal string; unit mapping below |
+| Line.unit_price | LineItem/Price/PriceAmount and BaseQuantity=1 with unitCode | Locked net price per sales unit; no price negotiation |
+| Line.total / Order.total | LineExtensionAmount; AnticipatedMonetaryTotal (Order) or LegalMonetaryTotal (response): LineExtensionAmount, TaxExclusiveAmount | Locked net line and order totals |
+| Tax / gross / payable | TaxTotal/TaxAmount, TaxInclusiveAmount, PayableAmount | Derive tax from upstream unit_price_with_tax minus locked net totals, round line gross to cents. Tax category, VAT percentage, exemption reason and seller VAT registration need data from Valio Aimo. If gross is missing, omit tax/gross and explicitly label payable as net in a Note |
+| Allowances, charges, rounding, payment means/terms, accounting references, originator references | AllowanceCharge, monetary totals, PaymentMeans, PaymentTerms, AccountingCost, OriginatorDocumentReference | No gateway allowances/charges; other mandatory-if-applicable Peppol data needs data from Valio Aimo; never manufacture values |
+| Order.status | OrderResponseCode: CONFIRMED=AP, REJECTED=RE, PENDING_APPROVAL=CA; CANCELLED/EXPIRED=RE | Gateway decision, not a supplier response |
+| Order.policy.hits | Note per rule and detail | All policy rule hits; includes approval conditions |
+| Order.commitment | Note: gateway-simulated, no supplier order transmitted | Explicit simulated commitment |
+
+UN/ECE Recommendation 20 measures and Recommendation 21 package codes (X prefix):
+
+| Catalog salesUnit | UBL unitCode | Meaning / mapping assumption |
+|---|---|---|
+| L, LTR | LTR | litre |
+| KG | KGM | kilogram |
+| ST | H87 | piece |
+| KI, KRT | XCT | carton |
+| RAS | XPU | tray |
+| SK | XSA | sack |
+| PAK, DSP | XPK | package; DSP uses generic package pending a precise packaging classification |
+| BAG | XBG | bag |
+| PRK | XJR | jar |
+| BOT | XBO | bottle |
+| NIP | XBE | bundle |
+| CS | XCS | case |
+| PAL | XPX | pallet |
+| KAN | XCA | can |
+| DZ | DZN | dozen |
+| KLE | XBX | box |
+| Unknown unit | H87 | fallback with a document Note; precise unit needs data from Valio Aimo |
+
+All 17 sales-unit values in the supplied catalog are covered in `app/ubl.py`.
+GS1 source vocabulary is retained: GTIN = `salesUnitGtin` and `units[].gtin`;
+allergens = `synkkaData.classifications[name=allergen].values[].id/unit`;
+free-from = `classifications[name=nonAllergen]`; claims =
+`classifications[name=nutritionalClaim].values[].id`; packaging labels =
+`classifications[name=packagingMarkedLabel].values[].id`. Missing facts are not proof.
+
+GET `/v1/orders/{id}/ubl?document=order|response` (default: order) returns XML.
+MCP `get_order_ubl(order_id, document)` returns the identical XML. Agents can export
+only their own orders; the operator can export all orders. XSD tests use
+`xmlschema` with local-only loading of `vendor/ubl-2.1/xsd/maindoc/`.
+
+## Signed promises and tamper-evident audit
+
+Each quote carries `price_commitment: gateway-locked` and an Ed25519 detached
+JWS (RFC 7515, EdDSA). Its protected header contains `alg` and `kid`; resolve
+the public key from unauthenticated GET `/.well-known/jwks.json`. RFC 8785
+canonical JSON payload (`app.signing.quote_payload`) contains:
+
+- id, customer_id, deliver_by, total, expires_at, price_commitment;
+- lines: product_id, units (from units_needed), unit_price, currency, gtin, provenance.
+
+Money and quantity values in the signed payload are normalized decimal strings
+(no exponent or unnecessary trailing zeros); the existing JSON resource keeps
+its numeric fields. Provenance covers price and availability sources, fetched_at
+and valid_to exactly as serialized in the resource. No Unicode normalization is
+performed. The JWS is `base64url(protected)..base64url(signature)`; the Ed25519
+signing input is `base64url(protected) + '.' + base64url(canonical_payload)`
+(RFC 7515 encoded payload, not RFC 7797). Quote status changes do not alter the
+signed price promise. Placement checks the persisted signature before stock
+lookup or committing; alteration is refused and audited as QUOTE_SIGNATURE_INVALID.
+Legacy unsigned quotes must be re-quoted.
+
+Every new order decision carries a receipt over
+`{order_id, quote_id, quote_signature_digest, customer_id, agent_id, status,
+ total, currency, decided_at, decided_by_kind, commitment}`.
+The quote_signature_digest is SHA-256 of the UTF-8 detached quote JWS; total is
+a decimal string. The receipt is replaced on approval, rejection, cancellation
+and expiration. `decided_by_kind` is agent, operator or system.
+`commitment: gateway-simulated` means this gateway records a decision; no
+supplier order is transmitted. Signing proves the gateway's origin and integrity;
+truth of product, origin and stock claims depends on the upstream provenance.
+
+Save the quote response and public JWKS, then verify without a running gateway
+(only standard library plus cryptography required):
+
+```sh
+.venv/bin/python scripts/verify_quote.py quote.json --jwks jwks.json --customer 1
+.venv/bin/python scripts/verify_quote.py quote.json --jwks jwks.json --at 2026-11-14T12:00:00Z
+.venv/bin/python scripts/rotate_key.py
+```
+
+The verifier accepts a file or an HTTP(S) JWKS URL; use a saved file for fully
+offline verification. Exit 0 means signature, expiry and optional customer match;
+errors identify signature, expiry or customer. Trust the origin of your saved JWKS.
+Runtime signing keys are generated on first start under `backend/var/keys/`,
+with private PEM files mode 0600 and an atomic, process-locked active-key registry.
+Demo reset leaves keys in place. Rotation makes a new key active immediately
+for REST and MCP; retired public keys remain published for **7 days**. Keep saved
+JWKS snapshots for verification beyond that window. `--keys-dir DIR` supports
+isolated rotation; Settings.signing_key_dir overrides the default directory,
+otherwise it is db_path.parent / keys. Tests always use temporary directories.
+
+Every audit write appends inside the same BEGIN IMMEDIATE transaction as the
+business operation. REST/MCP writers serialize across processes. The hash is
+SHA-256 of UTF-8 prev_hash (64 lowercase hex characters) concatenated with
+RFC 8785 JSON `{seq, ts, actor, action, summary, order_id, quote_id, data}`;
+seq is the audit id, genesis is 64 zero characters. Audit entries expose hash and
+prev_hash, and timeline steps expose hash. Existing entries are chained once in
+an atomic migration followed by AUDIT_CHAIN_START; subsequent starts never
+silently repair the chain.
+
+Any authenticated principal can call `GET /v1/audit/head` (entries, head_hash,
+at, jws) and `GET /v1/audit/verify` (valid, entries, head_hash, first_break).
+The head's JWS signs `{entries, head_hash, at}` with the active quote key.
+Store it outside the gateway; later pass both
+`?checkpoint_entries=N&checkpoint_hash=H` to verify. checkpoint_match compares
+the recomputed prefix at N, so rewriting and rehashing old entries cannot match
+an earlier external checkpoint. first_break is the first broken sequence position
+(including a missing position); empty chains have zero entries and the genesis
+head. Raw audit entries remain operator-only under spec 19. A chain in the same
+database cannot prove integrity against an attacker who rewrites the whole
+database without an independently held checkpoint. Signed heads provide that
+checkpoint, not an external timestamp or proof of upstream truth.

@@ -249,7 +249,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     matched.append(f"Purchase total: {total:.2f} {currency}; overbuy: {float(overbuy):g} {need.quantity.unit}."
                    if total is not None and overbuy is not None else "Purchase total or overbuy: unknown.")
     return OfferCard(
-        product_id=product.id, name=product.name_en, sales_unit=product.sales_unit,
+        product_id=product.id, gtin=product.gtin, name=product.name_en, sales_unit=product.sales_unit,
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
         size_confirmed_by_price=confirmed,
         unit_price=net, unit_price_with_tax=number(catalog.get("valueWithTax")),

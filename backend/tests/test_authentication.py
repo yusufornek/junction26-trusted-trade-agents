@@ -36,7 +36,7 @@ def objects(gateway, need, agent, *, qty=1, key=None):
 def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
-            if path == "/health":
+            if path in {"/health", "/.well-known/jwks.json"}:
                 continue
             assert operation["security"] == [{"BearerAuth": []}]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
@@ -46,7 +46,7 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
                 assert response.status_code == 401, (method, path, response.text)
                 assert response.json()["code"] == "UNAUTHENTICATED"
                 assert response.headers["www-authenticate"] == "Bearer"
-    for url in ("/health", "/docs", "/openapi.json"):
+    for url in ("/health", "/docs", "/openapi.json", "/.well-known/jwks.json"):
         assert client.get(url).status_code == 200
     cors = client.options("/v1/offers", headers={"Origin": "http://localhost:5173",
         "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "Authorization"})

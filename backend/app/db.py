@@ -48,13 +48,17 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
-            # Additive catalog migration: a subsequent build replaces catalog rows only.
+        # Serialize additive migrations across gateway processes, including first start.
+        with self.connect(write=True) as conn:
+            # A subsequent build replaces catalog rows only.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
             for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",
-                               "size_suspect": "INTEGER", "sales_volume_l": "REAL",
+                               "size_suspect": "INTEGER", "sales_volume_l": "REAL", "gtin": "TEXT", "unit_gtins": "TEXT",
                                "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT"}.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")
+            from .audit import migrate
+            migrate(conn)
 
     @contextmanager
     def connect(self, write=False):
