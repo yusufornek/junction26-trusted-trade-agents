@@ -331,14 +331,15 @@ class Recurring:
                          data={"id": row["id"], "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
-    def pause(self, id, principal, mandate=None):
+    def pause(self, id, principal, mandate=None, *, paused=True):
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
             self.workflow_authority(principal, row["customer_id"], mandate, supplier_id=recurring_supplier(row))
-            row["status"] = "PAUSED"
+            row["status"] = "PAUSED" if paused else "ACTIVE"
             self.save(conn, row)
-            audit.append(conn, f"agent:{principal.id}", "RECURRING_STOPPED", "Buyer agent paused recurring execution.",
-                         data={"id": id, "customer_id": row["customer_id"], "reason": "paused"})
+            action, reason = ("RECURRING_STOPPED", "paused") if paused else ("RECURRING_RESUMED", "resumed")
+            audit.append(conn, f"agent:{principal.id}", action, f"Buyer agent {reason} recurring execution.",
+                         data={"id": id, "customer_id": row["customer_id"], "reason": reason})
         return row
 
     def runs(self, id, principal=None):
@@ -504,3 +505,17 @@ def baseline(id: str, body: BaselineRequest, request: Request, principal: Princi
 def run(id: str, request: Request, body: RunRequest = RunRequest(), principal: Principal = Depends(resolve_principal),
         idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
     return request.app.state.gateway.recurring.run(id, body.occurrence_at, principal, command_key=idempotency_key)
+
+
+@router.post("/{id}/pause", response_model=dict, summary="Pause your recurring workflow under current recurring permission")
+def pause(id: str, request: Request, principal: Principal = Depends(resolve_principal),
+          agent_mandate: str | None = Header(default=None),
+          idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.recurring.pause(id, principal, agent_mandate, command_key=idempotency_key)
+
+
+@router.post("/{id}/resume", response_model=dict, summary="Resume your recurring workflow under current recurring permission")
+def resume(id: str, request: Request, principal: Principal = Depends(resolve_principal),
+           agent_mandate: str | None = Header(default=None),
+           idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.recurring.pause(id, principal, agent_mandate, paused=False, command_key=idempotency_key)

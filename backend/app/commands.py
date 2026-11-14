@@ -319,6 +319,8 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     if route == "connections.create":
         excluded.update({"origin", "mcp_served"})
     values = json_value({k: v for k, v in arguments.items() if k not in excluded})
+    if route == "recurring.pause" and values.get("paused") is True:
+        values.pop("paused")  # Preserve command fingerprints issued before resume support.
     if route == "gateway.find_offers" and values.get("product_ids") is None:
         values.pop("product_ids", None)  # Preserve previously issued command fingerprints.
     omit_anomaly_defaults(route, values)
