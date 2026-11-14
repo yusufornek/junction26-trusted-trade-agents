@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
-  Activity,
   Bell,
   Bot,
   ChevronDown,
@@ -21,6 +20,7 @@ import {
 } from "lucide-react";
 import { api, hasToken, onAuthChange, setToken } from "./api";
 import { Avatar } from "./charts";
+import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { Card, ErrorNote, useAsync } from "./ui";
 
 const NAV = [
@@ -112,10 +112,10 @@ export default function Shell() {
         >
           <div className="mb-1 flex h-10 items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
-              <Activity size={18} strokeWidth={2.4} />
+              <LuotsiMark className="block h-6 w-auto" />
             </span>
             <RailLabel>
-              <span className="text-[14px] font-semibold text-white">Trusted Trade</span>
+              <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
           </div>
           <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3`}>
@@ -174,7 +174,7 @@ export default function Shell() {
       <div className="sticky top-0 z-30 md:hidden">
         <div className="flex items-center gap-3 bg-rail px-4 py-3 text-white">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white text-rail">
-            <Activity size={16} strokeWidth={2.4} />
+            <LuotsiMark className="block h-5 w-auto" label="Luotsi" />
           </span>
           <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{head.title}</span>
           <button
@@ -200,7 +200,7 @@ export default function Shell() {
           </button>
         </div>
         {menuOpen ? (
-          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100vh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,47,109,0.35)]">
+          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100vh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
             <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
               <Plus size={18} /> New request
             </button>
@@ -275,7 +275,7 @@ export default function Shell() {
               <ChevronDown size={14} className={`transition-transform ${rangeOpen ? "rotate-180" : ""}`} />
             </button>
             {rangeOpen ? (
-              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,47,109,0.10)]">
+              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,67,87,0.10)]">
                 {RANGES.map((r, i) => (
                   <button
                     key={r.label}
@@ -300,10 +300,8 @@ export default function Shell() {
         ) : (
           <Card className="mx-auto mt-10 w-full max-w-md">
             <form className="flex flex-col gap-4" onSubmit={signIn}>
-              <div className="flex items-center gap-3">
-                <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-rail text-white">
-                  <Activity size={18} strokeWidth={2.4} />
-                </span>
+              <div className="flex flex-col gap-4">
+                <LuotsiWordmark className="block h-8 w-auto self-start text-brand" />
                 <div className="min-w-0">
                   <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
                   <p className="label">The token lives in memory only, so a reload asks again.</p>
@@ -334,7 +332,7 @@ export default function Shell() {
 
 // 40px rows: the icon keeps its place on the collapsed rail, the name slides in beside it.
 const RAIL_ROW = "flex h-10 w-full items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
-const RAIL_IDLE = "text-white/60 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
+const RAIL_IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
 const PHONE_ROW = "flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] font-medium";
 
 /** Hidden while the rail is collapsed but still in the accessibility tree, so the icon-only rail has names. */

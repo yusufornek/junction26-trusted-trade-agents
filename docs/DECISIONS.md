@@ -2,6 +2,12 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The product is Luotsi; the console takes its colours and marks from the Luotsi brand kit**
+  (`Luotsi-7a-Kit`, the user's request): teal `#005671` for actions, charts, focus and the rail, slate `#2C6A81` as
+  the secondary colour, the galley-and-star mark in the rail, phone bar and favicon, the wordmark on the sign-in card
+  and the dashboard's summary card, and the kit's share image for link previews. This replaces the Valio-blue console
+  theme below; Valio Aimo stays the supplier the agents buy from, and the forest-floor status colours are unchanged.
+  Rail text moved from white/60 to white/75, which keeps 5.4:1 on teal (white/60 drops to 4.0:1).
 - 2026-11-14 — **The console has a Connect page (`/connect`)**: pick the tool the agent works in (Claude Desktop,
   Claude Code, Cursor, VS Code, ChatGPT, another MCP client, REST), create a per-agent key shown once, copy that
   tool's own setup, and see the agent's first call arrive — the user's request, modelled on Higgsfield's connect

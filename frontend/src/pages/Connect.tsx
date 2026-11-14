@@ -25,7 +25,7 @@ const CLIENTS: Client[] = [
 ];
 
 const PLACEHOLDER = "<YOUR_AGENT_KEY>";
-const SERVER_NAME = "valio-aimo";
+const SERVER_NAME = "luotsi";
 const TRY_PROMPT = "Find 50 litres of lactose-free milk for delivery on Monday and show me the best offer. Do not order yet.";
 
 export default function Connect() {
@@ -281,7 +281,7 @@ function ClientSteps({
             items={[
               "Open Claude Desktop, then Settings, Developer, Edit config.",
               "Add the server below to claude_desktop_config.json and save.",
-              "Restart Claude Desktop. The Valio Aimo tools appear under the tools icon.",
+              "Restart Claude Desktop. The Luotsi tools appear under the tools icon.",
             ]}
           />
           <CopyBlock
@@ -313,7 +313,7 @@ function ClientSteps({
           <CopyBlock
             label="Or send this message to Claude Code"
             wrap
-            value={`Connect me to the Valio Aimo purchasing gateway: run \`claude mcp add --transport http ${SERVER_NAME} ${mcpUrl} --header "Authorization: ${header}"\`, then list the ${SERVER_NAME} tools and tell me when you can search offers.`}
+            value={`Connect me to the Luotsi purchasing gateway for Valio Aimo: run \`claude mcp add --transport http ${SERVER_NAME} ${mcpUrl} --header "Authorization: ${header}"\`, then list the ${SERVER_NAME} tools and tell me when you can search offers.`}
           />
         </>
       );

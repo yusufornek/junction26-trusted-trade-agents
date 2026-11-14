@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, FileSignature, Inbox, Plus } from "lucide-re
 import { api, type Order } from "../api";
 import { useRange } from "../Shell";
 import { AreaChart, Avatar, Bars, Progress, Ring, Sparkline, type Marker } from "../charts";
+import { LuotsiWordmark } from "../brand";
 import { Card, Countdown, Empty, ErrorNote, Spinner, StatusChip, eur, num, useAsync, when } from "../ui";
 
 const POLL = 5000;
@@ -159,7 +160,7 @@ export default function Dashboard() {
             <span aria-hidden className="pointer-events-none absolute -right-20 -top-24 size-56 rounded-full bg-white/10 blur-2xl" />
             <div className="relative flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[13px] text-white/70">Trusted Trade Agents</div>
+                <LuotsiWordmark className="block h-4 w-auto text-white" />
                 <div className="num mt-3 whitespace-nowrap text-[34px] font-semibold leading-none">
                   {eur(s.confirmed_spend_total_eur)}
                 </div>
