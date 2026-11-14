@@ -122,8 +122,9 @@ class Proposals:
         valid = (principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver", "buyer_viewer"}
                  or principal.kind == "agent")
         if not valid or (admin and (principal.kind != "buyer_user" or principal.role != "buyer_admin")):
-            code = "BUYER_ADMIN_REQUIRED" if admin else "BUYER_REQUIRED"
-            raise DomainError(code, "A scoped buyer credential is required", 403)
+            if admin:
+                raise DomainError("BUYER_ADMIN_REQUIRED", "A scoped buyer credential is required", 403)
+            raise DomainError("BUYER_REQUIRED", "A scoped buyer credential is required", 403)
         if customer_id is None:
             if len(principal.customer_ids) != 1:
                 raise DomainError("CUSTOMER_REQUIRED", "Select one of your customers with customer_id", 422)

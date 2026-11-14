@@ -45,7 +45,7 @@ def quote(g, result):
 
 
 def test_AC_1_five_ingredients_one_basket_two_supplier_calls_and_transport_parity(recipe):
-    keys = Credentials("operator-test", "sandbox-agent:recipe-test")
+    keys = Credentials("operator-test", "sandbox-agent:recipe-test", environment="sandbox")
     with TestClient(create_app(recipe, keys=keys), headers={"Authorization": "Bearer recipe-test"}) as client:
         response = client.post("/v1/basket-lookups", json=request().model_dump(mode="json"))
         assert response.status_code == 200, response.text
@@ -70,7 +70,7 @@ def test_AC_1_five_ingredients_one_basket_two_supplier_calls_and_transport_parit
 
 
 def test_remote_mcp_basket_purchase_uses_authenticated_owner(recipe):
-    keys = Credentials("operator-test", "sandbox-agent:recipe-test,outsider:other-test")
+    keys = Credentials("operator-test", "sandbox-agent:recipe-test,outsider:other-test", environment="sandbox")
     headers = {"Authorization": "Bearer recipe-test", "Accept": "application/json, text/event-stream"}
     with TestClient(create_app(recipe, keys=keys), base_url="http://localhost", headers=headers) as client:
         def call(name, arguments, **kwargs):

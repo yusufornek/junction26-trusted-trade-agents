@@ -10,6 +10,15 @@ from pydantic_core import PydanticCustomError
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
+    @model_serializer(mode="wrap")
+    def additive_fields(self, handler):
+        data = handler(self)
+        # Preserve historical signatures when loading resources issued before specs 25/26.
+        for field in ("supplier_id", "environment", "synthetic"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
+
 
 AutonomyLevel = Literal["approval_required", "autonomous_within_limits"]
 
@@ -76,7 +85,9 @@ class RequestScope(Model):
     def delivery_window(cls, value, info):
         # Historical requests remain readable after their input window passes.
         if not (info.context or {}).get("stored"):
-            today = datetime.now(ZoneInfo("Europe/Helsinki")).date()
+            from .runtime import CLOCK
+            clock = CLOCK.get()
+            today = (clock() if clock else datetime.now(ZoneInfo("Europe/Helsinki"))).astimezone(ZoneInfo("Europe/Helsinki")).date()
             if not today <= value <= today + timedelta(days=60):
                 raise ValueError("deliver_by must be between today and today + 60 days (Europe/Helsinki)")
         return value
@@ -96,6 +107,8 @@ class SubstituteFor(Model):
 class NeedSpec(RequestScope):
     function: FunctionalNeed | None = Field(default=None, exclude_if=lambda v: v is None)
     substitute_for: SubstituteFor | None = Field(default=None, exclude_if=lambda v: v is None)
+    supplier_id: str = Field(default="valio", min_length=1, description="One supplier per procurement request; valio by default. nordfood is synthetic.")
+
     intent: str = Field(min_length=1, description="Buyer need; the outside agent structures this request.")
     search_terms: list[str] | None = Field(default=None, description="Optional FTS terms, combined with AND.")
     required_claims: list[str] = Field(default_factory=list, description="All must exist as catalog nutritionalClaim IDs.")
@@ -116,6 +129,9 @@ class LiveCalls(Model):
 
 
 class Product(Model):
+    supplier_id: str = "valio"
+    supplier_sku: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    synthetic: bool = False
     id: str
     gtin: str | None = Field(default=None, description="Catalog salesUnitGtin, preserving leading zeros.")
     unit_gtins: dict[str, str] = Field(default_factory=dict, description="Catalog units[].unitId to gtin.")
@@ -158,12 +174,17 @@ class Product(Model):
 
 
 class Provenance(Model):
+    environment: Literal["live", "sandbox"] = "live"
+    synthetic: bool = False
+    requested_date: date | None = Field(default=None, exclude_if=lambda v: v is None)
+    returned_dates: list[date] | None = Field(default=None, exclude_if=lambda v: v is None)
     source: str = Field(description="Upstream endpoint or catalog source.")
     fetched_at: datetime = Field(description="Upstream timeNow when supplied; otherwise local UTC receipt time.")
     valid_to: datetime | None = None
 
 
 class Availability(Model):
+    stock_semantics: Literal["finite", "unlimited", "unknown"] = "finite"
     available_amount: float | None = Field(description="On-time sales units after local reservations; null when a usable on-time upstream amount >= 999999 means unknown but orderable.")
     availability_known: bool = Field(default=True, description="False for usable on-time upstream amounts >= 999999, independently of logistic model; no local reservation is counted. Later unknown stock does not exempt finite on-time stock from reservations.")
     logistic_model: str | None = None
@@ -178,6 +199,8 @@ class Availability(Model):
         # Historical evidence must retain its signed shape through reads and saves.
         if "availability_known" not in self.model_fields_set:
             data.pop("availability_known", None)
+        if "stock_semantics" not in self.model_fields_set:
+            data.pop("stock_semantics", None)
         return data
 
 
@@ -188,17 +211,29 @@ class Substitution(Model):
     allergen_evidence: list[str]
 
 
+class NameSizeCandidate(Model):
+    size_per_sales_unit: float = Field(description="Plausible case content in the offer's size_unit; display evidence, not proof of conversion.")
+    source_text: str = Field(description="Original product name containing this measure.")
+    expression: str = Field(description="Local measure and count expression; repeated complete expressions remain independent.")
+
+
 class OfferCard(Model):
+    supplier_id: str = "valio"
+    synthetic: bool = False
+    tax_basis: Literal["net"] = Field(default="net", exclude_if=lambda v: v == "net")
     substitution: Substitution | None = Field(default=None, exclude_if=lambda v: v is None)
+
     product_id: str
     gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
     sales_unit: str
     allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
     size_per_sales_unit: float | None = Field(default=None, description="Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; slash portion counts preserve package totals and net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and retains the plausible catalog package total requiring approval. A name from either language can replace it when the live ratio confirms that name within 3%. Null when conversion is unknown.")
+
     size_unit: Literal["L", "KG", "SALES_UNIT"]
     size_source: str | None = Field(default=None, description="price_ratio, catalog, name_parse, base_unit or sales_unit.")
     size_confirmed_by_price: bool = Field(default=False, description="True when the live price ratio agrees with the selected exact catalog or name size within 3%.")
+    name_size_candidates: list[NameSizeCandidate] = Field(default_factory=list, description="All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.")
     units_needed: float | None = Field(default=None, description="Whole sales units rounded to the effective allowed lot step, including KG.")
     unit_price: float | None = Field(default=None, description="Net catalog price per sales unit, fixed on quote creation.")
     unit_price_with_tax: float | None = None
@@ -228,6 +263,11 @@ class OfferCard(Model):
         data = handler(self)
         if "allowed_lot_size" not in self.model_fields_set:
             data.pop("allowed_lot_size", None)
+        if "name_size_candidates" not in self.model_fields_set:
+            data.pop("name_size_candidates", None)
+        for field in ("supplier_id", "synthetic"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
         return data
 
 
@@ -281,6 +321,9 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    supplier_id: str = "valio"
+    environment: Literal["live", "sandbox"] = "live"
+    synthetic: bool = False
     links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -425,6 +468,11 @@ class QuoteRequest(RequestScope):
 class Quote(Model):
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
+    supplier_id: str = "valio"
+    environment: Literal["live", "sandbox"] = "live"
+    synthetic: bool = False
+    expiration_reason: str | None = Field(default=None, exclude_if=lambda v: v is None)
+
     links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -452,18 +500,31 @@ class OrderRequest(Model):
     quote_id: str = Field(description="An unexpired OPEN fixed-price quote.")
 
 
+class Execution(Model):
+    mode: Literal["simulated", "supplier_backed"]
+    supplier_ref: str | None = None
+    acknowledged_at: datetime | None = None
+    status: str
+
+
 class Order(Model):
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     atomicity: str | None = Field(default=None, exclude_if=lambda v: v is None,
                                  description="Adapter commitment semantics; simulation reserves all basket lines or none locally.")
+    supplier_id: str = "valio"
+    environment: Literal["live", "sandbox"] = "live"
+    synthetic: bool = False
+    execution: Execution | None = Field(default=None, exclude_if=lambda v: v is None)
+    expiration_reason: str | None = Field(default=None, exclude_if=lambda v: v is None)
+
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     links: dict = Field(default_factory=dict)
     mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     customer_id: str | None = None
-    commitment: Literal["gateway-simulated"] = Field(default="gateway-simulated", description="Recorded locally; no supplier order transmitted. Included in the signed receipt.")
+    commitment: Literal["gateway-simulated", "supplier-acknowledged"] = Field(default="gateway-simulated", description="Supplier acknowledgement only after a successful supplier-backed submit; otherwise gateway-simulated. Included in the signed receipt.")
     quote_signature_digest: str | None = Field(default=None, description="SHA-256 hex digest of the quote's detached JWS.")
     receipt: str | None = Field(default=None, description="Detached RFC 7515 Ed25519 JWS over RFC 8785 receipt_payload; total is a decimal string. Verifiable via the public JWKS. Present for new order decisions.")
     decided_at: datetime | None = None
@@ -471,7 +532,7 @@ class Order(Model):
     quote_id: str
     agent_id: str
     idempotency_key: str
-    status: Literal["CONFIRMED", "PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCELLED"]
+    status: Literal["CONFIRMED", "PENDING_APPROVAL", "PENDING_EXECUTION", "REJECTED", "EXPIRED", "CANCELLED"]
     created_at: datetime
     expires_at: datetime
     total: float
@@ -490,7 +551,10 @@ class Order(Model):
 
     @computed_field
     @property
-    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP", "LOOKUP_REQUIRED"] | None:
+    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "RETRY_SAME_COMMAND", "STOP", "LOOKUP_REQUIRED"] | None:
+        if self.status == "PENDING_EXECUTION":
+            return "RETRY_SAME_COMMAND"
+
         if self.status == "PENDING_APPROVAL":
             return "WAIT_FOR_APPROVAL"
         if self.status == "EXPIRED":
@@ -592,6 +656,7 @@ class JWKSet(Model):
 
 
 class AuditHead(Model):
+    environment: Literal["live", "sandbox"] = "live"
     entries: int
     head_hash: str
     at: str
@@ -709,6 +774,8 @@ class IdentityPolicy(Model):
 
 class AgentMandate(Model):
     recurring: bool = False
+    supplier_ids: list[str] | None = Field(default=None, description="Allowed suppliers, intersected with buyer VC supplier_ids; omission is unrestricted.")
+
     autonomy: AutonomyLevel | None = Field(default=None, description="Omission uses policy.autonomy.default; new agents require sign-off by default.")
     rate_limits: RateLimits | None = None
     customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")

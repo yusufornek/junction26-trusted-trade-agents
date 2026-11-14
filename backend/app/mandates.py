@@ -79,22 +79,24 @@ class Mandates:
                      "ON CONFLICT(digest) DO UPDATE SET last_used=excluded.last_used", (digest, token, sequence))
         return digest
 
-    def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None):
+    def authorize(self, conn, token, agent_id, customer_id, *, products=(), bound=None, policy=None, supplier_id="valio"):
         from .buyer import check_suspension
         check_suspension(self.db, agent_id)
+
         policy = policy or self.policy.get()
+        self.policy.check_supplier(agent_id, supplier_id, policy)
         if bound:
             original = self.stored(conn, *bound)
             if original is not None:
                 # Authority attached to a quote/order cannot be swapped to bypass revocation.
                 if token is not None and token != original:
-                    self.verify(conn, token, agent_id, customer_id, products=products, policy=policy)
+                    self.verify(conn, token, agent_id, customer_id, products=products, policy=policy, supplier_id=supplier_id)
                     invalid("binding")
                 token = original
         if token is None:
             self.policy.check_customer(agent_id, customer_id, policy)
             return policy, None, None
-        record, subject = self.verify(conn, token, agent_id, customer_id, products=products, policy=policy)
+        record, subject = self.verify(conn, token, agent_id, customer_id, products=products, policy=policy, supplier_id=supplier_id)
         effective = policy.model_copy(deep=True)
         row = effective.agents.get(agent_id)
         if row is not None:
@@ -109,12 +111,13 @@ class Mandates:
             operator_level = grant[0]
         level = "approval_required" if "approval_required" in (buyer_level, operator_level) else "autonomous_within_limits"
         effective.agents[agent_id] = AgentMandate(customer_ids=[customer_id], max_auto_total_eur=order_limit,
-                                                 max_auto_daily_total_eur=daily_limit, autonomy=level)
+                                                 max_auto_daily_total_eur=daily_limit, autonomy=level,
+                                                 supplier_ids=row.supplier_ids if row else subject.get("supplier_ids"))
         record.autonomy = level
         record.limits = {"max_auto_total_eur": order_limit, "max_auto_daily_total_eur": daily_limit}
         return effective, record, token
 
-    def verify(self, conn, token, agent_id, customer_id, *, products=(), policy=None):
+    def verify(self, conn, token, agent_id, customer_id, *, products=(), policy=None, supplier_id="valio"):
         header, claims, message, signature = decode(token)
         if header.get("typ") != "vc+jwt":
             invalid("format")
@@ -151,11 +154,18 @@ class Mandates:
             invalid("sub")
         if subject["customer_id"] != customer_id:
             invalid("customer")
+        allowed = subject.get("supplier_ids")
+        if allowed is not None:
+            if not isinstance(allowed, list) or any(not isinstance(s, str) or not s for s in allowed):
+                invalid("supplier")
+            if supplier_id not in allowed:
+                raise DomainError("SUPPLIER_NOT_IN_MANDATE", "The buyer mandate does not include this supplier", 403)
         categories = subject.get("categories")
         if categories is not None:
             if not isinstance(categories, list) or not categories or any(not isinstance(c, str) or not c for c in categories):
                 invalid("category")
-            if any(self.catalog.get(pid).category not in categories for pid in products):
+            catalog = self.policy.suppliers.get(supplier_id).catalog if hasattr(self.policy, "suppliers") else self.catalog
+            if any(catalog.get(pid).category not in categories for pid in products):
                 invalid("category")
         try:
             valid_until = datetime.fromtimestamp(claims["exp"], timezone.utc)
@@ -163,11 +173,14 @@ class Mandates:
             invalid("exp")
         return MandateRecord(id=claims["jti"], issuer=claims["iss"], limits={}, valid_until=valid_until), subject
 
-    def search(self, query, required_claims, exclude_allergens, limit, *, token, agent_id):
+    def search(self, query, required_claims, exclude_allergens, limit, *, token, agent_id, supplier_id="valio"):
+        self.policy.check_supplier(agent_id, supplier_id)
+        catalog = self.policy.suppliers.get(supplier_id).catalog if hasattr(self.policy, "suppliers") else self.catalog
         from .buyer import check_suspension
         check_suspension(self.db, agent_id)
+
         if token is None:
-            return self.catalog.search(query, required_claims, exclude_allergens, limit)[0]
+            return catalog.search(query, required_claims, exclude_allergens, limit)[0]
         actor = f"agent:{agent_id}"
         try:
             claims = decode(token)[1]
@@ -176,10 +189,10 @@ class Mandates:
             except (KeyError, TypeError):
                 invalid("format")
             with self.db.connect(write=True) as conn:
-                _, record, _ = self.authorize(conn, token, agent_id, customer_id)
+                _, record, _ = self.authorize(conn, token, agent_id, customer_id, supplier_id=supplier_id)
                 categories = claims["vc"]["credentialSubject"].get("categories")
-                products = self.catalog.search(query, required_claims, exclude_allergens, limit, categories=categories)[0]
-                self.verify(conn, token, agent_id, customer_id, products=[p.id for p in products])
+                products = catalog.search(query, required_claims, exclude_allergens, limit, categories=categories)[0]
+                self.verify(conn, token, agent_id, customer_id, products=[p.id for p in products], supplier_id=supplier_id)
                 self.used(conn, token)
                 audit.append(conn, actor, "LOOKUP_SEARCH", "Searched the local catalog under buyer authority.",
                              data={**evidence(record), "products": [p.id for p in products],

@@ -589,3 +589,28 @@ def test_legacy_revocations_migrate_without_restoring_authority(gateway, buyer, 
             assert row["customer_id"] == "" and row["mandate_id"] == "old-revoked"
             with pytest.raises(DomainError, match="revoked"):
                 gateway.mandates.verify(conn, token, AGENT, "1")
+
+
+@pytest.mark.parametrize('transport', ['rest', 'mcp'])
+def test_review_cached_quote_revalidates_revocation(gateway, need, upstream, buyer, transport):
+    token = issue(buyer)
+    lookup = gateway.find_offers(need, f'agent:{AGENT}', mandate=token)
+    body = quote_request(need, qty=1, need_ref=lookup.lookup_id).model_dump(mode='json')
+    with TestClient(create_app(gateway), headers=headers(token)) as client:
+        first = client.post('/v1/quotes', json=body, headers={'Idempotency-Key': 'cached-authority'})
+        assert first.status_code == 200, first.text
+        revoke = sign_jwt(buyer, {'iss': ISSUER, 'jti_revoked': [decode(token)[1]['jti']],
+                               'iat': int(audit.utcnow().timestamp())}, kid='buyer-1', typ='JWT')
+        assert client.post('/v1/mandates/revocations', json={'jwt': revoke}).status_code == 200
+        before = len(upstream.price_calls), len(upstream.availability_calls)
+        if transport == 'rest':
+            replay = client.post('/v1/quotes', json=body, headers={'Idempotency-Key': 'cached-authority'})
+            assert replay.status_code == 403, replay.text
+            payload = replay.json()
+        else:
+            replay = asyncio.run(create_server(gateway, AGENT, mandate=token).call_tool('create_quote', {**body, 'idempotency_key': 'cached-authority'}))
+            assert replay.is_error
+            payload = replay.structured_content
+        assert payload['code'] == 'MANDATE_INVALID' and payload['data']['check'] == 'revoked'
+        assert before == (len(upstream.price_calls), len(upstream.availability_calls))
+    assert gateway.audit()[-1].data['error'] == 'MANDATE_INVALID'

@@ -34,9 +34,14 @@ for _code in ("RECURRING_NOT_FOUND", "PROPOSAL_NOT_FOUND", "CAMPAIGN_NOT_FOUND",
     RECOVERY[_code] = (False, "STOP")
 for _code in ("NO_RECURRING_OFFER", "PROPOSAL_NO_MATCH"):
     RECOVERY[_code] = (False, "LOOKUP_REQUIRED")
+RECOVERY.update(UNKNOWN_SUPPLIER=(False, "FIX_REQUEST"), SUPPLIER_NOT_IN_MANDATE=(False, "CONTACT_ADMIN"),
+                SUPPLIER_UNAVAILABLE=(True, "RETRY_SAME_COMMAND"), SANDBOX_ONLY=(False, "FIX_REQUEST"),
+                UNKNOWN_SCENARIO=(False, "FIX_REQUEST"))
+
 
 
 def problem(error, instance=None):
+    from .runtime import ENVIRONMENT
     retryable, action = RECOVERY[error.code]
     data = error.data if error.status != 401 else {}
     result = {"type": f"urn:trusted-trade:problem:{error.code.lower().replace('_', '-')}",
@@ -47,6 +52,8 @@ def problem(error, instance=None):
               "retry_after_seconds": data.get("retry_after_seconds", 1 if retryable else None),
               "correlation_id": correlation_id(), "violations": data.get("violations", []), "data": data}
     # References are deliberately omitted unless a transport has verified read access.
+    if ENVIRONMENT.get() == "sandbox":
+        result["environment"] = "sandbox"
     return result
 
 

@@ -38,6 +38,10 @@ def product_rows():
 @pytest.fixture
 def sandbox(gateway):
     gateway.settings.environment = "sandbox"
+    # Spec 38's mocked supplier remains useful; spec 26 additionally requires an explicit scoped key ring.
+    from app.auth import Credentials
+    from conftest import OPERATOR_TOKEN, AGENT_TOKENS
+    gateway.settings.keys = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{secret}" for agent, secret in AGENT_TOKENS.items()), environment="sandbox")
     return gateway
 
 

@@ -9,6 +9,18 @@
     "outputSchema": {
       "additionalProperties": false,
       "properties": {
+        "fixture_clock": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixture Clock"
+        },
         "principal": {
           "additionalProperties": true,
           "title": "Principal",
@@ -140,6 +152,11 @@
           "default": 10,
           "title": "Limit",
           "type": "integer"
+        },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
         }
       },
       "required": [
@@ -153,6 +170,28 @@
         "Product": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "supplier_sku": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supplier Sku"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
             "id": {
               "title": "Id",
               "type": "string"
@@ -481,7 +520,7 @@
     }
   },
   "find_offers": {
-    "description": "Find up to 10 ranked live priced offers for a structured need. function {product_type, intended_use, preparation?, acceptable_units} requires category and fit evidence; the fit question includes intended use. substitute_for {product_id} returns an available preferred product as best, otherwise ranks alternatives by category, claims superset, pack size and comparable price. Alternatives carry substitution {for, differences, allergen_evidence} and are described as compliant with the recorded procurement constraints. Customer substitution profiles gate brand, pack and percentage price changes. clinical_review=required forces a scoped buyer_approver; an operator alone cannot approve. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; without it, contradictory sizes are shown together, the plausible catalog package total is retained and human review is required. Either language can supply a price-confirmed exact name candidate within 3%. Nested name counts retain inner packages while consuming the outer multiplier once; full nested pcs/kpl counts require reconciliation with a package total. Slash portion counts do not multiply the total; consistent shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Find up to 10 ranked live priced offers for a structured need. function {product_type, intended_use, preparation?, acceptable_units} requires category and fit evidence; the fit question includes intended use. substitute_for {product_id} returns an available preferred product as best, otherwise ranks alternatives by category, claims superset, pack size and comparable price. Alternatives carry substitution {for, differences, allergen_evidence} and are described as compliant with the recorded procurement constraints. Customer substitution profiles gate brand, pack and percentage price changes. clinical_review=required forces a scoped buyer_approver; an operator alone cannot approve. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; without it, contradictory sizes are shown together, the plausible catalog package total is retained and human review is required. Either language can supply a price-confirmed exact name candidate within 3%. Nested name counts retain inner packages while consuming the outer multiplier once; full nested pcs/kpl counts require reconciliation with a package total. Slash portion counts do not multiply the total; consistent shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; Name sizes require a confirming live ratio within 3%, matching explicit catalog content within 3%, one count expression matching the sales multiplier without contradictory measures, or a single measure at multiplier 1. Otherwise size_per_sales_unit and units_needed are display estimates from the smallest plausible candidate and SIZE_UNCONFIRMED prevents autonomous placement. Spec 15 also requires SIZE_UNCONFIRMED for catalog/name sizes without a confirming live ratio. name_size_candidates lists every candidate with original source_text and local expression. Explicit package totals are never multiplied by portion counts; repeated complete pack expressions stay independent, and slash portion counts are retained (100 pieces / 25 per 625g pack = 2.5kg). NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "FunctionalNeed": {
@@ -567,6 +606,13 @@
                 }
               ],
               "default": null
+            },
+            "supplier_id": {
+              "default": "valio",
+              "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "minLength": 1,
+              "title": "Supplier Id",
+              "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
@@ -772,6 +818,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -1103,6 +1159,33 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "NeedSpec": {
           "additionalProperties": false,
           "properties": {
@@ -1139,6 +1222,13 @@
                 }
               ],
               "default": null
+            },
+            "supplier_id": {
+              "default": "valio",
+              "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "minLength": 1,
+              "title": "Supplier Id",
+              "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
@@ -1206,6 +1296,22 @@
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -1289,6 +1395,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -1706,6 +1820,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -1902,6 +2059,25 @@
       },
       "additionalProperties": false,
       "properties": {
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
         "links": {
           "additionalProperties": true,
           "title": "Links",
@@ -2268,6 +2444,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -2718,6 +2904,33 @@
           "title": "LiveCalls",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "NeedSpec": {
           "additionalProperties": false,
           "properties": {
@@ -2754,6 +2967,13 @@
                 }
               ],
               "default": null
+            },
+            "supplier_id": {
+              "default": "valio",
+              "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "minLength": 1,
+              "title": "Supplier Id",
+              "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
@@ -2821,6 +3041,22 @@
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -2904,6 +3140,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -3296,6 +3540,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -3544,7 +3831,7 @@
     }
   },
   "create_quote": {
-    "description": "Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines, plan_ref {lookup_id, plan_index} or basket_ref {basket_lookup_id}. A basket reference selects its stored deduplicated lines, preserves ingredient constraints and uncovered warnings, and records all-or-none local simulation atomicity on its order; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines, plan_ref {lookup_id, plan_index} or basket_ref {basket_lookup_id}. A basket reference selects its stored deduplicated lines, preserves ingredient constraints and uncovered warnings, and records all-or-none local simulation atomicity on its order; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in whole sales units, including KG. allowedLotSize below one counts as one; fractional quantities return 422 INVALID_LOT_SIZE naming the step. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over the spec 10/13 RFC 8785 quote_payload with decimal-string quantities/money and provenance; protected quote_version=2 and quote_integrity authenticate immutable evidence separately from the promise payload. Earlier unversioned signatures remain usable until expiry; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. Cached command replays revalidate the bound mandate and customer scope. Derived forward navigation lists in links are outside immutable signed evidence. No negotiation. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "BasketRef": {
@@ -3691,6 +3978,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -3851,9 +4148,52 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -3937,6 +4277,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -4243,6 +4591,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -4352,6 +4743,37 @@
           ],
           "default": null,
           "title": "Clinical Review"
+        },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "expiration_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expiration Reason"
         },
         "links": {
           "additionalProperties": true,
@@ -4535,7 +4957,7 @@
     }
   },
   "place_order": {
-    "description": "Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order after ownership and identity checks, even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the saved first response, even after cancellation, after ownership and identity checks (PENDING_EXECUTION resumes ambiguous supplier execution per spec 25), even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision and use a new approval idempotency key before approving again. No upstream order endpoint exists. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "properties": {
         "quote_id": {
@@ -4559,6 +4981,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -4651,6 +5083,54 @@
           "title": "BasketRef",
           "type": "object"
         },
+        "Execution": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "simulated",
+                "supplier_backed"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "supplier_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supplier Ref"
+            },
+            "acknowledged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Acknowledged At"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "status"
+          ],
+          "title": "Execution",
+          "type": "object"
+        },
         "LiveCalls": {
           "additionalProperties": false,
           "properties": {
@@ -4719,9 +5199,52 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -4805,6 +5328,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -5116,6 +5647,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -5258,6 +5832,48 @@
           "description": "Adapter commitment semantics; simulation reserves all basket lines or none locally.",
           "title": "Atomicity"
         },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expiration_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expiration Reason"
+        },
         "context": {
           "anyOf": [
             {
@@ -5316,9 +5932,12 @@
           "title": "Customer Id"
         },
         "commitment": {
-          "const": "gateway-simulated",
           "default": "gateway-simulated",
-          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "description": "Supplier acknowledgement only after a successful supplier-backed submit; otherwise gateway-simulated. Included in the signed receipt.",
+          "enum": [
+            "gateway-simulated",
+            "supplier-acknowledged"
+          ],
           "title": "Commitment",
           "type": "string"
         },
@@ -5394,6 +6013,7 @@
           "enum": [
             "CONFIRMED",
             "PENDING_APPROVAL",
+            "PENDING_EXECUTION",
             "REJECTED",
             "EXPIRED",
             "CANCELLED"
@@ -5526,6 +6146,7 @@
             {
               "enum": [
                 "WAIT_FOR_APPROVAL",
+                "RETRY_SAME_COMMAND",
                 "STOP",
                 "LOOKUP_REQUIRED"
               ],
@@ -5605,6 +6226,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -5697,6 +6328,54 @@
           "title": "BasketRef",
           "type": "object"
         },
+        "Execution": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "simulated",
+                "supplier_backed"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "supplier_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supplier Ref"
+            },
+            "acknowledged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Acknowledged At"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "status"
+          ],
+          "title": "Execution",
+          "type": "object"
+        },
         "LiveCalls": {
           "additionalProperties": false,
           "properties": {
@@ -5765,9 +6444,52 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -5851,6 +6573,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -6162,6 +6892,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -6304,6 +7077,48 @@
           "description": "Adapter commitment semantics; simulation reserves all basket lines or none locally.",
           "title": "Atomicity"
         },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expiration_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expiration Reason"
+        },
         "context": {
           "anyOf": [
             {
@@ -6362,9 +7177,12 @@
           "title": "Customer Id"
         },
         "commitment": {
-          "const": "gateway-simulated",
           "default": "gateway-simulated",
-          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "description": "Supplier acknowledgement only after a successful supplier-backed submit; otherwise gateway-simulated. Included in the signed receipt.",
+          "enum": [
+            "gateway-simulated",
+            "supplier-acknowledged"
+          ],
           "title": "Commitment",
           "type": "string"
         },
@@ -6440,6 +7258,7 @@
           "enum": [
             "CONFIRMED",
             "PENDING_APPROVAL",
+            "PENDING_EXECUTION",
             "REJECTED",
             "EXPIRED",
             "CANCELLED"
@@ -6572,6 +7391,7 @@
             {
               "enum": [
                 "WAIT_FOR_APPROVAL",
+                "RETRY_SAME_COMMAND",
                 "STOP",
                 "LOOKUP_REQUIRED"
               ],
@@ -6651,6 +7471,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -6743,6 +7573,54 @@
           "title": "BasketRef",
           "type": "object"
         },
+        "Execution": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "simulated",
+                "supplier_backed"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "supplier_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supplier Ref"
+            },
+            "acknowledged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Acknowledged At"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "status"
+          ],
+          "title": "Execution",
+          "type": "object"
+        },
         "LiveCalls": {
           "additionalProperties": false,
           "properties": {
@@ -6811,9 +7689,52 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -6897,6 +7818,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -7208,6 +8137,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -7350,6 +8322,48 @@
           "description": "Adapter commitment semantics; simulation reserves all basket lines or none locally.",
           "title": "Atomicity"
         },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expiration_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expiration Reason"
+        },
         "context": {
           "anyOf": [
             {
@@ -7408,9 +8422,12 @@
           "title": "Customer Id"
         },
         "commitment": {
-          "const": "gateway-simulated",
           "default": "gateway-simulated",
-          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "description": "Supplier acknowledgement only after a successful supplier-backed submit; otherwise gateway-simulated. Included in the signed receipt.",
+          "enum": [
+            "gateway-simulated",
+            "supplier-acknowledged"
+          ],
           "title": "Commitment",
           "type": "string"
         },
@@ -7486,6 +8503,7 @@
           "enum": [
             "CONFIRMED",
             "PENDING_APPROVAL",
+            "PENDING_EXECUTION",
             "REJECTED",
             "EXPIRED",
             "CANCELLED"
@@ -7618,6 +8636,7 @@
             {
               "enum": [
                 "WAIT_FOR_APPROVAL",
+                "RETRY_SAME_COMMAND",
                 "STOP",
                 "LOOKUP_REQUIRED"
               ],
@@ -7850,6 +8869,16 @@
         "Availability": {
           "additionalProperties": false,
           "properties": {
+            "stock_semantics": {
+              "default": "finite",
+              "enum": [
+                "finite",
+                "unlimited",
+                "unknown"
+              ],
+              "title": "Stock Semantics",
+              "type": "string"
+            },
             "available_amount": {
               "anyOf": [
                 {
@@ -7942,6 +8971,54 @@
           "title": "BasketRef",
           "type": "object"
         },
+        "Execution": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "simulated",
+                "supplier_backed"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "supplier_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supplier Ref"
+            },
+            "acknowledged_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Acknowledged At"
+            },
+            "status": {
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "status"
+          ],
+          "title": "Execution",
+          "type": "object"
+        },
         "LiveCalls": {
           "additionalProperties": false,
           "properties": {
@@ -8010,9 +9087,52 @@
           "title": "MandateRecord",
           "type": "object"
         },
+        "NameSizeCandidate": {
+          "additionalProperties": false,
+          "properties": {
+            "size_per_sales_unit": {
+              "description": "Plausible case content in the offer's size_unit; display evidence, not proof of conversion.",
+              "title": "Size Per Sales Unit",
+              "type": "number"
+            },
+            "source_text": {
+              "description": "Original product name containing this measure.",
+              "title": "Source Text",
+              "type": "string"
+            },
+            "expression": {
+              "description": "Local measure and count expression; repeated complete expressions remain independent.",
+              "title": "Expression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "size_per_sales_unit",
+            "source_text",
+            "expression"
+          ],
+          "title": "NameSizeCandidate",
+          "type": "object"
+        },
         "OfferCard": {
           "additionalProperties": false,
           "properties": {
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "tax_basis": {
+              "const": "net",
+              "default": "net",
+              "title": "Tax Basis",
+              "type": "string"
+            },
             "substitution": {
               "anyOf": [
                 {
@@ -8096,6 +9216,14 @@
               "description": "True when the live price ratio agrees with the selected exact catalog or name size within 3%.",
               "title": "Size Confirmed By Price",
               "type": "boolean"
+            },
+            "name_size_candidates": {
+              "description": "All parsed name candidates with original source text. A name conversion requires a confirming price ratio, matching explicit catalog content, one count expression matching the sales multiplier without contradiction, or one measure at multiplier 1. Otherwise quantities are display estimates and SIZE_UNCONFIRMED requires approval.",
+              "items": {
+                "$ref": "#/$defs/NameSizeCandidate"
+              },
+              "title": "Name Size Candidates",
+              "type": "array"
             },
             "units_needed": {
               "anyOf": [
@@ -8407,6 +9535,49 @@
         "Provenance": {
           "additionalProperties": false,
           "properties": {
+            "environment": {
+              "default": "live",
+              "enum": [
+                "live",
+                "sandbox"
+              ],
+              "title": "Environment",
+              "type": "string"
+            },
+            "synthetic": {
+              "default": false,
+              "title": "Synthetic",
+              "type": "boolean"
+            },
+            "requested_date": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Date"
+            },
+            "returned_dates": {
+              "anyOf": [
+                {
+                  "items": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Returned Dates"
+            },
             "source": {
               "description": "Upstream endpoint or catalog source.",
               "title": "Source",
@@ -8549,6 +9720,48 @@
           "description": "Adapter commitment semantics; simulation reserves all basket lines or none locally.",
           "title": "Atomicity"
         },
+        "supplier_id": {
+          "default": "valio",
+          "title": "Supplier Id",
+          "type": "string"
+        },
+        "environment": {
+          "default": "live",
+          "enum": [
+            "live",
+            "sandbox"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "synthetic": {
+          "default": false,
+          "title": "Synthetic",
+          "type": "boolean"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expiration_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expiration Reason"
+        },
         "context": {
           "anyOf": [
             {
@@ -8607,9 +9820,12 @@
           "title": "Customer Id"
         },
         "commitment": {
-          "const": "gateway-simulated",
           "default": "gateway-simulated",
-          "description": "Recorded locally; no supplier order transmitted. Included in the signed receipt.",
+          "description": "Supplier acknowledgement only after a successful supplier-backed submit; otherwise gateway-simulated. Included in the signed receipt.",
+          "enum": [
+            "gateway-simulated",
+            "supplier-acknowledged"
+          ],
           "title": "Commitment",
           "type": "string"
         },
@@ -8685,6 +9901,7 @@
           "enum": [
             "CONFIRMED",
             "PENDING_APPROVAL",
+            "PENDING_EXECUTION",
             "REJECTED",
             "EXPIRED",
             "CANCELLED"
@@ -8817,6 +10034,7 @@
             {
               "enum": [
                 "WAIT_FOR_APPROVAL",
+                "RETRY_SAME_COMMAND",
                 "STOP",
                 "LOOKUP_REQUIRED"
               ],

@@ -27,7 +27,7 @@ def call(server, name, arguments):
 @pytest.fixture
 def sandbox():
     with scenario_gateway("split_stock") as gateway:
-        keys = Credentials("journey-operator", "sandbox-agent:journey-agent,outsider:journey-outsider")
+        keys = Credentials("journey-operator", "sandbox-agent:journey-agent,outsider:journey-outsider", environment="sandbox")
         with TestClient(create_app(gateway, keys=keys), headers=AGENT) as client:
             yield gateway, create_server(gateway, "sandbox-agent"), client
 

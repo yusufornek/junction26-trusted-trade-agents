@@ -11,10 +11,10 @@ ET.register_namespace("cac", CAC)
 
 # All 17 sales units in the challenge catalog, plus measure aliases. UN/ECE
 # Recommendation 20 measures, Recommendation 21 packages (X prefix).
-UNIT_CODES = {"L": "LTR", "LTR": "LTR", "KG": "KGM", "ST": "H87", "KI": "XCT", "KRT": "XCT",
+UNIT_CODES = {"CASE": "XCS", "L": "LTR", "LTR": "LTR", "KG": "KGM", "ST": "H87", "KI": "XCT", "KRT": "XCT",
               "RAS": "XPU", "SK": "XSA", "PAK": "XPK", "BAG": "XBG", "PRK": "XJR", "BOT": "XBO",
               "NIP": "XBE", "CS": "XCS", "PAL": "XPX", "DSP": "XPK", "KAN": "XCA", "DZ": "DZN", "KLE": "XBX"}
-RESPONSE_CODES = {"CONFIRMED": "AP", "REJECTED": "RE", "PENDING_APPROVAL": "CA", "CANCELLED": "RE", "EXPIRED": "RE"}
+RESPONSE_CODES = {"CONFIRMED": "AP", "REJECTED": "RE", "PENDING_APPROVAL": "CA", "PENDING_EXECUTION": "CA", "CANCELLED": "RE", "EXPIRED": "RE"}
 
 
 def basic(parent, name, value, **attrs):
@@ -53,7 +53,9 @@ def export(order, quote, document="order"):
     basic(root, "IssueTime", issued.timetz().isoformat())
     if response:
         basic(root, "OrderResponseCode", RESPONSE_CODES[order.status])
-    basic(root, "Note", "gateway-simulated: no supplier order transmitted. Party endpoint identifiers need data from Valio Aimo.")
+    basic(root, "Note", "environment: " + order.environment)
+    basic(root, "Note", "supplier: " + order.supplier_id + ("; synthetic: true" if order.synthetic else ""))
+    basic(root, "Note", order.commitment + (": no supplier order transmitted." if order.commitment == "gateway-simulated" else ": supplier reference " + order.execution.supplier_ref))
     for hit in order.policy.hits:
         basic(root, "Note", hit.rule + ": " + hit.detail)
     unknown = sorted({line.sales_unit for line in order.lines if line.sales_unit not in UNIT_CODES})
@@ -70,7 +72,7 @@ def export(order, quote, document="order"):
     else:
         basic(aggregate(root, "QuotationDocumentReference"), "ID", quote.id)
     parties = [("BuyerCustomerParty", quote.customer_id, "Customer " + quote.customer_id),
-               ("SellerSupplierParty", "gateway-simulated", "Valio Aimo (gateway simulation)")]
+               ("SellerSupplierParty", order.supplier_id, "Nordfood (synthetic)" if order.supplier_id == "nordfood" else "Valio Aimo (gateway simulation)")]
     for party_args in (reversed(parties) if response else parties):
         party(root, *party_args)
     period = aggregate(aggregate(root, "Delivery"), "RequestedDeliveryPeriod")

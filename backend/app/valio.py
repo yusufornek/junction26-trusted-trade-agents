@@ -148,7 +148,7 @@ class ValioClient:
 
     def _fetch(self, endpoint, customer, deliver_by, ids, counter, *, fresh=False):
         ids = list(dict.fromkeys(str(i) for i in ids))
-        result, missing = {}, []
+        result, missing, cached_at = {}, [], {}
         day = deliver_by.isoformat()
         clock = time.monotonic()
         with self.lock:
@@ -157,6 +157,7 @@ class ValioClient:
                 cached = self.cache.get((endpoint, customer, day, pid))
                 if not fresh and cached:
                     result[pid] = copy.deepcopy(cached[1])
+                    cached_at[pid] = cached[0]
                     result[pid]["_cache_age"] = max(0, clock - cached[0])
                 else:
                     missing.append(pid)
@@ -176,6 +177,8 @@ class ValioClient:
                             f"{self.base}/api/{endpoint}", headers={"X-API-Key": self.key},
                             json={"customer": customer, "requestedDate": day, "products": missing})
                         if response.status_code == 429:
+                            from .telemetry import metric
+                            metric("throttles")
                             block = UPSTREAM_PACER.block(response.headers.get("Retry-After"))
                             if block is not None:
                                 with self.lock:
@@ -200,7 +203,14 @@ class ValioClient:
                     self.cache[(endpoint, customer, day, pid)] = (time.monotonic(), copy.deepcopy(result[pid]))
                 while len(self.cache) > self.max_cache_entries:
                     self.cache.pop(next(iter(self.cache)))
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        except httpx.TimeoutException:
+            raise DomainError("VALIO_UNAVAILABLE", f"Upstream {endpoint} request failed", 502,
+                              {"timeout": True}) from None
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
             # Never include upstream error bodies/headers, which could expose credentials.
-            raise DomainError("VALIO_UNAVAILABLE", f"Upstream {endpoint} request failed", 502) from None
+            data = {"upstream_status": error.response.status_code} if isinstance(error, httpx.HTTPStatusError) else {}
+            raise DomainError("VALIO_UNAVAILABLE", f"Upstream {endpoint} request failed", 502, data) from None
+        returned_at = time.monotonic()
+        for pid, fetched_at in cached_at.items():
+            result[pid]["_cache_age"] = max(0, returned_at - fetched_at)
         return result

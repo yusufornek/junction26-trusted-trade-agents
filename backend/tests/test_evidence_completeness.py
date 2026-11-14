@@ -194,6 +194,20 @@ def test_review_all_real_case_name_sizes(need, real_case_name_products, record_t
             if not used:
                 assert "SIZE_UNKNOWN" in codes(offer)
                 continue  # Nested pcs counts without a reconciling total are not evidence.
+            # An approval warning never permits an estimate above every independent
+            # name/catalog bound (the other lane's exhaustive safety assertion).
+            bounds = set(sizes)
+            if product.base_unit == unit and product.units.get(product.sales_unit, 0) > 0:
+                # A KG-to-case conversion is already a measure, not a piece count.
+                bounds.add(Decimal(str(product.units[product.sales_unit])))
+            base = product.base_volume_l if unit == "L" else product.base_net_weight_kg
+            case = product.sales_volume_l if unit == "L" else product.sales_net_weight_kg
+            if base and base > 0:
+                bounds.add(Decimal(str(base)) * Decimal(str(product.units.get(product.sales_unit, 1))))
+            if case and case > 0:
+                bounds.add(Decimal(str(case)))
+            if bounds and used > max(bounds) * Decimal("1.03"):
+                failures.append((product.id, "estimate exceeds independent bounds", unit, str(used), sorted(map(str, bounds))))
             agrees = any(abs(used / size - 1) <= Decimal(".03") for size in sizes)
             mismatches = [w for w in offer.warnings if w.code == "SIZE_MISMATCH"]
             case = product.sales_volume_l if unit == "L" else product.sales_net_weight_kg
@@ -207,6 +221,7 @@ def test_review_all_real_case_name_sizes(need, real_case_name_products, record_t
                         f"{float(used):g}" in text and "name_case=" in text):
                     failures.append((product.id, "contradiction not visible", unit, str(used), text))
             elif not agrees:
+
                 failures.append((product.id, product.name_en, unit, str(used), sorted(map(str, sizes))))
     assert not failures, f"{len(failures)} failures / {len(real_case_name_products)} products: {failures[:30]}"
 
@@ -569,6 +584,11 @@ def test_ac_7_unconfirmed_size_requires_plan_approval(gateway, need, upstream, r
     result = gateway.find_offers(need.model_copy(update={"quantity": Quantity(value=5, unit="L")}), actor="agent:web-console")
     assert "SIZE_UNCONFIRMED" in codes(next(o for o in result.offers if o.product_id == "1"))
     assert result.plans and all(p.policy_preview.outcome == "PENDING_APPROVAL" for p in result.plans)
+    offer = next(o for o in result.offers if o.product_id == "1")
+    assert offer.name_size_candidates and all(c.source_text for c in offer.name_size_candidates)
+    quote = gateway.orders.create_quote(quote_request(result.need, qty=offer.units_needed,
+        need_ref=result.lookup_id), "web-console")
+    assert gateway.orders.place_order(quote.id, "ac7-unconfirmed-size", "web-console").status == "PENDING_APPROVAL"
     mutate_response(respx_mock, upstream, "price", lambda b: None)
     gateway.valio.cache.clear()
     confirmed = next(o for o in gateway.find_offers(need).offers if o.product_id == "1")
@@ -774,7 +794,7 @@ def test_ac_16_full_catalog_replays_recorded_demo(gateway, need, upstream, respx
 
 
 @pytest.mark.parametrize("pid,unit,size,requested,units", [
-    ("462607", "KG", 1.5, 1.5, 1), ("464639", "KG", .9, 54, 60),
+    ("462607", "KG", .15, 1.5, 10), ("464639", "KG", .9, 54, 60),
     ("460892", "KG", 10.8, 10.8, 1), ("477242", "L", 7.92, 7.92, 1),
     ("470979", "KG", 4, 4, 1), ("462191", "KG", 5, 5, 1),
 ])

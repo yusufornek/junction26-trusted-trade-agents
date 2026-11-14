@@ -258,6 +258,7 @@ def real_case_name_products(actual_product_rows):
             continue
         names = [n["value"] for n in (row.get("synkkaData") or {}).get("names", [])
                  if n.get("language") in {"en", "fi"}]
+
         multiplier = next((u["sizeInBaseUnits"] for u in row.get("units", [])
                            if u["unitId"] == row["salesUnit"]), 1)
         expected = {"L": set(), "KG": set()}
@@ -276,18 +277,20 @@ def real_case_name_products(actual_product_rows):
                 leading = None
             leading_counts = list(map(int, re.findall(r"\d+", leading[1]))) if leading else []
             matches = list(re.finditer(measure, name, re.I))
-            direct_counts = []
+            direct_counts, direct_positions = [], []
             for match in matches:
                 before = name[:match.start()]
-                direct = re.search(r"(?:(?<![\d.,])|(?<=[a-z]\.))((?:\d+\s*[x×]\s*)+)$", before, re.I)
+                direct = re.search(r"(?:(?<![\d.,])|(?<=[a-z]\.))((?:\d+\s*[x×]\s*\(?\s*)+)$", before, re.I)
                 direct_counts.append(list(map(int, re.findall(r"\d+", direct[1]))) if direct else [])
+                direct_positions.append(direct.start() if direct else None)
             pieces = re.search(r"(?<![\d.,/x×])((?:\d+\s*[x×]\s*)*\d+)\s*(?:pcs|kpl)\b", name, re.I)
             if leading and pieces and pieces.start() <= leading.start() < pieces.end():
                 leading, leading_counts = None, []
             piece_count = prod(map(int, re.findall(r"\d+", pieces[1]))) if pieces else None
-            for match, direct in zip(matches, direct_counts):
+            for match, direct, direct_start in zip(matches, direct_counts, direct_positions):
                 counts = direct or (leading_counts if len(matches) == 1 and leading.end() <= match.start() else []) if leading else direct
-                if direct and leading and leading.end() < match.start():
+                if direct and leading and leading.end() <= direct_start and not any(
+                        previous.end() <= match.start() for previous in matches):
                     counts = leading_counts + direct
                 unit, factor = factors[match[2].lower()]
                 count = prod(counts) if counts else (1 if row.get("baseUnit") == unit else multiplier)

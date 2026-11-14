@@ -1,8 +1,10 @@
 """Authenticated, advisory authority snapshot shared by REST and MCP."""
 from .models import Model
+from pydantic import Field
 
 
 class AgentContext(Model):
+    fixture_clock: str | None = Field(default=None, exclude_if=lambda v: v is None)
     principal: dict
     customer_ids: list[str]
     mandate: dict
@@ -45,7 +47,8 @@ def agent_context(service, principal, mandate=None):
     operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "cancel_order"]
     if row:
         operations += ["find_offers", "create_quote", "place_order"]
-    return AgentContext(principal=principal.public(), customer_ids=customers, mandate=summary,
+    return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+        principal=principal.public(), customer_ids=customers, mandate=summary,
         effective_limits={"per_order_eur": per_order, "rolling_24h_eur": daily},
         remaining_budget={"currency": "EUR", "window": "rolling_24h", "spent": spent, "remaining": max(0, daily - spent)},
         environment=service.settings.environment, rate_limits=service.limiter.snapshot(principal.id),

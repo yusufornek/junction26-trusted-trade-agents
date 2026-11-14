@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS proposal_filter_log (
 );
 CREATE TABLE IF NOT EXISTS buyer_suspensions (agent_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS evidence_snapshots (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, bundle BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS supplier_products (
+ supplier_id TEXT NOT NULL, supplier_sku TEXT NOT NULL, data TEXT NOT NULL,
+ PRIMARY KEY(supplier_id,supplier_sku)
+);
+CREATE TABLE IF NOT EXISTS workspace (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS agent_autonomy (
  agent_id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK(level IN ('approval_required','autonomous_within_limits'))
 );
@@ -110,6 +116,8 @@ class Database:
         self.on_commit = None
         self._connection = ContextVar("sqlite_connection", default=None)
         self._staged_files = ContextVar("sqlite_staged_files", default=None)
+        self._rollback = ContextVar("sqlite_rollback_callbacks", default=None)
+
         self.audit_verify_lock = threading.Lock()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,6 +236,13 @@ class Database:
             finally:
                 if temporary is not None:
                     self._cleanup_file(temporary)
+    def on_rollback(self, callback):
+        """Compensate external state while the owning writer lock is still held."""
+        callbacks = self._rollback.get()
+        if callbacks is None:
+            raise RuntimeError("Rollback compensation requires a write transaction")
+        callbacks.append(callback)
+
 
     @contextmanager
     def connect(self, write=False, *, notify=True):
@@ -241,14 +256,22 @@ class Database:
             offset = len(staged) if staged is not None else 0
             if write:
                 active.execute(f"SAVEPOINT {savepoint}")
+            callbacks = self._rollback.get()
+            checkpoint = len(callbacks) if callbacks is not None else 0
             try:
                 yield active
             except BaseException:
                 if write:
-                    active.execute(f"ROLLBACK TO {savepoint}")
-                    for _, _, temporary in staged[offset:]:
-                        self._cleanup_file(temporary)
-                    del staged[offset:]
+                    try:
+                        for callback in reversed(callbacks[checkpoint:]):
+                            callback()
+                    finally:
+                        del callbacks[checkpoint:]
+                        active.execute(f"ROLLBACK TO {savepoint}")
+                        for _, _, temporary in staged[offset:]:
+                            self._cleanup_file(temporary)
+                        del staged[offset:]
+
                 raise
             finally:
                 if write:
@@ -277,6 +300,9 @@ class Database:
         token = self._connection.set(conn) if write else None
         staged = []
         file_token = self._staged_files.set(staged) if write else None
+        callbacks = []
+        rollback_token = self._rollback.set(callbacks) if write else None
+
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
@@ -286,13 +312,18 @@ class Database:
             if write:
                 self._publish_files(conn, staged)
         except BaseException:
-            conn.rollback()
+            try:
+                for callback in reversed(callbacks):
+                    callback()
+            finally:
+                conn.rollback()
             raise
         finally:
             try:
                 if token is not None:
                     self._connection.reset(token)
                     self._staged_files.reset(file_token)
+                    self._rollback.reset(rollback_token)
                 for _, _, temporary in staged:
                     self._cleanup_file(temporary)
             finally:
@@ -301,6 +332,7 @@ class Database:
                 finally:
                     if writer_lock is not None:
                         writer_lock.close()
+
         if committed and write and notify and self.on_commit is not None:
             try:
                 self.on_commit()

@@ -3,6 +3,7 @@
 The outbox is the queue; delivery records are immutable payload snapshots. DNS is
 checked on every attempt and the connection is pinned to that checked address.
 """
+from .telemetry import traced, metric
 import base64
 import html
 import ipaddress
@@ -134,7 +135,9 @@ class Webhooks:
         except (ValueError, OSError):
             raise DomainError("WEBHOOK_DESTINATION_UNSAFE", "Use a public HTTPS destination (sandbox permits localhost).", 422) from None
 
+    @traced("webhook.deliver")
     def _post(self, url, body, event_id, extra_headers=None):
+        metric("delivery.attempts")
         parsed, address = self._destination(url)
         original = httpx.URL(url)
         pinned = original.copy_with(host=address)

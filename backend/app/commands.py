@@ -1,6 +1,7 @@
 """Shared command boundary used by current and future transports."""
 import inspect
 import json
+import time
 from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
@@ -107,6 +108,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         lookup_id = result["basket_lookup_id" if basket else "lookup_id"]
         gateway.mandates.authorize(conn, arguments["mandate"], agent, request.customer_id,
                                   products=[offer["product_id"] for offer in offers],
+                                  supplier_id=getattr(request, "supplier_id", "valio"),
                                   bound=("lookup", lookup_id))
     elif route == "orders.create_quote":
         request = arguments["request"]
@@ -120,7 +122,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         bound = ("quote", quote_id) if gateway.mandates.stored(conn, "quote", quote_id) else ("lookup", request.need_ref)
         gateway.mandates.authorize(conn, arguments["mandate"], agent, request.customer_id,
                                   products=[line["product_id"] for line in saved["value"]["lines"]],
-                                  bound=bound)
+                                  bound=bound, supplier_id=lookup.need.supplier_id)
     elif route == "orders.place_order":
         quote = check_owner(gateway.orders._quote(conn, arguments["quote_id"]),
                             None if arguments["operator"] else agent, "QUOTE_NOT_FOUND")
@@ -129,7 +131,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         if (arguments["mandate"] is not None or gateway.mandates.stored(conn, *bound) is not None
                 or agent in gateway.policy.get().agents):
             gateway.mandates.authorize(conn, arguments["mandate"], agent, quote.customer_id,
-                products=[line["product_id"] for line in saved["value"]["lines"]], bound=bound)
+                products=[line["product_id"] for line in saved["value"]["lines"]], bound=bound, supplier_id=quote.supplier_id)
         # Spec 06 R-2 explicitly permits returning an existing policy-row order
         # after its mandate was removed. It never grants a new purchase.
     elif route in {"orders.approve", "orders.reject", "orders.cancel"}:
@@ -143,7 +145,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
             if route == "orders.approve":
                 # Rejecting needs no purchasing authority; approving still does.
                 gateway.mandates.authorize(conn, None, order.agent_id, order.customer_id,
-                    products=[line.product_id for line in order.lines], bound=("order", order.id))
+                    products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
     else:
         raise RuntimeError(f"No replay authorization registered for {route}")
 
@@ -159,11 +161,15 @@ def fingerprint(scope, route, arguments):
     # Principal metadata and presented credentials are authority, not request payload.
     payload = {"principal": scope, "route": route, "arguments": json_value({k: v for k, v in arguments.items()
                if k not in {"principal", "actor", "operator", "mandate", "idempotency_key"}})}
-    return sha256(canonical_json(payload)).hexdigest()
+    if route == "policy.update" and not arguments.get("reset"):
+        policy = arguments["request"].policy
+        payload["policy_presence"] = {"sections": sorted(policy.model_fields_set),
+                                      "shortlist": sorted(policy.shortlist.model_fields_set)}
+    return "v2:" + sha256(canonical_json(payload)).hexdigest()
 
 
 def matches_command(previous, digest, name, route, arguments, saved):
-    if previous["digest"] == digest:
+    if previous["digest"] in {digest, digest.removeprefix("v2:")}:
         return True
     if saved.get("fingerprint_version") is not None:
         return False
@@ -173,14 +179,21 @@ def matches_command(previous, digest, name, route, arguments, saved):
               if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
     # Lane B excluded the resolved principal from its earlier payload hashes.
     lane_legacy = {"command": name, "arguments": {k: v for k, v in legacy["arguments"].items() if k != "principal"}}
-    return (previous["digest"] in {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
+    lane_versioned = dict(lane_legacy)
+    if route == "policy.update" and not arguments.get("reset"):
+        policy = arguments["request"].policy
+        lane_versioned["policy_presence"] = {"sections": sorted(policy.model_fields_set),
+                                             "shortlist": sorted(policy.shortlist.model_fields_set)}
+    compatible = {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
+    compatible.add("v2:" + sha256(canonical_json(lane_versioned)).hexdigest())
+    return (previous["digest"] in compatible
             and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
 
 
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets", "lookup") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")
@@ -197,7 +210,7 @@ def install(gateway, target, name, category):
         return result
 
     @wraps(operation)
-    def command(*args, **kwargs):
+    def execute(*args, **kwargs):
         supplied_key = kwargs.pop("command_key", None)
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
@@ -207,6 +220,7 @@ def install(gateway, target, name, category):
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         digest = fingerprint(scope, route, arguments)
+
         tokens = CORRELATION.set(CORRELATION.get() or correlation_id()), CAUSATION.set(key)
         trace_token = TRACE.set(TRACE.get() or trace_id())
         try:
@@ -227,9 +241,15 @@ def install(gateway, target, name, category):
             error = None
             with gateway.db.connect(write=True) as conn:
                 previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?", (scope, key)).fetchone()
+                legacy = None
+                if not previous and name == "place_order":
+                    storage_key = sha256((identity + "\x00" + key).encode()).hexdigest()
+                    legacy = conn.execute("SELECT data FROM orders WHERE idempotency_key=? OR "
+                        "(idempotency_key=? AND json_extract(data,'$.agent_id')=?)",
+                        (storage_key, key, identity)).fetchone()
                 try:
                     command_checks(gateway, route, arguments, principal,
-                                   lambda: gateway.limiter.consume(identity, "read" if previous else category))
+                                   lambda: gateway.limiter.consume(identity, "read" if previous or legacy else category))
                     if previous:
                         saved = json.loads(previous["result"])
                         def check_replay():
@@ -239,19 +259,35 @@ def install(gateway, target, name, category):
                                 raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent, or a changed command payload", 409)
                             replay_authorization(gateway, route, conn, arguments, principal, saved)
                         command_checks(gateway, route, arguments, principal, check_replay)
-                        if name == "place_order":
-                            # Preserve buyer mandate revalidation and the historical replay audit.
-                            return linked(operation(*args, **kwargs))
-                        from . import models
-                        model = getattr(models, saved["model"]) if saved["model"] else None
-                        return model.model_validate(saved["value"], context={"stored": True}) if model else saved["value"]
-                    result = linked(operation(*args, **kwargs))
+                        if saved.get("error"):
+                            refusal = saved["error"]
+                            error = DomainError("EVIDENCE_CHANGED", refusal["message"], refusal["status"], refusal["data"])
+                        elif name == "place_order":
+                            # Revalidate current authority and reconcile uncertain supplier execution.
+                            current = linked(operation(*args, **kwargs))
+                            from .models import Order
+                            result = Order.model_validate(saved["value"], context={"stored": True})
+                            if result.status == "PENDING_EXECUTION":
+                                result = current
+                        else:
+                            from . import models
+                            model = getattr(models, saved["model"]) if saved["model"] else None
+                            result = model.model_validate(saved["value"], context={"stored": True}) if model else saved["value"]
+                    else:
+                        result = linked(operation(*args, **kwargs))
+
                 except DomainError as caught:
                     error = caught
+                    if not previous and caught.code == "EVIDENCE_CHANGED":
+                        conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
+                            (scope, key, name, digest, json.dumps({"error": {"message": caught.message,
+                             "status": caught.status, "data": caught.data}})))
                 else:
-                    conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
-                                 (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
-                                                                     "value": json_value(result), "fingerprint_version": 2})))
+                    if not previous and error is None:
+                        conn.execute("INSERT INTO commands VALUES(?,?,?,?,?)",
+                                     (scope, key, name, digest, json.dumps({"model": type(result).__name__ if isinstance(result, BaseModel) else None,
+                                                                         "value": json_value(result), "fingerprint_version": 2})))
+
             if error:
                 raise error
             return result
@@ -260,5 +296,52 @@ def install(gateway, target, name, category):
             TRACE.reset(trace_token)
             CORRELATION.reset(tokens[0])
             CAUSATION.reset(tokens[1])
+
+    @wraps(operation)
+    def command(*args, **kwargs):
+        from .runtime import SUPPLIER
+        from .telemetry import span, metric, links
+        values = signature.bind_partial(*args, **{k: v for k, v in kwargs.items() if k != "command_key"}).arguments
+        supplier = getattr(values.get("need"), "supplier_id", None)
+        saved_links = []
+        reference = values.get("order_id") or values.get("quote_id") or getattr(values.get("request"), "need_ref", None)
+        if reference:
+            table = "orders" if values.get("order_id") else "quotes" if values.get("quote_id") else "lookups"
+            with gateway.db.connect() as conn:
+                row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (reference,)).fetchone()
+            if row:
+                obj = json.loads(row[0])
+                supplier = obj.get("supplier_id") or obj.get("need", {}).get("supplier_id", "valio")
+                if name in {"approve", "reject"}:
+                    saved_links = links(obj.get("links", {}).get("placement_span"))
+        token = SUPPLIER.set(supplier or "valio")
+        label = {"create_quote": "quote.create", "place_order": "order.place", "approve": "approval.review",
+                 "reject": "approval.review"}.get(name, "command." + name)
+        started = time.perf_counter()
+        try:
+            with gateway.activate(), span(label, links=saved_links) as current:
+                result = execute(*args, **kwargs)
+                if gateway.sandbox:
+                    gateway.sandbox.after(name, result)
+                if current is not None:
+                    for key, value in {"order.ref": getattr(result, "id", None) if target is gateway.orders and name != "create_quote" else None,
+                                       "quote.ref": getattr(result, "quote_id", None) or (getattr(result, "id", None) if name == "create_quote" else None),
+                                       "outcome": getattr(result, "status", "success")}.items():
+                        if value is not None:
+                            current.set_attribute(key, value)
+                if name == "find_offers":
+                    metric("candidates.screened", result.screened_count)
+                    metric("candidates.priced", result.priced_count)
+                    if current is not None:
+                        current.set_attribute("candidates.screened", result.screened_count)
+                        current.set_attribute("candidates.priced", result.priced_count)
+                if name in {"approve", "reject"}:
+                    from .audit import utcnow
+                    metric("approval.wait", max(0, (utcnow() - result.created_at).total_seconds()))
+                return result
+        finally:
+            with gateway.activate():
+                metric("request.latency", time.perf_counter() - started)
+            SUPPLIER.reset(token)
 
     setattr(target, name, command)

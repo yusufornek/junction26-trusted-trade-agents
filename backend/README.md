@@ -341,11 +341,22 @@ Old stored lookups without preferences/plans remain readable, including through 
   to `intent` with no recorded terms.
   Policy updates omitting `shortlist.live_max` retain its current value; older runtime files inherit
   the committed default.
-- Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
-  multiplier, and the live catalog/comparison price ratio. Among exact sources confirmed by price,
+- Conversion computes catalog base content times the sales-unit multiplier, local name/count candidates,
+  and the live catalog/comparison price ratio. Among exact sources confirmed by price,
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
+  Name-derived conversion is supported only by a live ratio within 3%, matching explicit catalog content
+  within 3%, one count expression matching the sales-unit multiplier with no contradictory measure,
+  or one measure with multiplier 1. Other name sizes are display estimates: the smallest plausible
+  candidate drives the displayed quantity, and `SIZE_UNCONFIRMED` prevents autonomous placement.
+  Spec 15 still requires approval for every catalog/name size lacking a confirming live ratio,
+  including otherwise unambiguous names. `name_size_candidates` exposes each candidate, its original
+  `source_text` and local `expression` in offers and quote/order lines. A portion/count can check a stated
+  package total but never multiply that total: `22g/2.77kg`, 126 pieces, gives 2.77 kg once.
+  Repeated complete expressions (`4x1kg ... 4x1kg`) remain independent; genuinely separated outer
+  counts (`8 x Brand 4x70g`) remain 32 portions. Inner portion counts are retained:
+  `4 x 625g/25pc` with 100 pieces per case gives (100/25) × 0.625 = 2.5 kg.
   CASE sales content needs no additional base-unit multiplier. It must agree within 3% with whole-case
   name evidence (including leading counts such as `24x Brooklyn ... 0.33 L`), or inner content times the
   sales-unit multiplier. Nested counts (`8 x Brand 4x70g`, `4x6x ... 0.33 L`) retain the inner counts
@@ -354,6 +365,8 @@ Old stored lookups without preferences/plans remain readable, including through 
   An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
   measures case weight rather than counting packages, preserving valid whole-case weights.
   Legacy CASE suspicion flags are recalculated from retained content and names without a database rewrite.
+  Historical lookups, quotes and orders default missing name candidates to an empty list and preserve
+  the field's absence when serialized, retaining the original signed evidence shape.
   Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
@@ -540,7 +553,7 @@ make these demonstration documents unsuitable for delivery over Peppol.
 | Order.created_at / decided_at | IssueDate, IssueTime | Creation for Order; decision time for OrderResponse |
 | Order.currency | DocumentCurrencyCode and currencyID on amounts | Upstream price currency (EUR) |
 | Quote.customer_id, Order.customer_id | BuyerCustomerParty/Party/PartyIdentification/ID; PartyName/Name | Internal customer identifier and display name; legal registered buyer name needs data from Valio Aimo |
-| Seller identity | SellerSupplierParty/Party/PartyIdentification/ID; PartyName/Name | Explicit gateway-simulated identity/name; seller legal registration identifier and legal name need data from Valio Aimo |
+| Seller identity | SellerSupplierParty/Party/PartyIdentification/ID; PartyName/Name | Supplier ID; Valio gateway simulation or explicitly synthetic Nordfood; legal registration data is unavailable |
 | Buyer and seller electronic address (mandatory Peppol routing data) | BuyerCustomerParty and SellerSupplierParty / Party/EndpointID, schemeID=0088 | Literal placeholder: **needs data from Valio Aimo**; not an invented GLN |
 | Party legal registration, postal addresses, country codes, VAT identifiers, contacts | PartyLegalEntity, PostalAddress/Country, PartyTaxScheme, Contact | needs data from Valio Aimo; omit unavailable fields, including conditional Peppol fields |
 | Quote.deliver_by | Delivery/RequestedDeliveryPeriod/EndDate | Requested delivery deadline; delivery location/address and recipient identity need data from Valio Aimo |
@@ -554,7 +567,7 @@ make these demonstration documents unsuitable for delivery over Peppol.
 | Allowances, charges, rounding, payment means/terms, accounting references, originator references | AllowanceCharge, monetary totals, PaymentMeans, PaymentTerms, AccountingCost, OriginatorDocumentReference | No gateway allowances/charges; other mandatory-if-applicable Peppol data needs data from Valio Aimo; never manufacture values |
 | Order.status | OrderResponseCode: CONFIRMED=AP, REJECTED=RE, PENDING_APPROVAL=CA; CANCELLED/EXPIRED=RE | Gateway decision, not a supplier response |
 | Order.policy.hits | Note per rule and detail | All policy rule hits; includes approval conditions |
-| Order.commitment | Note: gateway-simulated, no supplier order transmitted | Explicit simulated commitment |
+| Order.commitment | Note: gateway-simulated or supplier-acknowledged plus supplier reference | Explicit execution commitment; synthetic Nordfood acknowledgements are labelled |
 
 UN/ECE Recommendation 20 measures and Recommendation 21 package codes (X prefix):
 
@@ -607,8 +620,8 @@ canonical JSON payload (`app.signing.quote_payload`) contains:
 The canonical payload preserves spec 10 (and the GTIN addition in spec 13). New
 quotes add protected JWS header members `quote_version: 2` and `quote_integrity`:
 the latter is SHA-256 hex of the RFC 8785 canonical immutable resource, excluding
-only signature, status and live_calls, with all numbers normalized to decimal
-strings. This also authenticates owner, need binding, warnings, fit, tax prices
+signature, status, live_calls, expiration_reason and the derived navigation lists inside links,
+with all numbers normalized to decimal strings. Original link identifiers remain authenticated. This also authenticates owner, need binding, warnings, fit, tax prices
 and export evidence without expanding the detached promise payload. A standard
 JWS verifier can reconstruct the specified payload independently; the supplied
 verifier also checks the protected evidence digest.
@@ -909,13 +922,24 @@ scope; they never repeat a suspension or revocation. Mandate events are scoped b
 mandate ID, and retain the buyer organisation and control provenance for activity and webhook delivery.
 Earlier command envelopes still load; legacy autonomy entries must also match the saved target.
 Changed payloads return `409 IDEMPOTENCY_CONFLICT`. Command results, business state, audit and
-domain events commit atomically. Refusals do not cache a successful command result.
+domain events commit atomically. Refusals do not cache a successful command result; committed evidence-refresh refusals retain their recovery payload.
+A committed `EVIDENCE_CHANGED` refusal is saved and replayed too;
+after reviewing the refreshed evidence, approve with a new key. Policy file rollback remains active
+through the outer command commit. Policy digests preserve omission versus explicit clearing of sections
+and `shortlist.live_max`; historical unversioned digests remain readable. Cached quote replays revalidate
+the bound mandate and current customer scope. Legacy placement records without a command row use read
+cost and acquire a saved result on their first command-boundary replay. Conflicts on existing keys also
+spend read tokens. Spec 25's `PENDING_EXECUTION` exception still resumes ambiguous supplier execution.
+
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
 effective constraints, mandate reference, SHA-256 of canonical effective policy, and environment
-(`live`; the sandbox is a later spec). `links` connect request, quote, order, receipt, event, audit
+(`live` or the isolated `sandbox` workspace). `links` connect request, quote, order, receipt, event, audit
 checkpoint and trace identifiers; task references remain null until task transports are installed.
-Order detail exposes all event IDs, audit checkpoints and trace IDs. Trace links are stored locally;
+Order detail exposes all event IDs, audit checkpoints and trace IDs. Authorized quote and lookup reads
+add `quote_ids`, `order_ids`, `event_ids`, `audit_checkpoints` and `trace_ids` to `links`, including for
+historical rows; these derived navigation fields are excluded from signed quote evidence. Approval
+refreshes context from the policy snapshot and effective constraints used for that decision. Trace links are stored locally;
 when an OpenTelemetry span exists its trace ID is used. Span export is provided by spec 27.
 
 `X-Correlation-Id` is accepted/generated and returned on success and failure. MCP accepts the HTTP
@@ -923,7 +947,8 @@ header or `_meta.correlation_id` (`correlationId` also accepted). Audit data, ev
 payloads retain it. Events have schema version 1 and per-aggregate revisions, including quote
 acceptance. `events.audit_id` links the audit hash chain. `outbox` has one durable row per registered
 consumer. Register `gateway.outbox.register("webhooks", handler)` (or `"a2a-push"`, `"activity"`);
-registration without a handler reserves the durable consumer name. `replay=True` backfills existing
+registration without a handler reserves the durable consumer name. Dispatch selects only consumers
+with an attached handler before applying the batch limit, so offline consumers cannot starve others. `replay=True` backfills existing
 events. Post-commit dispatch never runs callbacks inside the procurement transaction. Failures remain
 pending with exponential retry intervals, and `dispatch()` can be called by a worker independently
 of new traffic. Callbacks must deduplicate by event ID: delivery is at least once. Named registrations
@@ -935,7 +960,10 @@ Recovery version 1 adds `retryable`, `next_action`, `retry_after_seconds`, `corr
 `violations` (field, problem, valid_values). Resource references are omitted unless read access has
 been verified; current errors conservatively omit them. Authentication errors disclose no resource
 details. MCP domain failures return `isError: true` with the same structured payload; malformed
-protocol use remains a protocol error. The explicit inventory is `app/recovery.py`.
+protocol use remains a protocol error. The explicit inventory is `app/recovery.py`. Lookup timeouts and
+supplier HTTP 502/503 failures propagate the retry contract; other failed supplier responses retain
+spec 01's warning-based degradation. Cached availability ages are recomputed after missing-product
+fetches so cut-offs use the time when the combined result is returned.
 
 | next_action | Client transition |
 |---|---|
@@ -951,7 +979,7 @@ protocol use remains a protocol error. The explicit inventory is `app/recovery.p
 Confirmed orders return `next_action: null`; rejected, expired and cancelled orders return `STOP`.
 `clients/python/reference_buyer.py` is the deterministic
 MCP recovery loop reused by the later connect kit: inject `call_tool`, then call
-`await ReferenceBuyer(call_tool).purchase(need_json)`. Lost responses retry the unchanged command/key;
+`await ReferenceBuyer(call_tool).purchase(need_json)`. Lost responses (including MCP SDK request-timeout and connection-closed errors) retry the unchanged command/key;
 expiry, throttles and approval waiting are driven by `next_action`, never prose or domain codes.
 
 Policy `rate_limits` has `lookup`, `mutation`, `read`, each with `capacity` and `refill_per_minute`.
@@ -961,7 +989,9 @@ returns `429 RATE_LIMITED`, `Retry-After`, and retry guidance before Decisions o
 Throttles are audited and counted in `/v1/stats.throttles`. Supplier admission is globally bounded
 within the process: 8 active calls, 16 waiting, a 5-second queue wait; overflow/timeouts yield retryable
 `503 UPSTREAM_BUSY`. Unknown credentials have a separate source-address bucket before credential
-resolution (60 attempts, 60/minute; successful authentication refunds its attempt). Limits are
+resolution (60 attempts, 60/minute). A digest-membership gate lets recognized credentials bypass that
+unknown-credential bucket while their principal buckets still apply. An approval inbox request costs one
+read token, regardless of its pending-order count; standalone quote reads still cost a read token. Limits are
 **in-process, single instance**; SQLite commands/events remain shared across processes.
 
 Valio outbound requests share a process-wide one-token bucket refilling at 5/s, with a rolling-window
@@ -1237,9 +1267,9 @@ The client requires context environment `sandbox`. An operator must prepare the 
 supplier/catalog and policy beforehand: full_stock covers 10 L autonomously; split_stock
 covers 400 L with a split plan and requires human approval. It follows `next_action`, polls
 pending orders, retains mutation keys on retries and verifies the Ed25519 receipt against
-public JWKS. It cannot approve its own order. This kit does not implement sandbox reset
+public JWKS. It cannot approve its own order. This kit does not call sandbox reset
 or credential issuance: use a separate deployment/storage/credentials and set
-`GATEWAY_ENVIRONMENT=sandbox`; that label alone does not provision or isolate data.
+`GATEWAY_ENVIRONMENT=sandbox`; spec 26 now provisions isolated fixture adapters, storage and sandbox-only credentials.
 Opaque credentials are expired by issuer removal/rotation; a refused key returns 401 with
 replacement guidance. Offline verification of a saved order is also available:
 
@@ -1311,7 +1341,7 @@ These use versioned `sandbox/scenarios/hospital_stockout.yaml` and `full_stock.y
 keys, policy, budgets and reservations. Contexts are labelled `sandbox` and observations have fixture
 provenance. They need no network or secrets and never touch `backend/var/`. Each prints a report path under
 `$TMPDIR`. The hospital demo includes buyer approval; the recipe demo decomposes lasagne on the agent side
-and orders for 200. This local scenario harness does not expose the workspace/admin reset API of spec 26.
+and orders for 200. The deployment sandbox and its admin reset API are documented below (spec 26).
 
 ## Exception journey (spec 30)
 
@@ -1417,14 +1447,89 @@ explicitly accept that quote through the standard order endpoint. Accept retries
 return the same order. POST `/{id}/decline` or `/{id}/mute` records the buyer action;
 mute adds the campaign name and equivalent-content fingerprint to buyer consent.
 
-`proposal.received` events are written atomically to the existing durable outbox
-with customer scope and consented channels. The spec 33 webhook service is absent
-from this checkout: its consumer can register through `gateway.outbox.register`
-and must require `"webhook"` in `event.payload.channels` before delivery. No HTTP
-webhook sender or subscription endpoint is claimed here.
+`proposal.received` events are written atomically to the durable outbox with customer scope and
+consented channels. The signed webhook service (spec 33) delivers through scoped subscriptions and
+requires `"webhook"` in `event.payload.channels` for proposal delivery.
 
 Demo: configure the supplier identity and buyer opt-in, then run
 `SUPPLIER_AGENT_KEY=... .venv/bin/python demo/run_sales_agent.py` from `backend/`.
 The default campaign advertises Valio Arki Eila 1 L at EUR 1.01 for customer 1;
 `--product`, `--unit-price`, `--customer` and `--base-url` override it. This sends
 content only; it grants no purchasing authority and creates no order.
+# Supplier adapters, sandbox and observability (specs 25–27)
+
+`GET /v1/suppliers` lists capabilities, execution atomicity and synthetic labels. Set
+`NeedSpec.supplier_id` to `nordfood` to use the **synthetic** second supplier; omission keeps
+the existing Valio path. A stored need binds the supplier through lookup, quote and order.
+Products use `(supplier_id, supplier_sku)` identities; GTIN is packaging evidence, never a lookup key.
+Valio's catalog builder and paced/cache-aware client are behind `ValioAdapter` without changing the
+recorded demo's best product or total. Nordfood is a different HTTP API with 60 fixture products,
+case prices, minimum case lots, finite inventory and EUR/SEK. The default EUR-only policy refuses
+SEK with `UNSUPPORTED_CURRENCY`; no implicit exchange rate is used. Agent policy and buyer VC
+`supplier_ids` intersect to restrict authority, including on approval and idempotent retry.
+
+From `backend/`, run `.venv/bin/python -m suppliers.nordfood` (localhost:8002), then the gateway as
+usual. `NORDFOOD_API_BASE` changes its origin. This service is synthetic and keeps its acknowledgements
+and stock in process memory for demonstrations; restart resets them. Tests use its actual ASGI app,
+without sockets. `SupplierAdapter` exposes capabilities/catalog ingestion/normalised price and stock
+facts. `OrderExecution` exposes submit/status/cancel and declares atomic, no-partial-acceptance execution.
+The normalised evidence retains supplier SKU, GTIN, sales unit/conversion, net currency/validity,
+stock semantics, requested/returned dates, source and observation time.
+
+Every new order has `execution {mode, supplier_ref, acknowledged_at, status}`. Valio remains
+`commitment: gateway-simulated`; Nordfood changes to `supplier-acknowledged` only after an accepted
+service response. Rejected or pending-approval orders are never submitted. An uncertain submit returns
+`PENDING_EXECUTION`, execution status `unknown`, and `next_action: RETRY_SAME_COMMAND`. Repeat
+`place_order` with the **same quote and idempotency key** to reconcile it. The deterministic gateway
+order UUID is the supplier's idempotency key, also protecting crash-before-local-commit retries.
+Cancellation requires the supplier's cancellation acknowledgement. Supplier execution is not a payment.
+
+The sandbox runs as a **separate deployment** of the same gateway. Its database is environment-bound:
+one database cannot be opened by both environments. It has independent credentials, keys, customers,
+reservations, budgets, command idempotency, caches, webhooks, outbox and audit. To start it:
+
+```sh
+.venv/bin/python scripts/gen_keys.py --sandbox-agent sandbox-buyer
+GATEWAY_ENVIRONMENT=sandbox .venv/bin/python -m uvicorn app.api:app --port 8010
+```
+
+The script writes only `SANDBOX_AGENT_KEYS` and `SANDBOX_ADMIN_TOKEN` into the local env file and
+prints names, never secrets. Live credentials are neither reused nor accepted. Default sandbox customer:
+`sandbox-customer`; new sandbox agents require approval. Defaults and generated storage live under the
+ignored `backend/sandbox-state/`, or `SANDBOX_DB_PATH` can point to an isolated temporary directory.
+Live `DB_PATH`, signing-key and anchoring settings do not configure the sandbox. The workspace uses
+`FixtureSupplierAdapter` for both suppliers and deterministic suitability fixtures, with the same
+production evidence, policy, planning, signing and approval code. Fixture time starts at the scenario's
+versioned clock; use delivery dates relative to that clock (listed by the scenario endpoint and as
+`fixture_clock` in `/v1/me`). The reference buyer uses that clock automatically. Grant the sandbox agent
+autonomy through the existing autonomy endpoint for an automatic full-stock rehearsal, or sign off its
+orders with the sandbox admin credential.
+
+`GET /v1/sandbox/scenarios` and `POST /v1/sandbox/reset {"scenario":"split_stock"}` require the
+sandbox admin credential. They are refused in a live deployment. The seven versioned YAML scenarios
+are `full_stock`, `split_stock`, `missing_evidence`, `shifted_date`, `expired_quote`,
+`approval_time_stock_change`, and `supplier_timeout`. The approval-change scenario lowers stock after
+a pending placement; the default approval-required sandbox policy supplies its human gate. The expiry
+scenario advances fixture time after quoting. Reset preserves historical evidence and audit, expires
+open quotes/pending orders with `expiration_reason: sandbox_reset`, releases reservations, clears command
+idempotency and cache/limit state, starts a fresh spending epoch, and disables previous webhook deliveries.
+Every HTTP response carries `X-Environment`; sandbox resources, signed quote/receipt payloads and UBL
+notes explicitly carry `environment: sandbox`. Provenance names the scenario version and fixture source.
+
+OpenTelemetry is opt-in: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` enables OTLP/HTTP traces
+and metrics; `OTEL_CONSOLE=1` enables console exporters. With neither variable, no provider/exporter
+threads or automatic instrumentation are started. Export failures are isolated from procurement requests.
+FastAPI/httpx are auto-instrumented; business spans cover catalog, fit, price, stock, planning, policy,
+quote, placement, approval, webhook delivery and anchoring. Approval/delivery link to a persisted placing
+span context; delivery starts a separate trace. Trace IDs are stored as hex strings for canonical JSON.
+The exported attribute allowlist is in `app/telemetry.py`; automatic HTTP attributes, exception events,
+credentials, raw prompts and personal data are excluded. Metrics include request/upstream latency,
+upstream calls, cache hits, candidate counts, decisions, approval wait, throttles, backlog, delivery attempts
+and expiries. REST, MCP and A2A set the transport attribute at their shared command boundary.
+
+For the optional local observability stack, run `docker compose -f observability/docker-compose.yml up`.
+Collector, Jaeger (16686), Prometheus (9090) and Grafana (3000, provisioned gateway dashboard) use pinned
+versions, also exposed with installed OTel package versions in `/v1/meta`. No Docker/network is needed
+for backend tests. Run all checks with `.venv/bin/python -m pytest tests -q`, then regenerate the contract
+with `.venv/bin/python scripts/export_openapi.py`.
+

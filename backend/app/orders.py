@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 import json
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 from types import SimpleNamespace
 from cryptography.exceptions import InvalidSignature
 
@@ -16,6 +16,9 @@ from .valio import RequestCounter
 from .quantities import sales_step
 from .signing import receipt_payload, signature_digest, verify_quote
 from .foundation import CORRELATION, procurement_context, trace_id
+from .runtime import ENVIRONMENT
+from .suppliers import reservation_key
+from .telemetry import placement_context, metric
 
 
 def evidence_changes(before, after):
@@ -79,7 +82,7 @@ class Orders:
                 raise ValueError("Inconsistent quote promise")
             if quote.need_ref:
                 bound = self.lookup_need(conn, quote.need_ref)
-                if bound.need.customer_id != quote.customer_id or bound.need.deliver_by != quote.deliver_by:
+                if bound.need.customer_id != quote.customer_id or bound.need.deliver_by != quote.deliver_by or bound.need.supplier_id != quote.supplier_id:
                     raise ValueError("Inconsistent need binding")
             # Historical spec 10 promises remain usable; _violations still
             # enforces current customer rules even when need_ref is absent.
@@ -124,7 +127,7 @@ class Orders:
                 # The order snapshot records placement-time effective authority. Recompute
                 # from its original signed claim and today's policy/grant instead.
                 policy, _, _ = self.mandates.authorize(conn, None, order.agent_id, order.customer_id,
-                    products=[line.product_id for line in order.lines], bound=("order", order.id), policy=policy)
+                    products=[line.product_id for line in order.lines], bound=("order", order.id), policy=policy, supplier_id=order.supplier_id)
             except DomainError:
                 # Expired/revoked authority must not prevent the human from rejecting.
                 return
@@ -184,12 +187,14 @@ class Orders:
                 if quote.expires_at.utcoffset() is None:
                     continue  # Historical records still load; placement audits signature refusal.
                 if quote.expires_at <= now:
+                    metric("expiries")
                     quote.status = "EXPIRED"
                     self._save_quote(conn, quote)
                     audit.append(conn, "system", "QUOTE_EXPIRED", "The fixed-price quote expired.", quote_id=quote.id)
             for row in conn.execute("SELECT data FROM orders WHERE status='PENDING_APPROVAL'").fetchall():
                 order = Order.model_validate_json(row["data"])
                 if order.expires_at <= now:
+                    metric("expiries")
                     order.status = "EXPIRED"
                     order.order_revision += 1
                     self._sign_receipt(order, self._quote(conn, order.quote_id), "system")
@@ -208,7 +213,9 @@ class Orders:
         agent_id = actor.removeprefix("agent:")
         with self.db.connect() as conn:
             if mandate is not None:
-                self.mandates.authorize(conn, mandate, agent_id, request.customer_id)
+                row = conn.execute("SELECT data FROM lookups WHERE id=?", (request.need_ref,)).fetchone()
+                supplier = json.loads(row[0]).get("need", {}).get("supplier_id", "valio") if row else "valio"
+                self.mandates.authorize(conn, mandate, agent_id, request.customer_id, supplier_id=supplier)
             if mandate is None and self.mandates.stored(conn, "lookup", request.need_ref) is None and agent_id not in self.policy.get().agents:
                 self.policy.check_customer(agent_id, request.customer_id)
             if not request.need_ref:
@@ -224,7 +231,11 @@ class Orders:
             check_owner(lookup, None if operator else agent_id, "LOOKUP_NOT_FOUND")
             with self.db.connect() as conn:
                 policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id,
-                    bound=("lookup", request.need_ref))
+                    bound=("lookup", request.need_ref), supplier_id=lookup.need.supplier_id)
+            supplier_id = lookup.need.supplier_id
+            adapter = self.suppliers.get(supplier_id)
+            catalog = adapter.catalog
+            self.policy.check_supplier(agent_id, supplier_id)
             if lookup.need.customer_id != request.customer_id or lookup.need.deliver_by != request.deliver_by:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
         plan = None
@@ -246,9 +257,9 @@ class Orders:
             plan = lookup.plans[request.plan_ref.plan_index]
             requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units)
                                for line in plan.lines]
-        products = {line.product_id: self.catalog.get(line.product_id) for line in requested_lines}
+        products = {line.product_id: adapter.catalog.get(line.product_id) for line in requested_lines}
         with self.db.connect() as conn:
-            self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products)
+            self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products, supplier_id=supplier_id)
         for line in requested_lines:
             p = products[line.product_id]
             step = sales_step(p)
@@ -257,8 +268,9 @@ class Orders:
         ids = list(products)
         if lookup.need.substitute_for and lookup.need.substitute_for.product_id not in ids:
             ids.append(lookup.need.substitute_for.product_id)
-        price = self.valio.fetch("price", request.customer_id, request.deliver_by, ids, counter, fresh=True)
-        stock = self.valio.fetch("availability", request.customer_id, request.deliver_by, ids, counter, fresh=True)
+        price = adapter.fetch("price", request.customer_id, request.deliver_by, ids, counter, fresh=True)
+        stock = adapter.fetch("availability", request.customer_id, request.deliver_by, ids, counter, fresh=True)
+
         now = audit.utcnow()
         need = lookup.need
         with self.db.connect() as conn:
@@ -268,19 +280,20 @@ class Orders:
                      for o in all_offers if o.fit is not None}
         with self.db.connect(write=True) as conn:
             # Recheck after taking the same lock used by policy updates.
-            policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products)
+            policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products, supplier_id=supplier_id)
             need, effective = self.policy.effective_need(lookup.need)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in requested_lines:
                 p = products[line.product_id]
                 need, effective = self.policy.effective_need(bound_need(conn, lookup, p.id))
                 offer = offer_for(p, need, price[p.id], stock[p.id], fit_by_id.get(p.id),
-                                  sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id), sources=effective)
+                                  sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id, supplier_id=supplier_id), sources=effective)
                 from .substitution import annotate, functional_categories
-                annotate(offer, need, self.catalog, policy, price)
-                categories = functional_categories(self.catalog, need)
+                annotate(offer, need, catalog, policy, price)
+                categories = functional_categories(catalog, need)
                 if categories is not None and p.category not in categories:
                     violations.append(f"{p.id}: functional product type does not match (customer_policy)")
+
                 if offer.unit_price is None or any(w.code == "PRICE_ERROR" for w in offer.warnings):
                     raise DomainError("PRICE_ERROR", f"Cannot lock an invalid price for {p.id}", 502)
                 if offer.currency != "EUR":
@@ -291,7 +304,7 @@ class Orders:
                     expiries.append(offer.availability.closing_time)
                 violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens, effective))
                 lines.append(offer)
-            quote = Quote(mandate=record, id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
+            quote = Quote(supplier_id=supplier_id, environment=ENVIRONMENT.get(), synthetic=adapter.synthetic, mandate=record, id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
                           need_ref=request.need_ref, plan_ref=request.plan_ref,
                           basket_ref=request.basket_ref or ({"basket_lookup_id": lookup.lookup_id} if basket else None),
                           clinical_review=policy.customers[request.customer_id].clinical_review if request.customer_id in policy.customers else None,
@@ -303,11 +316,12 @@ class Orders:
                           hard_constraint_violations=violations, live_calls=counter.live())
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
-            quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record)
+            quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=supplier_id)
             # Preserve the exact catalog evidence approved with this signed quote.
             quote.context["product_evidence"] = {p.id: {
                 "brand": p.brand, "claims": sorted(p.claims), "allergens": p.allergen_status,
                 "allergen_declaration": p.has_allergen_declaration} for p in products.values()}
+
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
@@ -347,12 +361,16 @@ class Orders:
                 bound = ("order", order.id) if self.mandates.stored(conn, "order", order.id) else ("quote", quote_id)
                 if mandate is not None or self.mandates.stored(conn, *bound) is not None:
                     _, _, used_mandate = self.mandates.authorize(conn, mandate, agent_id, order.customer_id or quote.customer_id,
-                        products=[line.product_id for line in order.lines], bound=bound, policy=policy)
+                        products=[line.product_id for line in order.lines], bound=bound, policy=policy, supplier_id=order.supplier_id)
                     self.mandates.used(conn, used_mandate)
                 elif agent_id in policy.agents:
                     # Historical orders may predate the shared command table. Apply
                     # current customer scope even on that original replay path.
                     self.policy.check_customer(agent_id, order.customer_id or quote.customer_id, policy)
+                self.policy.check_supplier(agent_id, order.supplier_id, policy)
+                if order.status == "PENDING_EXECUTION":
+                    self._execute(conn, order, quote)
+
                 audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
                              order_id=order.id, quote_id=order.quote_id,
                              data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
@@ -363,15 +381,16 @@ class Orders:
             quote = self._verified_quote(conn, quote_id, None if operator else agent_id)
             if mandate is not None or stored_mandate is not None:
                 policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
-                    products=[o.product_id for o in quote.lines], bound=("quote", quote_id), policy=policy)
+                    products=[o.product_id for o in quote.lines], bound=("quote", quote_id), policy=policy, supplier_id=quote.supplier_id)
             else:
                 record = None
             self.policy.check_customer(agent_id, quote.customer_id, policy)
+            self.policy.check_supplier(agent_id, quote.supplier_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
-                raise DomainError("EXPIRED_QUOTE", "Quote expired; create a new quote before ordering")
+                raise DomainError("EXPIRED_QUOTE", "Quote expired: " + (quote.expiration_reason or "validity ended") + "; create a new quote before ordering", data={"reason": quote.expiration_reason or "validity_ended"})
             if quote.status != "OPEN":
                 raise DomainError("QUOTE_ALREADY_ACCEPTED", "This quote already has an order")
-            stock = self.valio.fetch("availability", quote.customer_id, quote.deliver_by,
+            stock = self.suppliers.get(quote.supplier_id).fetch("availability", quote.customer_id, quote.deliver_by,
                                      [o.product_id for o in quote.lines], counter, fresh=True)
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired while checking stock; create a new quote")
@@ -380,7 +399,7 @@ class Orders:
             now = audit.utcnow()
             if mandate is not None:
                 policy, record, _ = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
-                    products=[o.product_id for o in lines], policy=policy)
+                    products=[o.product_id for o in lines], policy=policy, supplier_id=quote.supplier_id)
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
                                                 agent_id=agent_id, customer_id=quote.customer_id,
                                                 policy=policy, warnings=quote.warnings)
@@ -391,24 +410,33 @@ class Orders:
                 result.hits.extend(RuleHit(rule="recurring_drift", detail=d) for d in drift)
                 if result.outcome == "CONFIRMED":
                     result.outcome = "PENDING_APPROVAL"
-            order = Order(mandate=record, id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
+            order = Order(supplier_id=quote.supplier_id, environment=quote.environment, synthetic=quote.synthetic,
+                          mandate=record, id=str(uuid5(NAMESPACE_URL, agent_id + "\x00" + key + "\x00" + quote.id)) if quote.supplier_id != "valio" else str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           basket_ref=quote.basket_ref,
                           atomicity=getattr(self.valio, "atomicity", "all-or-none local simulation; no supplier order transmitted") if quote.basket_ref else None,
                           clinical_review=quote.clinical_review or (policy.customers[quote.customer_id].clinical_review if quote.customer_id in policy.customers else None),
+
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
                           policy=result, live_calls=counter.live())
             order.context = dict(quote.context) if quote.context else None
             if order.context and quote.need_ref:
                 _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need)
-                order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record)
+                order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=quote.supplier_id)
             order.correlation_id = CORRELATION.get() or quote.correlation_id
+            if saved_context := placement_context():
+                order.links["placement_span"] = saved_context
+            from .models import Execution
+            order.execution = (self.suppliers.get(order.supplier_id).execution.submit(order) if order.supplier_id == "valio"
+                               else Execution(mode="supplier_backed", status="not_submitted"))
             self._sign_receipt(order, quote, "operator" if operator else "agent")
             self.mandates.bind(conn, "order", order.id, mandate)
             conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, storage_key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
             self._reserve(conn, order)
+            if order.status == "CONFIRMED" and order.supplier_id != "valio":
+                self._execute(conn, order, quote)
             audit.append(conn, f"agent:{agent_id}", "PLACE_ORDER", f"Order {order.status} at the locked total of {order.total:.2f} EUR.",
                          order_id=order.id, quote_id=quote.id, data={"inputs": {"idempotency_key": key},
                          "outcome": order.status, **mandate_evidence(record),
@@ -418,6 +446,31 @@ class Orders:
                 self._suggest_review(conn, order, "hard_constraint_refusal" if any(
                     h.rule == "hard_constraint_violation" for h in result.hits) else "policy_rejection")
             return order
+
+    def _execute(self, conn, order, quote):
+        """Stable order UUID is the supplier idempotency key, including crash-before-commit retries."""
+        from .models import Execution
+        retrying = order.status == "PENDING_EXECUTION"
+        try:
+            result = self.suppliers.get(order.supplier_id).execution.submit(order)
+        except DomainError as error:
+            if error.code != "SUPPLIER_UNAVAILABLE":
+                raise
+            order.execution = Execution(mode="supplier_backed", status="unknown")
+            order.status = "PENDING_EXECUTION"
+        else:
+            order.execution = result
+            order.status = "CONFIRMED" if result.status == "accepted" else "REJECTED"
+            if result.status == "accepted":
+                order.commitment = "supplier-acknowledged"
+        self._sign_receipt(order, quote, order.decided_by_kind or "agent")
+        self._save_order(conn, order)
+        self._reserve(conn, order)
+        if retrying and order.status != "PENDING_EXECUTION":
+            audit.append(conn, "supplier:" + order.supplier_id,
+                         "SUPPLIER_ACKNOWLEDGED" if order.status == "CONFIRMED" else "SUPPLIER_REJECTED",
+                         "Reconciled the supplier's acknowledgement.", order_id=order.id, quote_id=quote.id,
+                         data={"execution": order.execution.model_dump(mode="json"), "outcome": order.status})
 
     def _violations(self, conn, quote):
         violations = [] if quote.need_ref else list(quote.hard_constraint_violations)
@@ -434,14 +487,15 @@ class Orders:
             if quote.need_ref:
                 from .baskets import bound_need
                 need, effective = self.policy.effective_need(bound_need(conn, lookup, line.product_id))
-            product = self.catalog.get(line.product_id)
+            product = self.suppliers.get(quote.supplier_id).catalog.get(line.product_id)
             violations.extend(hard_violations(product, need.required_claims, need.exclude_allergens, effective))
             from .substitution import functional_categories
-            categories = functional_categories(self.catalog, need)
+            categories = functional_categories(self.suppliers.get(quote.supplier_id).catalog, need)
             if categories is not None and product.category not in categories:
                 violations.append(f"{product.id}: functional product type does not match (request)")
             if need.function and (line.fit is None or line.fit < self.policy.get().approval.min_fit_probability):
                 violations.append(f"{product.id}: functional fit is not proven (request)")
+
         return sorted(set(violations))
 
     @staticmethod
@@ -453,7 +507,7 @@ class Orders:
             line = original.model_copy(deep=True)
             raw = stock[line.product_id]
             line.availability, warnings = availability_for(raw, deliver_by, line.units_needed,
-                                                           reserved(conn, line.product_id, exclude_order), line.sales_unit)
+                                                           reserved(conn, line.product_id, exclude_order, line.supplier_id), line.sales_unit)
             line.warnings = [w for w in line.warnings if w.code not in stock_codes] + warnings
             from .lookup import timestamp
             line.provenance["availability"].fetched_at = timestamp(raw.get("_fetched_at")) or audit.utcnow()
@@ -466,15 +520,35 @@ class Orders:
         conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
         if order.basket_ref and any(not line.availability.enough for line in order.lines):
             return  # An incomplete basket never holds a subset of its lines.
-        if order.status in {"CONFIRMED", "PENDING_APPROVAL"}:
+        if order.execution and order.execution.mode == "supplier_backed" and order.execution.status == "accepted":
+            return  # The acknowledging supplier already removed these units from its inventory.
+        if order.status in {"CONFIRMED", "PENDING_APPROVAL", "PENDING_EXECUTION"}:
+
             for line in order.lines:
                 if line.availability.availability_known:
-                    conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, line.product_id, line.units_needed))
+                    conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, reservation_key(order.supplier_id, line.product_id), line.units_needed))
+
+    def revalidate_quote_replay(self, quote_id, agent_id, *, operator=False, mandate=None):
+        def validate(counter):
+            with self.db.connect() as conn:
+                quote = check_owner(self._quote(conn, quote_id), None if operator else agent_id, "QUOTE_NOT_FOUND")
+                _, _, used = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
+                    products=[line.product_id for line in quote.lines], bound=("quote", quote_id),
+                    supplier_id=quote.supplier_id)
+                if used is not None:
+                    self.mandates.used(conn, used)
+        self._run("CREATE_QUOTE", f"agent:{agent_id}", {"quote_id": quote_id}, validate)
 
     def get_quote(self, quote_id, agent_id=None):
+        return self._get_quote(quote_id, agent_id)
+
+    def _get_quote(self, quote_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
-            return check_owner(self._quote(conn, quote_id), agent_id, "QUOTE_NOT_FOUND")
+            quote = check_owner(self._quote(conn, quote_id), agent_id, "QUOTE_NOT_FOUND")
+            from .foundation import forward_links
+            quote.links.update(forward_links(conn, quote_id=quote.id, agent_id=agent_id))
+            return quote
 
     def get_order(self, order_id, agent_id=None):
         self.expire()
@@ -583,12 +657,13 @@ class Orders:
             quote = self._quote(conn, order.quote_id)
             if approve:
                 policy, record = self.policy.get(), None
+                policy_snapshot = policy
                 if self.mandates.stored(conn, "order", order_id) is not None:
                     policy, record, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
-                        products=[o.product_id for o in order.lines], bound=("order", order_id))
+                        products=[o.product_id for o in order.lines], bound=("order", order_id), supplier_id=order.supplier_id)
                 previous = order.model_copy(deep=True)
                 order.mandate = record
-                stock = self.valio.fetch("availability", quote.customer_id, quote.deliver_by,
+                stock = self.suppliers.get(quote.supplier_id).fetch("availability", quote.customer_id, quote.deliver_by,
                                          [o.product_id for o in order.lines], counter, fresh=True)
                 order.lines = self._refresh_stock(conn, order.lines, quote.deliver_by, stock, order.id)
                 # Human review may accept delivery warnings, but never hard violations or unverifiable stock.
@@ -615,6 +690,14 @@ class Orders:
                 if order.expires_at <= audit.utcnow():
                     raise DomainError("EXPIRED_ORDER", "The approval window expired during stock verification")
                 order.policy = evaluation
+                if quote.need_ref:
+                    _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need, policy=policy)
+                else:
+                    legacy_need = NeedSpec.model_construct(customer_id=quote.customer_id, deliver_by=quote.deliver_by,
+                        supplier_id=order.supplier_id, intent="Legacy quote", quantity=Quantity(value=1, unit="SALES_UNIT"))
+                    _, effective = self.policy.effective_need(legacy_need, policy=policy)
+                order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective,
+                    order.mandate, supplier_id=order.supplier_id, snapshot=policy_snapshot)
                 order.warnings = quote.warnings
                 changes = evidence_changes(previous, order)
                 if not changes and order.basket_ref and any(not line.availability.enough for line in order.lines):
@@ -626,6 +709,8 @@ class Orders:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
                 order.approval_side = "buyer" if principal and principal.kind == "buyer_user" else "valio_operator"
+                if approve and order.supplier_id != "valio":
+                    self._execute(conn, order, quote)
                 self._sign_receipt(order, quote, "operator")
             self._save_order(conn, order)
             self._reserve(conn, order)
@@ -675,6 +760,10 @@ class Orders:
             cutoffs = [o.availability.closing_time for o in order.lines if o.availability.closing_time]
             if any(c <= audit.utcnow() for c in cutoffs):
                 raise DomainError("CUTOFF_PASSED", "Cancellation cutoff has passed")
+            if order.execution and order.execution.mode == "supplier_backed" and order.execution.supplier_ref:
+                order.execution = self.suppliers.get(order.supplier_id).execution.cancel(order.execution.supplier_ref)
+                if order.execution.status != "cancelled":
+                    raise DomainError("SUPPLIER_UNAVAILABLE", "Supplier did not acknowledge cancellation", 502)
             order.status = "CANCELLED"
             order.order_revision += 1
             order.cancelled_by = inputs.get("stated_name") or (actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor)

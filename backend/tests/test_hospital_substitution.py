@@ -77,7 +77,7 @@ def test_AC_5_clinical_review_requires_scoped_buyer_approver(hospital):
     order = hospital.orders.place_order(q.id, "clinical", "sandbox-agent")
     assert order.status == "PENDING_APPROVAL"
     assert order.clinical_review == "required"
-    keys = Credentials("operator-test", "hospital-approver:buyer-test,sandbox-agent:agent-test")
+    keys = Credentials("operator-test", "hospital-approver:buyer-test,sandbox-agent:agent-test", environment="sandbox")
     with TestClient(create_app(hospital, keys=keys)) as client:
         path = f"/v1/approvals/{order.id}/approve"
         body = {"approver": "Clinical buyer", "evidence_revision": 1}

@@ -106,17 +106,23 @@ def scenario_gateway(name, *, directory=None):
         (root / "catalog.json").write_text(json.dumps([raw_catalog_product(p) for p in scenario["products"]]))
         (root / "reliability.csv").write_text("productId,deliveryReliability\n")
         (root / "carbon.csv").write_text("productId,AVG kg CO2-eq/kg\n")
-        keys = Credentials(secrets.token_urlsafe(32), f"sandbox-agent:{secrets.token_urlsafe(32)},hospital-approver:{secrets.token_urlsafe(32)}")
+        keys = Credentials(secrets.token_urlsafe(32), f"sandbox-agent:{secrets.token_urlsafe(32)},hospital-approver:{secrets.token_urlsafe(32)}", environment="sandbox")
         g = Gateway(Settings(db_path=root / "app.db", policy_path=root / "defaults.yaml", keys=keys))
+        g.settings.environment = "sandbox"
+        with g.db.connect(write=True) as conn:
+            conn.execute("UPDATE workspace SET value='sandbox' WHERE key='environment'")
         g.policy.environment = "sandbox"
         build(g.db, root / "catalog.json", root / "reliability.csv", root / "carbon.csv")
         g.valio.close()
         g.decisions.close()
         g.valio = FixtureSupplierAdapter(scenario)
         g.decisions = FixtureDecisions(g.valio)
+        from .suppliers import ValioAdapter
+        g.suppliers.adapters["valio"] = ValioAdapter(g.valio, g.catalog)
         g.lookup.valio = g.orders.valio = g.valio
         g.lookup.decisions = g.decisions
         try:
-            yield g
+            with g.activate():
+                yield g
         finally:
             g.close()

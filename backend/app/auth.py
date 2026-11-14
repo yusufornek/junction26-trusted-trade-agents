@@ -33,7 +33,8 @@ class Principal:
 
 
 class Credentials:
-    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console"):
+    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console", *, environment="live"):
+        self.environment = environment
         self.operator_agent_id = operator_agent_id
         self._operator = sha256(operator_token.encode()).digest() if operator_token else None
         self._agents = []
@@ -49,6 +50,7 @@ class Credentials:
                 raise RuntimeError("Duplicate AGENT_KEYS identity or credential")
             seen.add(digest)
             self._agents.append((agent_id, digest))
+        self._known = frozenset(seen)
 
     def require_operator(self):
         if self._operator is None:
@@ -56,6 +58,15 @@ class Credentials:
 
     def has_agent(self, agent_id):
         return any(identity == agent_id for identity, _ in self._agents)
+
+    @property
+    def agent_ids(self):
+        return tuple(identity for identity, _ in self._agents)
+
+    def recognizes(self, secret):
+        # A cheap credential-membership gate; full identity/policy resolution stays below admission.
+        digest = sha256(secret.encode()).digest()
+        return digest in self._known
 
     def resolve(self, secret, policy=None):
         digest = sha256(secret.encode()).digest()
@@ -91,15 +102,22 @@ def check_source(service, source):
         raise
 
 
+def admit_credential(service, keys, source, secret):
+    """Unknown credentials spend source tokens; known credentials retain principal limits."""
+    if not keys.recognizes(secret):
+        check_source(service, source)
+    principal = keys.resolve(secret, service.policy.get())
+    if keys.environment != service.settings.environment:
+        raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
+    return principal
+
+
 async def resolve_principal(request: Request, credential: HTTPAuthorizationCredentials | None = Depends(bearer)):
     from .foundation import PRINCIPAL
     service = request.app.state.gateway
     source = request.client.host if request.client else "unknown"
-    check_source(service, source)
-    if credential is None:
-        raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
-    principal = request.app.state.keys.resolve(credential.credentials, service.policy.get())
-    service.source_limiter.refund(source)
+    secret = credential.credentials if credential is not None else ""
+    principal = admit_credential(service, request.app.state.keys, source, secret)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     path = request.url.path
@@ -142,15 +160,12 @@ class MCPBearerMiddleware:
             correlation_token = CORRELATION.set(correlation)
             try:
                 source = (scope.get("client") or ("unknown",))[0]
-                check_source(self.gateway, source)
                 value = headers.get(b"authorization", b"").decode("latin-1")
                 scheme, _, token = value.partition(" ")
-                if scheme.lower() != "bearer" or not token:
-                    raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
-                principal = self.keys.resolve(token, self.gateway.policy.get())
+                secret = token if scheme.lower() == "bearer" else ""
+                principal = admit_credential(self.gateway, self.keys, source, secret)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
-                self.gateway.source_limiter.refund(source)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
