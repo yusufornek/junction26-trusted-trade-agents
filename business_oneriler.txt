@@ -1,3 +1,5 @@
 1)Yarışmada amacımız alışveriş yapan müşterilerinin istedikleri ürünü istedikleri zamanda elde edebilmek olduğu için proactive bir çözüm ekleyerek kullanıcının önceki alışverişlerinden hareketle
 AI kullanarak prediction yaparak, "abi sen her ay şundan alıyorusun demek ki sana bu kadar lazım oluyor, en son alışverişine göre de bitmek üzere, istersen şu kadar adet alışveriş işlemi başlatalım mı"
 tarzı bir öneri yapsa nasıl olur ? 
+
+2)Kullanıcılar istedikleri agent provider ını örneğin claude,gemini,gpt seçebiliyor olabilir mi demo arayüzünde ? sonuçta mcp ye öyle bağlanacaklar ya?
