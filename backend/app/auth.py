@@ -146,6 +146,7 @@ def admit_credential(service, keys, source, secret, resource=None):
     if not known:
         check_source(service, source)
     principal = resolve_credential(keys, secret, service, resource)
+    service.connection_trust.seen(principal, source)
     if principal.kind == "agent" and hasattr(service, "governance"):
         try:
             service.governance.check_active(principal.agent_id)
@@ -302,7 +303,11 @@ class MCPBearerMiddleware:
                                       (b"cache-control", b"private, no-store"), (b"vary", b"Authorization")]
             await send(message)
         try:
-            await self.app(scope, receive, correlated_send)
+            from .connection_trust_transports import live_http
+            if principal_token is not None:
+                await live_http(self.app, self.gateway, principal, scope, receive, correlated_send)
+            else:
+                await self.app(scope, receive, correlated_send)
         finally:
             if principal_token is not None:
                 PRINCIPAL.reset(principal_token)

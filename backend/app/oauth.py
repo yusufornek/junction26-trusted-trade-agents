@@ -116,6 +116,7 @@ class ConsentDecision(BaseModel):
     agent_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
     customer_ids: list[str] = Field(default_factory=list, max_length=100)
     scopes: list[str] | None = None
+    notification_consent: dict = Field(default_factory=dict)
 
 
 class ConsentResult(BaseModel):
@@ -134,6 +135,10 @@ class ConsentRequest(BaseModel):
     status: str
     customer_ids: list[str]
     agents: list[str]
+    client_tier: str = "unverified"
+    registered_at: str | None = None
+    verification_label: str = "not verified"
+    logo: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -598,6 +603,7 @@ def intro(oauth, request_id):
     host = urlsplit(row["redirect_uri"]).netloc
     warning = '<p>Warning: a local application will receive this authorization.</p>' if urlsplit(row["redirect_uri"]).hostname in {"localhost", "127.0.0.1", "::1"} else ''
     return (f'<p>Client: <strong>{escape(name)}</strong></p><p>Redirect host: <strong>{escape(host)}</strong></p>'
+            + f'<p>{escape(oauth.view(request_id)["verification_label"])}. Registered: {escape(oauth.view(request_id)["registered_at"] or "unknown")}</p>'
             + warning + f'<form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="{escape(request_id)}">')
 
 

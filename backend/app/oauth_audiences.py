@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.routes import create_protected_resource_routes
-from pydantic import AnyHttpUrl, BaseModel
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from . import audit
 from .accounts import digest, origin
@@ -299,6 +299,7 @@ class ConsentDecision(BaseModel):
     agent_id: str | None = None
     customer_ids: list[str] | None = None
     scopes: list[str] | None = None
+    notification_consent: dict = Field(default_factory=dict)
 
 
 def human(request: Request, cookie: str | None = Depends(session_cookie)):
@@ -373,6 +374,7 @@ def consent_page(service, request_id, p):
     options = ''.join(f'<option value="{esc(a)}">{esc(a)}</option>' for a in agents)
     return HTMLResponse(f'''<!doctype html><html><body><h1>Authorize {esc(data['client']['client_name'])}</h1>
 <p>Redirect host: {esc(urlsplit(data['redirect_uri']).netloc)}. Resource: {esc(data['resource'])}</p>
+<p>{esc(data['verification_label'])}. Registered: {esc(data['registered_at'] or 'unknown')}</p>
 <form method="post" action="/oauth/requests/{esc(request_id)}/decision">
 <label>Agent (tenant administrators may create one) <input name="agent_id" list="agents"></label><datalist id="agents">{options}</datalist>
 <label>Customers <input name="customer_ids" value="{esc(' '.join(p.customer_ids))}"></label>
@@ -393,7 +395,8 @@ def get_request(request_id: str, request: Request, p: Principal = Depends(resolv
     with service.db.connect() as conn:
         agents = [dict(r) for r in conn.execute("SELECT agent_id,name FROM tenant_agents WHERE tenant_id=? AND disabled_at IS NULL", (p.tenant_id,))]
     return {"request_id": request_id, "client_name": data["client"]["client_name"], "redirect_host": urlsplit(data["redirect_uri"]).netloc,
-        "resource": data["resource"], "scopes": data["scope"].split(), "customer_ids": list(p.customer_ids), "agents": agents}
+        "resource": data["resource"], "scopes": data["scope"].split(), "customer_ids": list(p.customer_ids), "agents": agents,
+        **{key: data[key] for key in ("client_tier", "registered_at", "verification_label", "logo")}}
 
 
 @router.post("/v1/oauth/requests/{request_id}/decision", response_model=dict)

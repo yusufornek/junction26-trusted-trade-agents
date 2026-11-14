@@ -337,7 +337,11 @@ class Database:
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
+            trust = getattr(self, "connection_trust", None) if write else None
+            epoch = trust.epoch(conn) if trust else None
             yield conn
+            if trust:
+                trust.before_commit(conn, epoch, mutation=notify)
             conn.commit()
             committed = True
             if write:

@@ -90,9 +90,9 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         from .connections import Connections
         self.connections = Connections(self)
-        from .oauth import OAuth
+        from .connection_trust_oauth import TrustedOperatorOAuth as OAuth
         self.oauth = OAuth(self)
-        from .oauth_audiences import OAuth as AudienceOAuth
+        from .connection_trust_oauth import TrustedAudienceOAuth as AudienceOAuth
         self.audience_oauth = AudienceOAuth(self)
         for name in ("create", "baseline", "pause", "run"):
             install(self, self.recurring, name, "mutation")
@@ -105,6 +105,9 @@ class Gateway:
         self.governance = Governance(self)
         self.policy.governance = self.governance
         self.db.governance = self.governance
+        from .connection_trust_lifecycle import ConnectionTrust
+        self.connection_trust = ConnectionTrust(self)
+        self.db.connection_trust = self.connection_trust
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")
@@ -131,6 +134,7 @@ class Gateway:
         self.a2a = ProcurementA2A(self)
 
         def after_commit():
+            self.connection_trust.after_commit()
             self.anchoring.trigger()
             self.outbox.dispatch()
             self.webhooks.dispatch()

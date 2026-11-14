@@ -136,6 +136,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = data["agent_id"]
     if kind == "tenant":
         aggregate_id = data["tenant_id"]
+    if kind == "connection":
+        aggregate_id = data["connection_id"]
     if aggregate_id is None:
         return  # Historical/imported audit notes do not themselves change an aggregate.
     table = {"order": "orders", "quote": "quotes", "request": "lookups"}.get(kind)

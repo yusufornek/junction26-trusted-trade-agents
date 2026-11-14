@@ -714,9 +714,11 @@ class Handler(RequestHandler):
                 for row in rows:
                     snapshot, event = self._event(row)
                     after = row["aggregate_revision"]
+                    gateway.connection_trust.check(principal)
                     yield event
                     if snapshot.status.state != t.TaskState.TASK_STATE_WORKING:
                         for item in snapshot.artifacts:
+                            gateway.connection_trust.check(principal)
                             yield t.TaskArtifactUpdateEvent(task_id=snapshot.id, context_id=snapshot.context_id,
                                                            artifact=item, last_chunk=True)
                 if done:
@@ -754,9 +756,11 @@ class Handler(RequestHandler):
             for row in rows:
                 task, event = self._event(row)
                 after = row["aggregate_revision"]
+                gateway.connection_trust.check(principal)
                 yield event
                 if task.status.state != t.TaskState.TASK_STATE_WORKING:
                     for item in task.artifacts:
+                        gateway.connection_trust.check(principal)
                         yield t.TaskArtifactUpdateEvent(task_id=task.id, context_id=task.context_id, artifact=item, last_chunk=True)
             if (current.status.state in TERMINAL or current.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED) and after >= int(metadata(current).get("aggregate_revision", 0)):
                 return

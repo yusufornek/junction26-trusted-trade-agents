@@ -373,6 +373,7 @@ class AgentSurface:
         current = self.connection_principal(row)
         from .connection_contract_driving import driving
         return {"connection_id": cid, "last_used_at": last or connection.last_used_at,
+                "trust": self.gateway.connection_trust.health(cid),
                 "calls_last_24h": by_tool, "error_codes": sorted(codes),
                 "connection_contract": driving(self.gateway).status(current) if current.kind == "agent" else None,
                 "scope": {"audience": current.audience, "scopes": list(current.scopes),
@@ -398,6 +399,7 @@ class AgentSurface:
             async def notify(server=server, p=p, uri=uri, session=session):
                 token = PRINCIPAL.set(p)
                 try:
+                    self.gateway.connection_trust.check(p)
                     # Re-read before each notification; revoked credentials and
                     # changed scope cannot leak updates through a long lived session.
                     current = self.gateway.accounts.bind(p)
@@ -464,6 +466,7 @@ async def read_uri(server, uri):
         m = manager(server.gateway)
         return {"contract": m.public(), "profile": m.profile()}
     gateway, p = server.gateway, principal(server)
+    gateway.connection_trust.check(p)
     uri = str(uri)
     if uri in {"luotsi://agent/context", "luotsi://policy/effective"}:
         check_scope(p, "read", "read")
@@ -497,7 +500,8 @@ async def read_uri(server, uri):
         return {"orders": json_value([o for o in gateway.orders.list_orders(agent_id=p.owner) if o.status == "PENDING_APPROVAL"])}
     if uri == "luotsi://inbox":
         check_scope(p, "proposals", "read")
-        return {"proposals": gateway.proposals.inbox(p, effective_mandate(server)),
+        return {"connection_notifications": gateway.connection_trust.inbox(p),
+                "proposals": gateway.proposals.inbox(p, effective_mandate(server)),
                 "stockout_alerts": gateway.stockout_watch.inbox(p), "suggestions": gateway.memory.suggestions(p)}
     raise DomainError("HTTP_ERROR", "Unknown Luotsi resource", 404)
 
@@ -673,7 +677,6 @@ def register_resources(server):
     low = server._lowlevel_server
     low.add_request_handler("resources/subscribe", mt.SubscribeRequestParams, subscribe)
     low.add_request_handler("resources/unsubscribe", mt.UnsubscribeRequestParams, unsubscribe)
-    original = low.get_request_handler("subscriptions/listen")
 
     async def listen(ctx, params):
         entries = []
@@ -685,7 +688,8 @@ def register_resources(server):
             s.subscribers.append(entry)
         token = PRINCIPAL.set(principal(server))
         try:
-            return await original.handler(ctx, params)
+            from .connection_trust_transports import listen as trusted_listen
+            return await trusted_listen(server, ctx, params)
         finally:
             PRINCIPAL.reset(token)
             for entry in entries:

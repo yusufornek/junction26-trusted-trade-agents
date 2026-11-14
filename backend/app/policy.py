@@ -291,6 +291,9 @@ class Policy:
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
         ignored_codes = set(policy.approval.ignored_warnings)
         hits, rejected, approval = [], False, False
+        if self.db and (trust := getattr(self.db, "connection_trust", None)) and trust.approval_required(agent_id):
+            hits.append(RuleHit(rule="connection_continuity", detail="This connection needs owner confirmation or verified client identity before earned autonomy applies."))
+            approval = True
         customer = policy.customers.get(customer_id)
         from .substitution import apply_profile
         for line in lines:

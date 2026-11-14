@@ -376,10 +376,12 @@ class Orders:
                          lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator, mandate))
 
     def _place_order(self, quote_id, key, agent_id, counter, operator=False, mandate=None):
+        from .foundation import PRINCIPAL
         from hashlib import sha256
         storage_key = sha256((agent_id + "\x00" + key).encode()).hexdigest()
         # Serializes idempotency, reservation reads and writes across REST/MCP processes.
         with self.db.connect(write=True) as conn:
+            self.gateway.connection_trust.require_order(PRINCIPAL.get(), conn)
             policy = self.policy.get()
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=? OR "
                                     "(idempotency_key=? AND json_extract(data,'$.agent_id')=?)",
@@ -493,6 +495,7 @@ class Orders:
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
             from .models import Execution
+            self.gateway.connection_trust.attach_order(order)
             executor = self.suppliers.get(order.supplier_id).execution
             order.execution = (executor.submit(order) if executor.mode == "simulated"
                                else Execution(mode="supplier_backed", status="not_submitted"))
@@ -545,6 +548,8 @@ class Orders:
         self._reserve(conn, order)
 
     def _dispatch_authority(self, conn, order, quote, credential):
+        from .connection_trust_transports import dispatch_authority
+        dispatch_authority(self.gateway, conn, order, credential)
         from .buyer import check_suspension
         check_suspension(self.db, order.agent_id)
         if credential and credential.get("credential_ref"):

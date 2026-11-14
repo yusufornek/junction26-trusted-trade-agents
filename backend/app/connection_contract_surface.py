@@ -263,7 +263,7 @@ class SDKContract:
             elif p and p.connection_id and not (isinstance(result, dict) and result.get("isError")):
                 capability = {"resources/read": "resources", "resources/templates/list": "resources",
                     "prompts/get": "prompts", "subscriptions/listen": "subscriptions"}.get(ctx.method)
-                if capability:
+                if capability and self.server.gateway.connection_trust.is_live(p):
                     m.prove(p.connection_id, capability)
             return result
         finally:
@@ -299,6 +299,9 @@ def register(server):
         return {"connection": m.acknowledge(p.connection_id, contract_version), "contract": m.public()}
 
     if server.audience == "buyer":
+        for name in ("start_driving_test", "driving_test_step", "finish_driving_test"):
+            server._tool_manager._tools.pop(name, None)
+            server.surface_generated.discard(name)
         @server.tool(description="Open sandbox checks through this connection before enabling order scope. Next call driving_test_step; finish_driving_test signs measured results.")
         def start_driving_test() -> dict[str, Any]:
             from .agent_surface import principal

@@ -128,6 +128,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                              for code in (401, 403, 404, 409, 410, 422, 423, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
+    from .connection_trust_lifecycle import router as trust_router
+    from .connection_trust_transports import ContextMiddleware
+    app.include_router(trust_router)
+    app.add_middleware(ContextMiddleware)
     from .oauth import install as install_oauth
     install_oauth(app)
     from .accounts import router as accounts_router
