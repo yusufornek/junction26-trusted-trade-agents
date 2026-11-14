@@ -59,6 +59,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
     app.include_router(evidence_router)
     app.include_router(recurring_router)
     app.include_router(proposals_router)
+    from .purchase_memory import router as memory_router
+    app.include_router(memory_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

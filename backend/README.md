@@ -1164,3 +1164,64 @@ Demo: configure the supplier identity and buyer opt-in, then run
 The default campaign advertises Valio Arki Eila 1 L at EUR 1.01 for customer 1;
 `--product`, `--unit-price`, `--customer` and `--base-url` override it. This sends
 content only; it grants no purchasing authority and creates no order.
+
+## Purchase memory and replenishment (spec 41)
+
+Confirmed gateway purchases populate customer-owned memory atomically with the
+confirmation. Pending/rejected orders do not count; cancellations remove their
+memory entry. Existing confirmed orders are backfilled once on migration.
+Each product/request-unit series retains dates, purchased quantities in the
+request unit (including pack rounding), paid line totals, currency and agent.
+Unknown conversions are omitted rather than guessed; units never mix.
+
+Three confirmed purchases form a pattern. Intervals and quantities use medians;
+spread means maximum minus minimum. Confidence is low if the interval median
+is zero, interval spread exceeds max(3 days, 50% of median), or quantity spread
+exceeds 50% of median. High requires at least six purchases, interval spread at
+most max(3 days, 10% of median), and quantity spread at most 10%; otherwise medium.
+Consecutive calendar-month purchases on the same day predict that day next month;
+other rhythms use the rounded median day interval. The response explains confidence.
+
+`GET /v1/suggestions?horizon=14` returns patterns predicted from today through
+the horizon, with evidence, quantity, predicted date and a plain-language sentence.
+Omit horizon to use each customer's preference (default 14; supported range 1–365).
+Agents see their customers, buyer users their organisation, operators all customers;
+supplier agents are refused. A presented VC restricts customer/category scope.
+
+`POST /v1/suggestions/{id}/prepare` creates only a normal lookup with plans under
+the caller's mandate. Quote and order separately through the normal endpoints.
+`POST /{id}/make-recurring` uses the median quantity and detected cadence with the
+latest confirmed product evidence scaled to that quantity as the spec 35 baseline.
+It creates no quote/order; every execution revalidates mandate, policy and drift.
+Optional body: `{timezone, permitted_deviations, buyer_agent_id}`; deviations default
+to zero. Buyer approvers/admins (and operators) must name a purchasing agent;
+buyer viewers can read only. Preparation also accepts `{buyer_agent_id}`.
+The normal 60-day lookup date window still applies when acting on a suggestion.
+
+`POST /{id}/dismiss` hides that need permanently; a new purchase generates a new
+suggestion ID. `POST /{id}/snooze {days}` hides it for 1–365 days. Making it recurring
+also hides that need. States survive restarts. Buyer admins use
+`GET/PUT /v1/buyer/memory-preferences?customer_id=...` with
+`{enabled, excluded_products, suggestion_horizon}`. Off hides suggestions and stops
+recording purchases; restarting/enabling does not import purchases from that period.
+Excluded products are neither recorded nor suggested. `DELETE /v1/buyer/memory`
+records a forgetting request and permanently suppresses the customer's suggestions;
+turning memory on does not undo that recorded request. Audit/order evidence remains.
+
+MCP tools: `get_replenishment_suggestions`, `prepare_suggestion`,
+`create_recurring_from_suggestion`, `list_recurring_orders`, `create_recurring_order`
+(body argument `request` contains spec 35's approved_order_id, cadence and deviations),
+`run_recurring_order_now`, `pause_recurring_order`. All four recurring workflow tools
+require current explicit recurring permission; a missing permission returns
+`RECURRING_NOT_AUTHORIZED` with `CONTACT_ADMIN`. Paused workflows cannot run.
+Every shown, prepared, made-recurring, dismissed and snoozed suggestion writes an
+audit entry plus a customer/environment-scoped `suggestion.*` event to the durable
+outbox, ready for a webhook consumer. The existing checkout's webhook transport
+limitation described above still applies.
+
+Offline demo (temporary state only):
+`.venv/bin/python demo/run_replenishment.py`. The `monthly_milk` scenario seeds six
+real confirmed sandbox purchases from `sandbox/monthly_milk_history.json` (June–November
+2026, roughly 1,000 L on each month's first), displays the December 1 suggestion,
+prepares it over MCP, then makes it recurring. A 60-day query horizon includes it
+on the hackathon date. Neither the demo nor tests touch `backend/var/`.

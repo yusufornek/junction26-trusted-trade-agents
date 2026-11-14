@@ -99,9 +99,10 @@ def scenario_gateway(name, *, directory=None):
         defaults["customers"] = scenario.get("customers", {})
         defaults["approval"].update(scenario.get("approval", {}))
         defaults["agents"]["sandbox-agent"] = {"customer_ids": list(dict.fromkeys(["hospital", "recipe", *defaults["customers"]])),
-            "autonomy": "autonomous_within_limits", "max_auto_daily_total_eur": 100000}
-        defaults["organisations"] = {"hospital": {"customer_ids": ["hospital"]}}
-        defaults["identities"] = {"hospital-approver": {"kind": "buyer_user", "role": "buyer_approver", "organisation_id": "hospital"}}
+            "autonomy": "autonomous_within_limits", "max_auto_daily_total_eur": 100000,
+            "recurring": bool(scenario.get("purchase_history"))}
+        defaults["organisations"] = scenario.get("organisations", {"hospital": {"customer_ids": ["hospital"]}})
+        defaults["identities"] = scenario.get("identities", {"hospital-approver": {"kind": "buyer_user", "role": "buyer_approver", "organisation_id": "hospital"}})
         (root / "defaults.yaml").write_text(yaml.safe_dump(defaults))
         (root / "catalog.json").write_text(json.dumps([raw_catalog_product(p) for p in scenario["products"]]))
         (root / "reliability.csv").write_text("productId,deliveryReliability\n")
@@ -117,6 +118,32 @@ def scenario_gateway(name, *, directory=None):
         g.lookup.valio = g.orders.valio = g.valio
         g.lookup.decisions = g.decisions
         try:
+            if scenario.get("purchase_history"):
+                seed_purchase_history(g, scenario["purchase_history"])
             yield g
         finally:
             g.close()
+
+
+def seed_purchase_history(gateway, filename):
+    """Sandbox-only seed file; purchases still pass the real quote/order policy path."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from .models import NeedSpec, QuoteRequest
+    rows = json.loads((BACKEND / "sandbox" / filename).read_text())
+    for index, row in enumerate(rows):
+        when = datetime.fromisoformat(row["date"]).replace(hour=9, tzinfo=timezone.utc)
+        with patch("app.audit.utcnow", return_value=when):
+            need = NeedSpec.model_validate({"customer_id": row["customer_id"],
+                "intent": "lactose-free milk", "search_terms": ["milk"],
+                "required_claims": ["FREE_FROM_LACTOSE"], "quantity": row["quantity"],
+                "deliver_by": row["date"]}, context={"stored": True})
+            lookup = gateway.find_offers(need, "agent:sandbox-agent")
+            offer = next(o for o in lookup.offers if o.product_id == row["product_id"])
+            quote = gateway.orders.create_quote(QuoteRequest.model_validate({"customer_id": need.customer_id,
+                "deliver_by": row["date"], "need_ref": lookup.lookup_id,
+                "lines": [{"product_id": offer.product_id, "quantity_sales_units": offer.units_needed}]},
+                context={"stored": True}), "sandbox-agent")
+            order = gateway.orders.place_order(quote.id, f"seed:{index}", "sandbox-agent")
+            if order.status != "CONFIRMED":
+                raise ValueError(f"Sandbox history must be confirmed: {order.status}")

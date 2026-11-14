@@ -5,6 +5,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS purchase_memory (id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memory_preferences (customer_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memory_actions (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memory_meta (id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS recurring_orders (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS recurring_runs (
  occurrence_key TEXT PRIMARY KEY, recurring_id TEXT NOT NULL, data TEXT NOT NULL

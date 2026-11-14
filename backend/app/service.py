@@ -40,6 +40,8 @@ class Gateway:
         from .proposals import Proposals
         self.recurring = Recurring(self)
         self.proposals = Proposals(self)
+        from .purchase_memory import PurchaseMemory
+        self.memory = PurchaseMemory(self)
         self.limiter = Limiter(self.policy, self.db)
         self.source_limiter = SourceLimiter()
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
