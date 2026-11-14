@@ -21,8 +21,11 @@ def agent_context(service, principal, mandate=None):
     customers = list(principal.customer_ids)
     if mandate:
         # The credential's customer is verified before it is exposed as scope.
-        from .mandates import decode
-        customer = decode(mandate)[1].get("vc", {}).get("credentialSubject", {}).get("customer_id")
+        from .mandates import decode, invalid
+        vc = decode(mandate)[1].get("vc")
+        if not isinstance(vc, dict) or not isinstance(vc.get("credentialSubject"), dict):
+            invalid("format")
+        customer = vc["credentialSubject"].get("customer_id")
         with service.db.connect() as conn:
             policy, record, _ = service.mandates.authorize(conn, mandate, principal.id, customer)
         customers = [customer]

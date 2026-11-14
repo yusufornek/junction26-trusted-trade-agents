@@ -59,6 +59,12 @@ class Credentials:
     def has_agent(self, agent_id):
         return any(identity == agent_id for identity, _ in self._agents)
 
+    def fingerprint(self, principal):
+        """Local dispatch binding; never retain or expose the presented secret."""
+        digest = self._operator if principal.operator else next(
+            (digest for identity, digest in self._agents if identity == principal.id), None)
+        return digest.hex() if digest else None
+
     @property
     def agent_ids(self):
         return tuple(identity for identity, _ in self._agents)
@@ -142,7 +148,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     request.state.principal = principal
     PRINCIPAL.set(principal)
     path = request.url.path
-    if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes")) or path in {"/v1/me", "/v1/approvals"}):
+    if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes", "/v1/lookups/")) or path in {"/v1/me", "/v1/approvals"}):
         service.limiter.consume(principal.id, "read")
     return principal
 

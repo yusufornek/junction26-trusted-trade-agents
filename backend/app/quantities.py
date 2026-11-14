@@ -7,7 +7,7 @@ def sales_step(product):
     return max(Decimal(1), Decimal(str(product.allowed_lot_size))).to_integral_value(rounding=ROUND_CEILING)
 
 
-def pack_quantity(size, *, multiplier=1, factor=1, whole_case=False, requested=None, step=1):
+def pack_quantity(size, *, multiplier=1, factor=1, whole_case=False, requested=None, step=1, minimum=0):
     """Return six-decimal content, or the least sales quantity covering requested.
 
     Catalog CASE volume/netWeight already includes the sales-unit multiplier:
@@ -22,4 +22,5 @@ def pack_quantity(size, *, multiplier=1, factor=1, whole_case=False, requested=N
     if requested is None:
         return content
     lot = Decimal(str(step))
-    return (Decimal(str(requested)) / (content * lot)).to_integral_value(rounding=ROUND_CEILING) * lot
+    requested = max(Decimal(str(requested)), Decimal(str(minimum)) * content)
+    return (requested / (content * lot)).to_integral_value(rounding=ROUND_CEILING) * lot

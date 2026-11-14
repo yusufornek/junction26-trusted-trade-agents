@@ -32,7 +32,7 @@ def server_card(base):
                                   "supportedEnvironments": ["live", "sandbox"]}}}
 
 
-def check_server(server, card=None):
+def check_server(server, card=None, *, http_app=None, mounted_paths=None):
     """Fail startup on schema or runtime identity/transport drift (no network refs)."""
     card = card or server_card("http://localhost")
     schema = json.loads((BACKEND / "vendor/mcp-server-card/schema.json").read_text())
@@ -41,8 +41,14 @@ def check_server(server, card=None):
     if (card["name"], card["version"], card.get("title"), card.get("description")) != (
             runtime.name, runtime.version, runtime.title, runtime.description):
         raise RuntimeError("MCP server card contradicts runtime identity")
-    if [(remote["type"], remote["url"].rsplit("/", 1)[-1]) for remote in card["remotes"]] != [(TRANSPORT, "mcp")]:
-        raise RuntimeError("MCP server card contradicts runtime transport")
+    if http_app is not None:
+        from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
+        from urllib.parse import urlsplit
+        actual = [("streamable-http", route.path) for route in http_app.routes
+                  if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp)]
+        advertised = [(remote["type"], urlsplit(remote["url"]).path) for remote in card["remotes"]]
+        if actual != advertised or (mounted_paths is not None and [path for _, path in actual] != mounted_paths):
+            raise RuntimeError("MCP server card contradicts runtime transport or endpoint")
     if card["remotes"][0]["supportedProtocolVersions"] != list(SUPPORTED_PROTOCOL_VERSIONS):
         raise RuntimeError("MCP server card contradicts runtime protocol support")
 

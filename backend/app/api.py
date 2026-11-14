@@ -50,6 +50,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
             while not stop.is_set():
                 def deliver():
                     with service.activate():
+                        try:
+                            service.orders.dispatch_pending()
+                        except Exception:
+                            logger.exception("Supplier execution awaits durable retry")
                         service.outbox.dispatch()
                         service.webhooks.dispatch()
                 await run_in_threadpool(deliver)
@@ -81,6 +85,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
+        from .discovery import check_server
+        check_server(app.state.mcp_server, http_app=mcp_http,
+                     mounted_paths=[route.path for route in app.router.routes if isinstance(getattr(route, "endpoint", None), MCPTransport)])
         worker = asyncio.create_task(deliver_notifications())
         service.recurring.start()
         try:

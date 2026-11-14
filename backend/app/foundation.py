@@ -6,6 +6,7 @@ from importlib.metadata import version
 from uuid import uuid4
 
 from .canonical import canonical_json
+from .runtime import ENVIRONMENT
 
 CORRELATION = ContextVar("correlation_id", default=None)
 CAUSATION = ContextVar("causation_id", default=None)
@@ -46,17 +47,19 @@ def forward_links(conn, *, request_id=None, quote_id=None, agent_id=None):
         order_ids.extend(r[0] for r in conn.execute(
             "SELECT id FROM orders WHERE quote_id=? AND (? IS NULL OR json_extract(data,'$.agent_id')=?)",
             (reference, agent_id, agent_id)))
-    if not order_ids and (quote_id or not quote_ids):
-        return {}  # Preserve the original resource until forward navigation exists.
-    event_ids, checkpoints, traces = [], [], []
+    event_ids, checkpoints, traces, tasks = [], [], [], []
     aggregates = ([request_id] if request_id else []) + quote_ids + order_ids
     for reference in aggregates:
-        for row in conn.execute("SELECT id,audit_id,json_extract(payload,'$.links.trace_id') FROM events WHERE aggregate_id=? ORDER BY aggregate_revision", (reference,)):
+        for row in conn.execute("SELECT id,audit_id,json_extract(payload,'$.links.trace_id'),json_extract(payload,'$.links.task_id') FROM events WHERE aggregate_id=? ORDER BY aggregate_revision", (reference,)):
             event_ids.append(row[0])
             checkpoints.append(row[1])
+            if row[3] and row[3] not in tasks:
+                tasks.append(row[3])
             if row[2] and row[2] not in traces:
                 traces.append(row[2])
-    return {"quote_ids": quote_ids, "order_ids": order_ids, "event_ids": event_ids,
+    if not order_ids and not tasks:
+        return {}  # Preserve original response shape until forward navigation exists.
+    return {"task_ids": tasks, "quote_ids": quote_ids, "order_ids": order_ids, "event_ids": event_ids,
             "audit_checkpoints": checkpoints, "trace_ids": traces}
 
 
@@ -71,7 +74,7 @@ EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
-EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
+EVENT_ACTIONS.update(RECURRING_CREATED="recurring.created", RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
 EVENT_ACTIONS.update({"SUGGESTION_" + action.upper(): "suggestion." + action
@@ -92,6 +95,10 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     event_type = EVENT_ACTIONS.get(action)
     if event_type is None:
         return
+    if action == "APPROVE" and order_id:
+        row = conn.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+        if row and row[0] != "CONFIRMED":
+            event_type = "order.execution_pending" if row[0] == "PENDING_EXECUTION" else "order.rejected"
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
     if kind == "mandate":
@@ -109,7 +116,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
     if kind in {"proposal", "recurring", "suggestion"}:
-        context = {"customer_id": data["customer_id"], "environment": data.get("environment", "live")}
+        context = {"customer_id": data["customer_id"], "environment": data.get("environment", ENVIRONMENT.get())}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}
@@ -128,7 +135,7 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
                "evidence_revision": obj.get("evidence_revision")}
     conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
-                  context.get("environment", "live"), kind, aggregate_id, revision, actor, ts,
+                  context.get("environment", ENVIRONMENT.get()), kind, aggregate_id, revision, actor, ts,
                   correlation, CAUSATION.get(), json.dumps(payload), audit_id))
     conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
                  "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))

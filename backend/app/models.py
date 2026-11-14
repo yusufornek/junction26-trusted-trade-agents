@@ -140,6 +140,7 @@ class Product(Model):
     category: str | None = None
     sales_unit: str
     base_unit: str
+    minimum_order_quantity: float = Field(default=1, ge=1, description="Minimum sales quantity, independent of the order multiple.")
     allowed_lot_size: float = Field(default=1, description="Whole sales-unit step; organiser lot sizes below one count as one, including KG.")
 
     @field_validator("allowed_lot_size")
@@ -227,6 +228,7 @@ class OfferCard(Model):
     gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
     sales_unit: str
+    minimum_order_quantity: float = Field(default=1, ge=1, description="Minimum sales quantity, independent of allowed_lot_size.")
     allowed_lot_size: float = Field(default=1, ge=1, description="Effective whole sales-unit step used by this offer and its plans, including KG.")
     size_per_sales_unit: float | None = Field(default=None, description="Positive quantity unit per sales unit, quantized to six decimal places before pack arithmetic; CASE content already includes its multiplier. Nested name counts retain inner packages; slash portion counts preserve package totals and net/drained names use net weight. With contradictory catalog/name evidence and no price ratio, SIZE_MISMATCH reports both sizes and retains the plausible catalog package total requiring approval. A name from either language can replace it when the live ratio confirms that name within 3%. Null when conversion is unknown.")
 
@@ -261,8 +263,9 @@ class OfferCard(Model):
     @model_serializer(mode="wrap")
     def preserve_signed_field_presence(self, handler):
         data = handler(self)
-        if "allowed_lot_size" not in self.model_fields_set:
-            data.pop("allowed_lot_size", None)
+        for field in ("allowed_lot_size", "minimum_order_quantity"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
         if "name_size_candidates" not in self.model_fields_set:
             data.pop("name_size_candidates", None)
         for field in ("supplier_id", "synthetic"):
@@ -583,11 +586,16 @@ class Order(Model):
     def poll_after_seconds(self) -> int | None:
         return 5 if self.status == "PENDING_APPROVAL" else None
 
+    @computed_field
+    @property
+    def retry_after_seconds(self) -> int | None:
+        return 1 if self.status == "PENDING_EXECUTION" else None
+
     @model_validator(mode="before")
     @classmethod
     def stored_guidance(cls, value):
         if isinstance(value, dict):
-            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds", "approval_reason"}}
+            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds", "approval_reason", "retry_after_seconds"}}
         return value
 
 

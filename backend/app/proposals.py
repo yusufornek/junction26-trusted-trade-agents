@@ -140,7 +140,6 @@ class Proposals:
 
     def put_preferences(self, body, principal, customer_id=None):
         customer_id = self.scope(principal, customer_id, admin=True)
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             conn.execute("INSERT INTO proposal_preferences VALUES(?,?) ON CONFLICT(customer_id) DO UPDATE SET data=excluded.data",
                          (customer_id, body.model_dump_json()))
@@ -185,7 +184,6 @@ class Proposals:
     def submit(self, body, principal):
         if principal.kind != "supplier_agent":
             raise DomainError("SUPPLIER_REQUIRED", "Only a supplier_agent may submit proposals", 403)
-        self.g.limiter.consume(principal.id, "mutation")
         now = audit.utcnow()
         if body.valid_until <= now:
             raise DomainError("PROPOSAL_EXPIRED", "Campaign has expired", 409)
@@ -288,7 +286,6 @@ class Proposals:
 
     def action(self, id, action, principal, body=None, mandate=None):
         principal = self.effective_principal(principal, mandate)
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             proposal = self.get(conn, id, principal)
             if principal.kind == "buyer_user" and principal.role not in {"buyer_admin", "buyer_approver"}:
@@ -365,13 +362,15 @@ def get_preferences(request: Request, customer_id: str | None = None, principal:
 
 
 @router.put("/v1/buyer/proposal-preferences", response_model=dict)
-def put_preferences(body: ProposalPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.put_preferences(body, principal, customer_id)
+def put_preferences(body: ProposalPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal),
+                    idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.proposals.put_preferences(body, principal, customer_id, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals", response_model=dict, summary="Submit supplier content; returns only aggregate campaign delivery and action counts")
-def submit(body: ProposalRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.submit(body, principal)
+def submit(body: ProposalRequest, request: Request, principal: Principal = Depends(resolve_principal),
+           idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.proposals.submit(body, principal, command_key=idempotency_key)
 
 
 @router.get("/v1/proposals/inbox", response_model=list[dict])
@@ -393,15 +392,17 @@ def campaign(id: str, request: Request, principal: Principal = Depends(resolve_p
 
 @router.post("/v1/proposals/{id}/accept", response_model=dict, summary="Revalidate buyer lookup, price and stock; changed prices return a replacement quote without ordering")
 def accept(id: str, body: AcceptProposal, request: Request, principal: Principal = Depends(resolve_principal),
-           agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.proposals.action(id, "accept", principal, body, agent_mandate)
+           agent_mandate: str | None = Header(default=None), idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.proposals.action(id, "accept", principal, body, agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals/{id}/decline", response_model=dict)
-def decline(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.action(id, "decline", principal)
+def decline(id: str, request: Request, principal: Principal = Depends(resolve_principal),
+            idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.proposals.action(id, "decline", principal, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals/{id}/mute", response_model=dict)
-def mute(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.action(id, "mute", principal)
+def mute(id: str, request: Request, principal: Principal = Depends(resolve_principal),
+            idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.proposals.action(id, "mute", principal, command_key=idempotency_key)

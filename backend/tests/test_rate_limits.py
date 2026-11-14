@@ -98,11 +98,12 @@ def test_ac_6_policy_limit_effective_next_request_and_audited(gateway, need, ups
     set_limits(gateway, "lookup", capacity=3)
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 200
+        before = max(e.id for e in gateway.audit())
         set_limits(gateway, "lookup", capacity=1, refill=0.001)
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 200
         assert client.post("/v1/offers", json=need.model_dump(mode="json")).status_code == 429
-    changes = [e.data["diff"] for e in gateway.audit() if e.action == "POLICY_UPDATED"]
-    assert any("rate_limits.lookup.capacity" in diff for diff in changes)
+    changes = [e.data["diff"] for e in gateway.audit() if e.action == "POLICY_UPDATED" and e.id > before]
+    assert any(diff.get("rate_limits.lookup.capacity") == {"before": 3, "after": 1} for diff in changes)
 
 
 def test_ac_7_bounded_global_supplier_concurrency(gateway, need, upstream, monkeypatch):
@@ -223,3 +224,29 @@ def test_review_conflicting_commands_pay_read_cost(gateway, need, upstream):
             result = client.post('/v1/orders', json={'quote_id': 'changed'}, headers={'Idempotency-Key': 'conflict-cost'})
             assert result.status_code == status, result.text
     assert any(e.action == 'RATE_LIMITED' and e.data['category'] == 'read' for e in gateway.audit())
+
+
+def test_review_stored_lookup_costs_one_read(gateway, need, upstream):
+    result = gateway.find_offers(need)
+    gateway.limiter.clock = lambda: 1000
+    set_limits(gateway, "read", capacity=1, refill=.001)
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.get("/v1/lookups/" + result.lookup_id)
+    assert response.status_code == 200
+    assert gateway.limiter.snapshot("external")["read"]["remaining"] == 0
+
+
+@pytest.mark.parametrize("supplier", ["valio", "nordfood"])
+def test_review_every_supplier_obeys_guard(gateway, need, upstream, monkeypatch, supplier):
+    from app import limits
+    guard = UpstreamGuard(concurrency=1, queue_size=0)
+    monkeypatch.setattr(limits, "SUPPLIER_GUARD", guard)
+    from test_supplier_adapters import ASGIBridge
+    from suppliers.nordfood import create_app as supplier_app
+    import httpx
+    adapter = gateway.suppliers.get("nordfood")
+    adapter.client.close()
+    adapter.client = httpx.Client(transport=ASGIBridge(supplier_app()))
+    with guard.slot(), TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.post("/v1/offers", json=need.model_copy(update={"supplier_id": supplier}).model_dump(mode="json"))
+    assert response.status_code == 503 and response.json()["code"] == "UPSTREAM_BUSY"

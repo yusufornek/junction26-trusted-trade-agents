@@ -944,6 +944,7 @@ REST and MCP use `app.commands` for principal-scoped idempotency and token costs
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
 (optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
 Buyer suspension, resumption and local mandate revocation use the same command boundary and header.
+Recurring creation, baseline updates and run-now, proposal preferences, campaign submission and accept/decline/mute also accept it. MCP recurring creation/run/pause expose the matching optional `idempotency_key`; scope and payload binding are shared with REST.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same principal, command route (including every target/path parameter) and payload.
 The added policy approval daily limit is omitted from command fingerprints at its default
@@ -1570,7 +1571,12 @@ the existing Valio path. A stored need binds the supplier through lookup, quote 
 Products use `(supplier_id, supplier_sku)` identities; GTIN is packaging evidence, never a lookup key.
 Valio's catalog builder and paced/cache-aware client are behind `ValioAdapter` without changing the
 recorded demo's best product or total. Nordfood is a different HTTP API with 60 fixture products,
-case prices, minimum case lots, finite inventory and EUR/SEK. The default EUR-only policy refuses
+case prices, minimum case quantities, independent whole-case order multiples, finite inventory and EUR/SEK.
+`minimum_order_quantity` is a lower bound; `allowed_lot_size` is the independent sales-unit multiple. A 25 L
+need for NF-001 buys three 12 L cases (€36), while a 1 L need still buys its minimum two cases.
+All suppliers use the same size, stock, unit and allergen evidence pipeline. Nordfood supplies only a case
+price, so catalog litre conversions carry `SIZE_UNCONFIRMED` and require approval. The adapter never
+derives a comparison price from that same conversion. Allergen declarations are explicit catalog facts. The default EUR-only policy refuses
 SEK with `UNSUPPORTED_CURRENCY`; no implicit exchange rate is used. Agent policy and buyer VC
 `supplier_ids` intersect to restrict authority, including on approval and idempotent retry.
 
@@ -1578,16 +1584,25 @@ From `backend/`, run `.venv/bin/python -m suppliers.nordfood` (localhost:8002), 
 usual. `NORDFOOD_API_BASE` changes its origin. This service is synthetic and keeps its acknowledgements
 and stock in process memory for demonstrations; restart resets them. Tests use its actual ASGI app,
 without sockets. `SupplierAdapter` exposes capabilities/catalog ingestion/normalised price and stock
-facts. `OrderExecution` exposes submit/status/cancel and declares atomic, no-partial-acceptance execution.
+facts. `OrderExecution` exposes submit/reconcile/status/cancel and declares atomic, no-partial-acceptance execution.
 The normalised evidence retains supplier SKU, GTIN, sales unit/conversion, net currency/validity,
 stock semantics, requested/returned dates, source and observation time.
 
 Every new order has `execution {mode, supplier_ref, acknowledged_at, status}`. Valio remains
 `commitment: gateway-simulated`; Nordfood changes to `supplier-acknowledged` only after an accepted
 service response. Rejected or pending-approval orders are never submitted. An uncertain submit returns
-`PENDING_EXECUTION`, execution status `unknown`, and `next_action: RETRY_SAME_COMMAND`. Repeat
+`PENDING_EXECUTION`, execution status `unknown`, `next_action: RETRY_SAME_COMMAND` and positive `retry_after_seconds`. Repeat
 `place_order` with the **same quote and idempotency key** to reconcile it. The deterministic gateway
-order UUID is the supplier's idempotency key, also protecting crash-before-local-commit retries.
+order UUID is the supplier's idempotency key. The order, audit and immutable `supplier_execution_outbox`
+intent commit before supplier dispatch. Recovery first queries `GET /orders/by-key/{order_id}` and records
+an existing acknowledgement before considering any fresh stock evaluation. If no purchase exists,
+dispatch rechecks the current credential, mandate, suspension, constraints and policy immediately before
+POST. An authority refusal is audited and blocks dispatch until an explicit authorised retry; human
+approval does not emit `order.confirmed` until the supplier accepts. A lost local acknowledgement write
+leaves the durable intent recoverable, including after restart. The HTTP worker resumes pending intents;
+historical `PENDING_EXECUTION` records gain an intent on startup. The synthetic supplier's own data is
+in memory, so restarting that supplier resets its demonstration ledger; gateway SQLite recovery assumes
+the supplier retains its idempotency ledger, as a production supplier must.
 Cancellation requires the supplier's cancellation acknowledgement. Supplier execution is not a payment.
 
 The sandbox runs as a **separate deployment** of the same gateway. Its database is environment-bound:

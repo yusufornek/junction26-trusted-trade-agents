@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Literal, Protocol, runtime_checkable
 
 import httpx
@@ -51,6 +52,7 @@ class OrderExecution(Protocol):
     atomicity: str
     partial_acceptance: bool
     def submit(self, order) -> Execution: ...
+    def reconcile(self, order) -> Execution | None: ...
     def status(self, ref) -> Execution: ...
     def cancel(self, ref) -> Execution: ...
 
@@ -59,6 +61,9 @@ class SimulatedExecution:
     mode, atomicity, partial_acceptance = "simulated", "atomic", False
 
     def submit(self, order):
+        return Execution(mode=self.mode, status="simulated")
+
+    def reconcile(self, order):
         return Execution(mode=self.mode, status="simulated")
 
     def status(self, ref):
@@ -150,6 +155,11 @@ class SupplierCatalog(Catalog):
         return len(self.rows())
 
     def metadata(self, key):
+        if key == "ranking":
+            rows = self.rows()
+            return {key: {"min": min(values), "max": max(values), "median": median(values)}
+                    for key, field in (("co2", "co2_kg_per_kg"), ("reliability", "delivery_reliability"))
+                    if (values := [getattr(p, field) for p in rows if getattr(p, field) is not None])}
         if key == "vocabulary":
             rows = self.rows()
             return {"required_claims": sorted({c for p in rows for c in p.claims}),
@@ -208,6 +218,10 @@ class NordfoodExecution:
             "items": [{"article": l.product_id, "cases": l.units_needed, "case_price": l.unit_price} for l in order.lines]})
         return self._result(body)
 
+    def reconcile(self, order):
+        body = self.adapter.request("GET", "/orders/by-key/" + order.id, allow_missing=True)
+        return self._result(body) if body else None
+
     def status(self, ref):
         return self._result(self.adapter.request("GET", "/orders/" + ref))
 
@@ -234,17 +248,25 @@ class NordfoodAdapter(Adapter):
         self.articles = json.loads(source.read_text())
         products = [Product(id=p["article"], supplier_id=self.id, supplier_sku=p["article"], synthetic=True,
             gtin=p["barcode"], unit_gtins={"CASE": p["barcode"]}, name_en=p["description"],
-            sales_unit="CASE", base_unit="ST", allowed_lot_size=p["minimum_cases"], units={"CASE": p["bottles_per_case"]},
+            sales_unit="CASE", base_unit="ST", allowed_lot_size=p.get("order_multiple", 1), minimum_order_quantity=p["minimum_cases"],
+            units={"CASE": p["bottles_per_case"]} if p.get("bottles_per_case") else {},
             base_volume_l=p.get("litres_per_bottle"), claims=p["claims"],
-            has_allergen_declaration=True, allergen_status={"AM": ["contains"], "AE": ["free_from"]},
-            allergens_contains=["AM"], free_from=["AE"], category="10400") for p in self.articles]
+            has_allergen_declaration=any(status in {"contains", "may_contain", "undeclared"}
+                for statuses in p.get("allergen_status", {}).values() for status in statuses),
+            allergen_status=p.get("allergen_status", {}),
+            allergens_contains=[code for code, statuses in p.get("allergen_status", {}).items() if "contains" in statuses],
+            free_from=[code for code, statuses in p.get("allergen_status", {}).items() if "free_from" in statuses], category="10400") for p in self.articles]
         return self.catalog.ingest(products)
 
-    def request(self, method, path, **kwargs):
+    def request(self, method, path, *, allow_missing=False, **kwargs):
         execution = path.startswith("/orders")
         started = time.perf_counter()
         try:
-            response = self.client.request(method, self.base + path, **kwargs)
+            from .limits import SUPPLIER_GUARD
+            with SUPPLIER_GUARD.slot():
+                response = self.client.request(method, self.base + path, **kwargs)
+            if allow_missing and response.status_code == 404:
+                return None
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
@@ -266,11 +288,10 @@ class NordfoodAdapter(Adapter):
             common = {"_fetched_at": body["observed_at"], "_synthetic": True,
                       "_source": "synthetic:nordfood:" + endpoint, "_requested_date": deliver_by.isoformat()}
             if endpoint == "price":
-                p = self.catalog.get(sku)
-                size = p.units["CASE"] * (p.base_volume_l or 1)
                 result[sku] = {**common, "catalogPrice": {"value": row["net_per_case"], "currency": row["currency_code"],
-                    "validFrom": row["from"], "validTo": row["until"]},
-                    "comparisonPrice": {"value": row["net_per_case"] / size}, "comparisonUnit": "L"}
+                    "validFrom": row["from"], "validTo": row["until"]}}
+                if row.get("comparison_price") is not None:
+                    result[sku].update(comparisonPrice={"value": row["comparison_price"]}, comparisonUnit=row.get("comparison_unit"))
             else:
                 result[sku] = {**common, "_stock_semantics": "finite", "closingTime": body["cutoff"], "logisticModel": "Stock",
                     "scheduleLines": [{"availableAmount": row["cases_left"], "availableDate": row["delivery_day"],

@@ -10,7 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import Field, model_validator
 
 from . import audit
@@ -195,7 +195,6 @@ class Recurring:
         return order, quote, template, bool(basket)
 
     def create(self, body, principal, mandate=None):
-        self.g.limiter.consume(principal.id, "mutation")
         order, quote, template, basket = self.approved(body.approved_order_id)
         if not reviewer(principal, quote.customer_id) and not (principal.kind == "agent" and principal.id == order.agent_id):
             raise DomainError("RECURRING_FORBIDDEN", "The template must belong to this buyer or agent", 403)
@@ -212,6 +211,9 @@ class Recurring:
             self.g.mandates.bind(conn, "recurring", row["id"], token)
             self.authority(conn, row)
             self.save(conn, row)
+            audit.append(conn, f"{principal.kind}:{principal.id}", "RECURRING_CREATED",
+                         "Created an approved recurring purchase template.", data={"id": row["id"],
+                         "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
     def workflow_authority(self, principal, customer, mandate=None):
@@ -255,13 +257,14 @@ class Recurring:
             self.g.mandates.bind(conn, "recurring", row["id"], mandate)
             self.authority(conn, row)
             self.save(conn, row)
+            audit.append(conn, f"agent:{agent}", "RECURRING_CREATED", "Created a recurring purchase template from a suggestion.",
+                         data={"id": row["id"], "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
     def pause(self, id, principal, mandate=None):
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
             self.workflow_authority(principal, row["customer_id"], mandate)
-            self.g.limiter.consume(principal.id, "mutation")
             row["status"] = "PAUSED"
             self.save(conn, row)
             audit.append(conn, f"agent:{principal.id}", "RECURRING_STOPPED", "Buyer agent paused recurring execution.",
@@ -277,7 +280,6 @@ class Recurring:
         row = self.get(id, principal)
         if not reviewer(principal, row["customer_id"]):
             raise DomainError("BUYER_APPROVER_REQUIRED", "Only a buyer admin or approver may change the baseline", 403)
-        self.g.limiter.consume(principal.id, "mutation")
         order, quote, template, basket = self.approved(body.approved_order_id)
         if order.agent_id != row["agent_id"] or quote.customer_id != row["customer_id"]:
             raise DomainError("RECURRING_FORBIDDEN", "Baseline must belong to the same buyer and agent", 403)
@@ -301,14 +303,16 @@ class Recurring:
             raise DomainError("INVALID_OCCURRENCE", "Occurrence needs a timezone", 422)
         local = when.astimezone(ZoneInfo(initial["cadence"]["timezone"]))
         key = f"{id}:{local.date().isoformat()}"
+        # Admission precedes the writer transaction so a throttle audit cannot roll back.
+        with self.g.db.connect() as conn:
+            existing = conn.execute("SELECT 1 FROM recurring_runs WHERE occurrence_key=?", (key,)).fetchone()
+        self.g.limiter.consume(initial["agent_id"], "read" if existing else "mutation")
         # One transaction includes the command, fresh lookup, quote, comparison and order.
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
             existing = conn.execute("SELECT data FROM recurring_runs WHERE occurrence_key=?", (key,)).fetchone()
             if existing:
-                self.g.limiter.consume(row["agent_id"], "read")
                 return json.loads(existing[0])
-            self.g.limiter.consume(row["agent_id"], "mutation")
             result = {"occurrence_key": key, "occurrence_at": local.isoformat(), "baseline_revision": row["baseline_revision"]}
             try:
                 token = self.authority(conn, row)
@@ -391,8 +395,9 @@ router = APIRouter(prefix="/v1/recurring-orders", tags=["Recurring orders"])
 
 
 @router.post("", response_model=dict, summary="Approve a recurring template from a confirmed need or recipe order")
-def create(body: RecurringRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.recurring.create(body, principal)
+def create(body: RecurringRequest, request: Request, principal: Principal = Depends(resolve_principal),
+           idempotency_key: str | None = Header(default=None), agent_mandate: str | None = Header(default=None)):
+    return request.app.state.gateway.recurring.create(body, principal, agent_mandate, command_key=idempotency_key)
 
 
 @router.get("", response_model=list[dict])
@@ -408,10 +413,12 @@ def runs(id: str, request: Request, principal: Principal = Depends(resolve_princ
 
 
 @router.post("/{id}/baseline", response_model=dict)
-def baseline(id: str, body: BaselineRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.recurring.baseline(id, body, principal)
+def baseline(id: str, body: BaselineRequest, request: Request, principal: Principal = Depends(resolve_principal),
+             idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.recurring.baseline(id, body, principal, command_key=idempotency_key)
 
 
 @router.post("/{id}/run-now", response_model=dict, summary="Execute one occurrence, deduplicated by template and local date")
-def run(id: str, request: Request, body: RunRequest = RunRequest(), principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.recurring.run(id, body.occurrence_at, principal)
+def run(id: str, request: Request, body: RunRequest = RunRequest(), principal: Principal = Depends(resolve_principal),
+        idempotency_key: str | None = Header(default=None)):
+    return request.app.state.gateway.recurring.run(id, body.occurrence_at, principal, command_key=idempotency_key)

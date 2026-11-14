@@ -199,3 +199,26 @@ def test_ac_8_buyer_agent_cannot_submit_supplier_proposals(gateway, proposal_set
         response = client.post("/v1/proposals", json=campaign())
         assert response.status_code == 403 and response.json()["code"] == "SUPPLIER_REQUIRED"
         assert inbox(client) == []
+
+
+def test_review_proposal_writes_payload_bound_keys(gateway, proposal_setup):
+    with TestClient(create_app(gateway)) as client:
+        prefs = {"categories": ["10400"]}
+        headers = {**agent_headers("hotel-agent"), "Idempotency-Key": "preferences"}
+        first = client.put("/v1/buyer/proposal-preferences", json=prefs, headers=headers)
+        assert first.status_code == 200
+        assert client.put("/v1/buyer/proposal-preferences", json=prefs, headers=headers).json() == first.json()
+        assert client.put("/v1/buyer/proposal-preferences", json={"categories": []}, headers=headers).status_code == 409
+        body = campaign()
+        headers = {**agent_headers("other"), "Idempotency-Key": "campaign"}
+        first = client.post("/v1/proposals", json=body, headers=headers)
+        assert first.status_code == 200
+        assert client.post("/v1/proposals", json=body, headers=headers).json() == first.json()
+        assert client.post("/v1/proposals", json={**body, "rationale": "changed"}, headers=headers).status_code == 409
+        row = inbox(client)[0]
+        for action in ["decline", "mute"]:
+            headers = {**agent_headers("external"), "Idempotency-Key": action}
+            url = f"/v1/proposals/{row['id']}/{action}"
+            first = client.post(url, headers=headers)
+            assert first.status_code == 200
+            assert client.post(url, headers=headers).json() == first.json()

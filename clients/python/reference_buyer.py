@@ -44,7 +44,7 @@ class ReferenceBuyer:
                 payload = {"next_action": "RETRY_SAME_COMMAND", "retry_after_seconds": 1}
             action = payload.get("next_action")
             if action == "RETRY_SAME_COMMAND":
-                await self.sleep(payload["retry_after_seconds"])
+                await self.sleep(payload.get("retry_after_seconds", 1))
                 continue
             if action == "LOOKUP_REQUIRED":
                 command, arguments = "find_offers", {"need": need}

@@ -10,7 +10,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-002",
@@ -23,7 +32,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-003",
@@ -36,7 +54,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-004",
@@ -49,7 +76,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-005",
@@ -62,7 +98,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-006",
@@ -75,7 +120,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-007",
@@ -88,7 +142,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-008",
@@ -101,7 +164,16 @@
     "currency": "SEK",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-009",
@@ -114,7 +186,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-010",
@@ -127,7 +208,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-011",
@@ -140,7 +230,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-012",
@@ -153,7 +252,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-013",
@@ -166,7 +274,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-014",
@@ -179,7 +296,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-015",
@@ -192,7 +318,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-016",
@@ -205,7 +340,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-017",
@@ -218,7 +362,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-018",
@@ -231,7 +384,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-019",
@@ -244,7 +406,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-020",
@@ -257,7 +428,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-021",
@@ -270,7 +450,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-022",
@@ -283,7 +472,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-023",
@@ -296,7 +494,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-024",
@@ -309,7 +516,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-025",
@@ -322,7 +538,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-026",
@@ -335,7 +560,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-027",
@@ -348,7 +582,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-028",
@@ -361,7 +604,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-029",
@@ -374,7 +626,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-030",
@@ -387,7 +648,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-031",
@@ -400,7 +670,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-032",
@@ -413,7 +692,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-033",
@@ -426,7 +714,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-034",
@@ -439,7 +736,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-035",
@@ -452,7 +758,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-036",
@@ -465,7 +780,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-037",
@@ -478,7 +802,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-038",
@@ -491,7 +824,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-039",
@@ -504,7 +846,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-040",
@@ -517,7 +868,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-041",
@@ -530,7 +890,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-042",
@@ -543,7 +912,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-043",
@@ -556,7 +934,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-044",
@@ -569,7 +956,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-045",
@@ -582,7 +978,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-046",
@@ -595,7 +1000,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-047",
@@ -608,7 +1022,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-048",
@@ -621,7 +1044,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-049",
@@ -634,7 +1066,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-050",
@@ -647,7 +1088,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-051",
@@ -660,7 +1110,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-052",
@@ -673,7 +1132,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-053",
@@ -686,7 +1154,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-054",
@@ -699,7 +1176,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-055",
@@ -712,7 +1198,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-056",
@@ -725,7 +1220,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-057",
@@ -738,7 +1242,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-058",
@@ -751,7 +1264,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-059",
@@ -764,7 +1286,16 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   },
   {
     "article": "NF-060",
@@ -777,6 +1308,15 @@
     "currency": "EUR",
     "claims": [
       "FREE_FROM_LACTOSE"
-    ]
+    ],
+    "order_multiple": 1,
+    "allergen_status": {
+      "AM": [
+        "contains"
+      ],
+      "AE": [
+        "free_from"
+      ]
+    }
   }
 ]

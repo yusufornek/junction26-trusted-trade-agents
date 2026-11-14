@@ -1,3 +1,4 @@
+from .foundation import TASK
 import re
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -97,7 +98,7 @@ def day(value):
 
 
 def round_quantity(quantity, product):
-    return float(pack_quantity(1, requested=quantity, step=sales_step(product)))
+    return float(pack_quantity(1, requested=quantity, step=sales_step(product), minimum=product.minimum_order_quantity))
 
 
 def size_for(product, price, requested_unit):
@@ -117,7 +118,7 @@ def reconcile_size(product, price, requested_unit):
     if product.sales_unit == requested_unit == "KG":
         # Sold by weight: one sales unit is one kg by definition; a piece weight in the catalog or name
         # ("ca 2,4 kg") describes the item, not the sales unit.
-        confirmed = ratio is not None and abs(ratio - 1) <= 0.03
+        confirmed = ratio is not None and sizes_agree(ratio, 1.0)
         return 1.0, "base_unit", confirmed, []
     multiplier = product.units.get(product.sales_unit, 1 if product.sales_unit == product.base_unit else None)
     exact = {}
@@ -277,7 +278,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     size, source, confirmed, size_warnings = reconcile_size(product, price, need.quantity.unit)
     quantity = sales_quantity if sales_quantity is not None else (
         float(pack_quantity(size, requested=need.quantity.value,
-                            step=sales_step(product))) if size else None)
+                            step=sales_step(product), minimum=product.minimum_order_quantity)) if size else None)
     available, warnings = availability_for(stock, need.deliver_by, quantity, reserved_amount, product.sales_unit)
     warnings.extend(size_warnings)
     catalog = price.get("catalogPrice") or {}
@@ -335,7 +336,7 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
     return OfferCard(
         supplier_id=need.supplier_id, synthetic=product.synthetic or stock.get("_synthetic", False),
         product_id=product.id, gtin=product.gtin, name=product.name_en, sales_unit=product.sales_unit,
-        allowed_lot_size=float(sales_step(product)),
+        allowed_lot_size=float(sales_step(product)), minimum_order_quantity=product.minimum_order_quantity,
         size_per_sales_unit=size, size_unit=need.quantity.unit, size_source=source, units_needed=quantity,
         size_confirmed_by_price=confirmed,
         name_size_candidates=[{"size_per_sales_unit": r["size"], "source_text": r["source_text"],
@@ -425,7 +426,7 @@ class Lookup:
             raise DomainError("LOOKUP_NOT_FOUND", "Lookup was not found", 404)
         result = check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
                              agent_id, "LOOKUP_NOT_FOUND")
-        from .foundation import forward_links
+        from .foundation import TASK, forward_links
         with self.db.connect() as conn:
             result.links.update(forward_links(conn, request_id=lookup_id, agent_id=agent_id))
         return result
@@ -576,7 +577,7 @@ class Lookup:
             result.context = procurement_context(self.policy, need.customer_id, result.lookup_id, effective, result.mandate, supplier_id=need.supplier_id)
             result.correlation_id = CORRELATION.get()
             result.links = {"request_id": result.lookup_id, "trace_id": trace_id(),
-                            "event_id": str(uuid4()), "task_id": None}
+                            "event_id": str(uuid4()), "task_id": TASK.get()}
             self.mandates.bind(conn, "lookup", result.lookup_id, mandate)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             conn.execute("INSERT INTO lookup_offers VALUES(?,?)", (result.lookup_id, json.dumps([o.model_dump(mode="json") for o in offers])))

@@ -57,7 +57,7 @@ def create_app():
             for line in body.items:
                 p, qty = articles.get(line.get("article")), line.get("cases")
                 valid &= bool(p and isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0
-                    and qty % p["minimum_cases"] == 0 and line.get("case_price") == p["net_per_case"]
+                    and qty >= p["minimum_cases"] and qty % p.get("order_multiple", 1) == 0 and qty % 1 == 0 and line.get("case_price") == p["net_per_case"]
                     and body.currency_code == p["currency"])
                 if p and isinstance(qty, (int, float)):
                     quantities[p["article"]] = quantities.get(p["article"], 0) + qty
@@ -72,6 +72,12 @@ def create_app():
             app.state.keys[idempotency_key] = (ref, digest)
             result["reserved_cases"] = quantities if valid else {}
             return result
+
+    @app.get("/orders/by-key/{key}")
+    def reconcile(key: str):
+        with lock:
+            previous = app.state.keys.get(key)
+            return app.state.orders[previous[0]] if previous else JSONResponse({"error": "NOT_FOUND"}, status_code=404)
 
     @app.get("/orders/{ref}")
     def status(ref: str):
