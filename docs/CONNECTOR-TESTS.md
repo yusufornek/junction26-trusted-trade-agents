@@ -10,6 +10,7 @@ Never paste agent keys here: record the agent ID and customer scope only.
 | # | Date | Connector / client | Transport | Auth | Result |
 |---|---|---|---|---|---|
 | 1 | 2026-11-14 | Raw JSON-RPC from Claude Code (baseline, no MCP client) | Streamable HTTP, direct | Agent key | ✅ Pass; findings F-1 to F-4 |
+| 2 | 2026-11-14 | Claude Desktop, `claude_desktop_config.json` + `mcp-remote` 0.16.6 (macOS) | stdio → Streamable HTTP | Agent key in `env` | ✅ Pass; connect page config works unchanged |
 
 ## Open findings
 
@@ -74,3 +75,31 @@ the Claude Desktop setup from the connect page (`mcp-remote` bridge) was not exe
 - `create_quote`, `place_order`, approval, `cancel_order`, evidence and UBL export: they write state on the live server.
 - The OAuth discovery link (`resource_metadata`) end to end.
 - Whether an unknown customer ID gets a different error than one outside the mandate (enumeration).
+
+## 2. Claude Desktop with `mcp-remote` — 2026-11-14
+
+**Setup:** the connect page config, unchanged, in `claude_desktop_config.json` on macOS:
+`npx -y mcp-remote https://luotsi.online/mcp --header Authorization:${VALIO_AIMO_AUTH}`, key in `env`.
+Node 26.3 and npx 11.16 from Homebrew; `mcp-remote` resolved to 0.16.6. Same agent and mandate as run 1.
+
+| Check | Result |
+|---|---|
+| Bridge from a terminal, same args | ✅ `initialize` in 2.7 s (includes the npx start), 10 tools, `get_agent_context` returns `claude-test-desktop` |
+| Desktop restart | ✅ server started and connected in about 1 s; no errors or warnings in `mcp-server-luotsi.log` |
+| Tool discovery | ✅ Desktop started two bridge processes: one only listed tools, prompts and resources; the other served the test chat |
+| Connect page test prompt | ✅ reported working by the tester; the log shows 5 `tools/call`, each answered, and no transport errors |
+| Claude Code sessions in the Desktop app | ✅ also list the 10 tools after the restart, with no `.mcp.json` or `~/.claude.json` entry: the Desktop config is shared with the Code tab |
+
+- The client sends `protocolVersion: 2025-11-25` and advertises the `io.modelcontextprotocol/ui` extension.
+- `mcp-remote` rewrites `clientInfo.name` to `<client> (via mcp-remote 0.16.6)`, so the gateway can tell bridged clients apart.
+
+### Not captured
+
+- Which 5 tools were called, with what arguments, and whether a quote or order was attempted: `mcp-remote` 0.16.6 and
+  the Desktop logs record method names only. Only the gateway side can show them.
+- Claude's final answer, so whether F-1 changed the recommended offer is unknown.
+
+### Not tested
+
+- Windows (the `Authorization:${VAR}` form without a space is the `mcp-remote` workaround for Windows argument splitting).
+- Machines where Node comes only from nvm, where a GUI app may not find `npx`.
