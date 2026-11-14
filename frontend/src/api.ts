@@ -492,6 +492,24 @@ export const api = {
     ).toString();
     return call<AuditEntry[]>("/v1/audit" + (q ? `?${q}` : ""));
   },
+  /**
+   * Whether this origin exposes MCP over streamable HTTP. Only a 404 means "no route": a mounted endpoint
+   * answers anything else (401 without an agent key, 400/406 for this bare ping), so the probe stays right
+   * the day the gateway starts serving /mcp, without a frontend change.
+   */
+  mcpExposed: async (): Promise<boolean> => {
+    if (MOCK) return false;
+    try {
+      const res = await fetch("/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+      });
+      return res.status !== 404;
+    } catch {
+      return false;
+    }
+  },
   auditHead: () => call<AuditHead>("/v1/audit/head"),
   auditAnchors: () => call<AuditAnchor[]>("/v1/audit/anchors"),
   auditVerify: () => call<AuditVerification>("/v1/audit/verify"),

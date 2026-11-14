@@ -24,6 +24,7 @@ export default function Trust() {
   const jwks = useAsync(() => api.jwks(), []);
   const meta = useAsync(() => api.meta(), []);
   const me = useAsync(() => api.me(), []);
+  const mcp = useAsync(() => api.mcpExposed(), []);
   const [verification, setVerification] = useState<AuditVerification | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState<unknown>(null);
@@ -200,17 +201,39 @@ export default function Trust() {
         </div>
 
         <div className="grid gap-3 lg:grid-cols-3">
-          <Door title="REST" body="OpenAPI 3.1, the contract the console itself uses." code={`${origin}/v1`} />
+          {/* The console itself runs on this REST surface, so if this page loaded, REST is live. */}
+          <Door
+            title="REST"
+            status={{ text: "live here", style: "bg-positive-soft text-positive" }}
+            body="OpenAPI 3.1, the contract the console itself uses. Each agent signs in with its own Bearer key."
+            code={`${origin}/v1`}
+          />
           <Door
             title="MCP · stdio"
+            status={{ text: "local", style: "bg-chip text-ink-muted" }}
             body="For desktop agents. The key for --agent-id must be in AGENT_KEYS; --mandate takes a buyer-issued VC-JWT file."
             code="python -m app.mcp_server --agent-id hotel-chain-agent"
           />
-          <Door
-            title="MCP · streamable HTTP"
-            body="Bearer key per agent; a buyer mandate travels in the Agent-Mandate header."
-            code="python -m app.mcp_server --http --port 8001  →  /mcp"
-          />
+          {/* Never advertise an address that answers 404: the door follows what this server really serves. */}
+          {mcp.data ? (
+            <Door
+              title="MCP · streamable HTTP"
+              status={{ text: "live here", style: "bg-positive-soft text-positive" }}
+              body="Bearer key per agent; a buyer mandate travels in the Agent-Mandate header."
+              code={`${origin}/mcp`}
+            />
+          ) : (
+            <Door
+              title="MCP · streamable HTTP"
+              status={
+                mcp.loading
+                  ? { text: "checking…", style: "bg-chip text-ink-muted" }
+                  : { text: "not exposed here", style: "bg-warn-soft text-warn" }
+              }
+              body="Not served on this address yet, so outside agents use REST here. It runs beside the gateway on a host with the repository."
+              code="python -m app.mcp_server --http --port 8001"
+            />
+          )}
         </div>
 
         <div>
@@ -318,10 +341,23 @@ function Check({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function Door({ title, body, code }: { title: string; body: string; code: string }) {
+function Door({
+  title,
+  body,
+  code,
+  status,
+}: {
+  title: string;
+  body: string;
+  code: string;
+  status?: { text: string; style: string };
+}) {
   return (
     <div className="flex flex-col gap-2 rounded-[var(--radius-tile)] border border-line p-3">
-      <div className="text-[13px] font-semibold">{title}</div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[13px] font-semibold">{title}</span>
+        {status ? <span className={`chip ${status.style}`}>{status.text}</span> : null}
+      </div>
       <p className="text-[12px] text-ink-muted">{body}</p>
       <code className="mt-auto break-all rounded-[10px] bg-page px-2.5 py-2 text-[11px] text-ink">{code}</code>
     </div>
