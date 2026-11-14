@@ -162,6 +162,7 @@ const FRIENDLY: Record<string, string> = {
   OUTSIDE_GUARDRAIL: "That is outside a limit set above this agent. The limit and where it comes from are below.",
   CONSTRAINTS_REQUIRED: "This kitchen needs its allergen and diet rules set before its first order.",
   LAST_TENANT_ADMIN: "An organisation needs at least one admin.",
+  EMAIL_EXISTS: "An account with this e-mail already exists.",
   EVIDENCE_CHANGED: "Price or stock moved since the quote. Review the refreshed order before deciding.",
   CUSTOMER_NOT_IN_MANDATE: "This agent may not buy for that customer.",
   AGENT_NOT_REGISTERED: "This agent has no mandate yet, so it cannot buy.",

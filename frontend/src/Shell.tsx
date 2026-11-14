@@ -53,6 +53,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/buyer": { title: "Buyer flow", sub: "Describe the need, compare offers, lock a price, order." },
   "/basket": { title: "Recipe basket", sub: "Turn a recipe and a number of portions into one priced basket." },
   "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
+  "/signup": { title: "Create an organisation account", sub: "Tell us what kind of kitchen you run. The gateway sets safe starting limits from it." },
   "/consent": { title: "Connect an assistant", sub: "An assistant asks to buy through this gateway. You decide as which agent, and for which customers." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
@@ -332,7 +333,8 @@ export default function Shell() {
           </div>
         </header>
 
-        {signedIn && !signingIn ? (
+        {/* Sign-up is public: a new kitchen has no operator token. */}
+        {(signedIn && !signingIn) || pathname === "/signup" ? (
           <Outlet context={{ since, rangeLabel: range.label } satisfies ShellContext} />
         ) : (
           <Card className="mx-auto mt-10 w-full max-w-md">
@@ -366,6 +368,12 @@ export default function Shell() {
                 </button>
               ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
+              <p className="text-center text-[13px] text-ink-muted">
+                New kitchen?{" "}
+                <NavLink to="/signup" className="font-medium text-brand hover:underline">
+                  Create an organisation account
+                </NavLink>
+              </p>
               <p className="text-center text-[12px] text-ink-muted">For the best experience, use a computer.</p>
             </form>
           </Card>

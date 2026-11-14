@@ -592,6 +592,18 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     resource: `${location.origin}/mcp`, scopes: ["mcp"], expires_at: ahead(10), status: "pending", customer_ids: ["1", "42"],
     agents: Object.keys(POLICY.agents ?? {}) };
   if (p.startsWith("/v1/oauth/requests/") && method === "POST") return { status: body.decision === "approve" ? "approved" : "denied", redirect_url: "/connect" };
+  if (p === "/v1/auth/signup/options") return {
+    business_types: [["single_restaurant", "Single restaurant"], ["hotel_chain", "Hotel chain"], ["hospital_or_school_kitchen", "Hospital or school kitchen"]].map(([value, label]) => ({ value, label })),
+    monthly_purchase_volume_bands: [["<5k", "Under €5,000"], ["5–25k", "€5,000–25,000"]].map(([value, label]) => ({ value, label })),
+    meals_per_day_bands: [["<100", "Under 100"], ["100–500", "100–500"]].map(([value, label]) => ({ value, label })),
+  };
+  if (p === "/v1/auth/signup" && method === "POST") return {
+    tenant: { id: "ten_mock", name: body.name }, user: { email: body.email, role: "tenant_admin" }, customer_ids: ["buyer_mock"],
+    guardrail_profile: { preset: body.profile.business_type, warnings: [], guardrails: {
+      per_order_ceiling_eur: { value: 1500, source: `preset:${body.profile.business_type}` },
+      four_eyes: { value: true, source: `preset:${body.profile.business_type}` },
+      starting_autonomy: { value: "approval_required", source: `preset:${body.profile.business_type}` } } },
+  };
   if (p === "/v1/suppliers") return [
     { supplier_id: "valio", synthetic: false, capabilities: { currencies: ["EUR"], pricing: "sale-unit", stock: ["finite", "unknown"],
       execution: { mode: "simulated", atomicity: "atomic", partial_acceptance: false } } },
