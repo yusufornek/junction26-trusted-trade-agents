@@ -31,6 +31,9 @@ services:
     build:
       context: ..
       dockerfile: frontend/Dockerfile
+      args:
+        # Demo only: puts the operator token in the public bundle for a one-click sign-in. Leave unset otherwise.
+        VITE_DEMO_OPERATOR_TOKEN: ${DEMO_OPERATOR_TOKEN:-}
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     depends_on:

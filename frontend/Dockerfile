@@ -7,6 +7,9 @@ COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
 COPY frontend/src/ ./src/
 # Favicons and the share image: Vite copies public/ into dist as-is.
 COPY frontend/public/ ./public/
+# Optional one-click demo sign-in; empty leaves the button out of the bundle.
+ARG VITE_DEMO_OPERATOR_TOKEN=""
+ENV VITE_DEMO_OPERATOR_TOKEN=$VITE_DEMO_OPERATOR_TOKEN
 RUN npm run build
 
 FROM caddy:2

@@ -25,6 +25,9 @@ import { Avatar } from "./charts";
 import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { Card, ErrorNote, useAsync } from "./ui";
 
+/** Set at build time from the server's DEMO_OPERATOR_TOKEN (deploy/docker-compose.yml); never committed. */
+const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
+
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
   { to: "/buyer", icon: Search, label: "Buyer flow" },
@@ -82,12 +85,11 @@ export default function Shell() {
   // A phone menu that stays open after navigating would cover the page the person just asked for.
   useEffect(() => setMenuOpen(false), [pathname]);
 
-  const signIn = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const signInWith = async (value: string) => {
     setSigningIn(true);
     setSignInError(null);
     // Keep the outlet unmounted until the token is verified as an operator token.
-    setToken(tokenInput);
+    setToken(value);
     setTokenInput("");
     try {
       await api.policy();
@@ -98,6 +100,10 @@ export default function Shell() {
     } finally {
       setSigningIn(false);
     }
+  };
+  const signIn = (event: React.FormEvent) => {
+    event.preventDefault();
+    signInWith(tokenInput);
   };
 
   const health = useAsync(() => api.health(), []);
@@ -343,7 +349,15 @@ export default function Shell() {
               <button className="btn-dark" disabled={signingIn}>
                 {signingIn ? "Signing in…" : "Sign in"}
               </button>
+              {/* Demo builds only: the server bakes its operator token into this bundle so a judge gets in with one click.
+                  Anyone who opens the site can then act as the operator; an empty variable leaves the button out. */}
+              {DEMO_TOKEN ? (
+                <button type="button" className="btn-ghost" disabled={signingIn} onClick={() => signInWith(DEMO_TOKEN)}>
+                  Sign in with the admin account
+                </button>
+              ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
+              <p className="text-center text-[12px] text-ink-muted">For the best experience, use a computer.</p>
             </form>
           </Card>
         )}
