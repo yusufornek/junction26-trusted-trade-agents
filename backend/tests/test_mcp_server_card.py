@@ -129,9 +129,18 @@ def test_ac_5_public_metadata_has_no_customer_authority(gateway):
     with TestClient(create_app(gateway)) as client:
         for path in ("/.well-known/ai-catalog.json", "/mcp/server-card", "/v1/meta"):
             public = client.get(path)
-            assert public.content == client.get(path, headers=agent_headers("external")).content
-            assert public.content == client.get(path, headers=agent_headers("other")).content
+            # Spec 60 R-12: authenticated discovery is computed per audience and tenant (private, no-store), so only
+            # the unauthenticated documents must be identical; neither may carry customer authority (checked below).
+            if path != "/mcp/server-card":
+                assert public.content == client.get(path, headers=agent_headers("external")).content
+                assert public.content == client.get(path, headers=agent_headers("other")).content
             data = public.json()
+            # Spec 60 R-6: the public card lists tool, resource and prompt schemas; their property names are schema,
+            # not customer authority, so the check covers everything outside those published schemas.
+            for ext in (data.get("_meta") or {}).values():
+                if isinstance(ext, dict):
+                    for listed in ("tools", "resources", "resourceTemplates", "prompts", "capabilities"):
+                        ext.pop(listed, None)
             def keys(value):
                 if isinstance(value, dict):
                     return set(value) | set().union(*(keys(v) for v in value.values()))
