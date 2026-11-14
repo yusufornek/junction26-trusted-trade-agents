@@ -20,13 +20,14 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.routes import create_protected_resource_routes
-from pydantic import AnyHttpUrl, BaseModel
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from . import audit
 from .accounts import digest, origin
 from .auth import Principal, resolve_principal, session_cookie, admit_credential
 from .db import DomainError
 from .models import ConnectionRequest
+from .connection_notifications_models import NotificationConsent, consent_form, form_consent
 from .foundation import PRINCIPAL
 
 router = APIRouter(tags=["oauth"])
@@ -204,7 +205,7 @@ class OAuth(TokenVerifier):
                     customers = [r[0] for r in read.execute("SELECT customer_id FROM tenant_customers")]
             connection = self.gateway.connections.create(ConnectionRequest(agent_id=agent, client="mcp_other" if "/mcp" in data["resource"] else "a2a",
                 type="mcp" if "/mcp" in data["resource"] else "a2a", audience=audience, customer_ids=customers,
-                scopes=[s for s in scopes if s != "offline_access"], label=data["client"]["client_name"]), issuer, data["issuer"], True)
+                scopes=[s for s in scopes if s != "offline_access"], label=data["client"]["client_name"], notifications=body.notifications), issuer, data["issuer"], True)
             # Throw away the API key: an OAuth connection is usable only through
             # its grants. Connection revoke invalidates those grants next request.
             conn.execute("UPDATE connections SET type='oauth',credential_kind='oauth',key_digest=?,key_prefix='oauth' WHERE connection_id=?", (digest(token_urlsafe(48)), connection.connection_id))
@@ -295,6 +296,7 @@ class OAuth(TokenVerifier):
 
 
 class ConsentDecision(BaseModel):
+    notifications: NotificationConsent = Field(default_factory=NotificationConsent)
     approve: bool
     agent_id: str | None = None
     customer_ids: list[str] | None = None
@@ -377,6 +379,7 @@ def consent_page(service, request_id, p):
 <label>Agent (tenant administrators may create one) <input name="agent_id" list="agents"></label><datalist id="agents">{options}</datalist>
 <label>Customers <input name="customer_ids" value="{esc(' '.join(p.customer_ids))}"></label>
 <label>Scopes <input name="scopes" value="{esc(data['scope'])}"></label>
+{consent_form()}
 <input name="csrf" type="hidden" value="{esc(service.audience_oauth.form_csrf(p, request_id))}">
 <button name="approve" value="yes">Approve</button><button name="approve" value="no">Deny</button></form></body></html>''')
 
@@ -393,7 +396,8 @@ def get_request(request_id: str, request: Request, p: Principal = Depends(resolv
     with service.db.connect() as conn:
         agents = [dict(r) for r in conn.execute("SELECT agent_id,name FROM tenant_agents WHERE tenant_id=? AND disabled_at IS NULL", (p.tenant_id,))]
     return {"request_id": request_id, "client_name": data["client"]["client_name"], "redirect_host": urlsplit(data["redirect_uri"]).netloc,
-        "resource": data["resource"], "scopes": data["scope"].split(), "customer_ids": list(p.customer_ids), "agents": agents}
+        "resource": data["resource"], "scopes": data["scope"].split(), "customer_ids": list(p.customer_ids), "agents": agents,
+        "notifications": NotificationConsent().model_dump()}
 
 
 @router.post("/v1/oauth/requests/{request_id}/decision", response_model=dict)
@@ -410,7 +414,7 @@ async def form_decision(request_id: str, request: Request, p: Principal = Depend
     token = PRINCIPAL.set(p)
     try:
         result = service.audience_oauth.decide(request_id, p, ConsentDecision(approve=form.get("approve") == "yes", agent_id=form.get("agent_id") or None,
-            customer_ids=str(form.get("customer_ids", "")).split() or None, scopes=str(form.get("scopes", "")).split() or None))
+            customer_ids=str(form.get("customer_ids", "")).split() or None, scopes=str(form.get("scopes", "")).split() or None, notifications=form_consent(form)))
     finally:
         PRINCIPAL.reset(token)
     return RedirectResponse(result["redirect_url"], status_code=303)

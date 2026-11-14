@@ -3,6 +3,10 @@ from .foundation import correlation_id
 
 # Explicit inventory: adding a domain code requires choosing an authorised recovery.
 RECOVERY = {}
+RECOVERY.update(CONSENT_STALE=(False, "CONTACT_ADMIN"), STALE_EVENT=(False, "REVIEW_UPDATED_EVIDENCE"),
+                EVENT_STORM=(False, "STOP"), ALREADY_CLAIMED=(False, "STOP"),
+                NOTIFICATION_NOT_FOUND=(False, "STOP"), NOTIFICATION_TENANT_MISMATCH=(False, "STOP"),
+                NOTIFICATION_NOT_ALLOWED=(False, "STOP"))
 RECOVERY.update(AGENT_PAUSED=(False, "CONTACT_ADMIN"), FIX_NOT_FOUND=(False, "REFRESH_QUOTE"))
 for _code in ("APPROVER_REQUIRED", "IDEMPOTENCY_REQUIRED", "INVALID_CHECKPOINT", "INVALID_LIMIT",
               "INVALID_LOT_SIZE", "INVALID_PLAN_INDEX", "INVALID_SEARCH_MODE", "NEED_MISMATCH",

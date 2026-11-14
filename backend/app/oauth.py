@@ -27,6 +27,7 @@ from .oauth_audiences import require_audience, ConsentDecision as AudienceConsen
 
 AUDIENCE_SCOPES = [scope for scope in SCOPES if scope != "offline_access"]
 from .db import DomainError
+from .connection_notifications_models import NotificationConsent, consent_form, form_consent
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -111,6 +112,7 @@ class RegisteredClient(Registration):
 
 
 class ConsentDecision(BaseModel):
+    notifications: NotificationConsent = Field(default_factory=NotificationConsent)
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approve", "deny"]
     agent_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
@@ -125,6 +127,7 @@ class ConsentResult(BaseModel):
 
 
 class ConsentRequest(BaseModel):
+    notifications: NotificationConsent = Field(default_factory=NotificationConsent)
     id: str
     client_name: str
     redirect_host: str
@@ -383,7 +386,7 @@ class OAuth:
         return {"id": row["id"], "client_name": self.client(row["client_id"])["client_name"],
                 "redirect_host": urlsplit(row["redirect_uri"]).netloc, "resource": row["resource"],
                 "scopes": row["scope"].split(), "status": row["status"], "expires_at": row["expires_at"],
-                "customer_ids": sorted(customers), "agents": sorted(policy.agents)}
+                "customer_ids": sorted(customers), "agents": sorted(policy.agents), "notifications": NotificationConsent().model_dump()}
 
     def decide(self, request_id, body, principal):
         require_operator(principal)
@@ -413,6 +416,7 @@ class OAuth:
                              "customer_ids,created_at,credential_kind) VALUES(?,?,?,?,?,?,?,?)", (
                              connection_id, body.agent_id, client_kind, "oauth", digest(token_urlsafe(32)),
                              json.dumps(list(dict.fromkeys(body.customer_ids))), now().isoformat(), "oauth"))
+                self.gateway.notifications.initialize(connection_id, body.notifications)
                 family_id = "of_" + token_urlsafe(24)
                 conn.execute("INSERT INTO oauth_families VALUES(?,?,?,?,?,?,NULL)", (family_id, connection_id,
                              row["client_id"], row["resource"], " ".join(dict.fromkeys(scopes)),
@@ -714,7 +718,7 @@ async def browser_decision(request: Request):
         content += ''.join(f'<label><input type="checkbox" name="customer_ids" value="{escape(c)}">{escape(c)}</label>' for c in view["customer_ids"])
         content += '</fieldset><fieldset><legend>Scopes</legend>' + ''.join(
             f'<label><input type="checkbox" name="scopes" value="{escape(s)}" checked>{escape(s)}</label>' for s in view["scopes"])
-        content += '</fieldset><p>New agents require approval for every order. Existing mandates remain in force.</p><button name="action" value="approve">Approve</button><button name="action" value="deny">Deny</button></form>'
+        content += '</fieldset>' + consent_form() + '<p>New agents require approval for every order. Existing mandates remain in force.</p><button name="action" value="approve">Approve</button><button name="action" value="deny">Deny</button></form>'
         response = page(content)
         response.set_cookie(cookie_name, session, max_age=600, httponly=True, secure=oauth.issuer.startswith("https://"),
                             samesite="lax", path="/oauth/authorize")
@@ -727,7 +731,7 @@ async def browser_decision(request: Request):
         raise DomainError("OAUTH_CONSENT_CSRF", "Sign in again before deciding this request", 403)
     try:
         body = ConsentDecision(decision=values.get("action"), agent_id=values.get("existing_agent") or values.get("agent_id") or None,
-            customer_ids=[v for k, v in pairs if k == "customer_ids"], scopes=[v for k, v in pairs if k == "scopes"])
+            customer_ids=[v for k, v in pairs if k == "customer_ids"], scopes=[v for k, v in pairs if k == "scopes"], notifications=form_consent(values))
     except ValidationError:
         raise DomainError("VALIDATION_ERROR", "Choose a valid decision, agent id, customers and scopes", 422) from None
     result = oauth.decide(request_id, body, Principal(request.app.state.keys.operator_agent_id, operator=True))
