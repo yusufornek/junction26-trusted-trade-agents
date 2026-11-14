@@ -38,11 +38,26 @@ CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 CREATE INDEX IF NOT EXISTS audit_order ON audit(order_id);
 CREATE INDEX IF NOT EXISTS audit_quote ON audit(quote_id);
+CREATE TABLE IF NOT EXISTS mandate_credentials (digest TEXT PRIMARY KEY, jwt TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS object_mandates (
+    kind TEXT NOT NULL, object_id TEXT NOT NULL, digest TEXT NOT NULL REFERENCES mandate_credentials(digest),
+    PRIMARY KEY(kind, object_id)
+);
+CREATE TABLE IF NOT EXISTS mandate_revocations (
+    issuer TEXT NOT NULL, mandate_id TEXT NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY(issuer, mandate_id)
+);
+CREATE TABLE IF NOT EXISTS audit_anchors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, entries INTEGER NOT NULL, head_hash TEXT NOT NULL,
+    chain_id INTEGER NOT NULL, tx_hash TEXT, block_number INTEGER,
+    status TEXT NOT NULL CHECK(status IN ('sent','confirmed','failed')), explorer_url TEXT, at TEXT NOT NULL
+);
 """
 
 
 class Database:
     def __init__(self, path: Path):
+        self.on_commit = None
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
@@ -65,16 +80,23 @@ class Database:
         conn = sqlite3.connect(self.path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        committed = False
         try:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
+            committed = True
         except BaseException:
             conn.rollback()
             raise
         finally:
             conn.close()
+        if committed and write and self.on_commit is not None:
+            try:
+                self.on_commit()
+            except Exception:
+                pass  # An optional post-commit worker must never fail a committed business call.
 
 
 class DomainError(Exception):

@@ -354,7 +354,7 @@ Old stored lookups without preferences/plans remain readable, including through 
 This prototype uses operator-issued shared Bearer secrets and one operator role.
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
 Signed quotes/receipts, hash chaining with external checkpoints and UBL 2.1 exports are implemented below.
-Verifiable-credential mandates, Peppol network delivery/certification, multiple approver roles, drift detection,
+Peppol network delivery/certification, multiple approver roles, drift detection,
 automatic re-planning after commitment, recipe-aware substitutions, payments, deployment and separate buyer-agent code are deferred.
 The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}` with optional `data` for domain evidence.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.
@@ -549,3 +549,160 @@ head. Raw audit entries remain operator-only under spec 19. A chain in the same
 database cannot prove integrity against an attacker who rewrites the whole
 database without an independently held checkpoint. Signed heads provide that
 checkpoint, not an external timestamp or proof of upstream truth.
+
+
+## Buyer-issued verifiable mandates (spec 12)
+
+The buyer signs an Ed25519 W3C VC 2.0 JWT (`typ: vc+jwt`); the authenticated
+agent presents it with its existing Bearer credential. `sub` and
+`vc.credentialSubject.agent_id` must equal that credential's agent ID.
+The issuer grants customer scope, per-order and rolling 24-hour EUR limits,
+with optional catalog category codes. An agent needs no policy agent row when
+it presents a valid buyer mandate. Existing policy rows can only tighten its
+customer scope and limits; the global per-order ceiling still applies.
+Calls without a buyer VC retain the existing policy-row behavior.
+
+From `backend/`, issue a mandate (first use generates the private issuer key
+under `var/buyer-keys/`, mode 0600; demo reset leaves this folder alone):
+
+```sh
+.venv/bin/python scripts/issue_mandate.py --customer 1 --agent hotel-chain-agent --order-limit 1500 --daily-limit 5000 --days 1 --category 10400 --out /tmp/hotel-mandate.jwt
+```
+
+The command prints the issuer ID, public JWK and mandate `jti`, never the
+private key. Keep its stdout as onboarding metadata. For isolated runs use
+`--keys-dir /tmp/buyer-keys`; repeat `--category` to allow several categories.
+Buyer credentials are reusable authority documents; store their files securely.
+The operator registers the printed issuer and public JWK in the policy:
+
+```yaml
+customers:
+  "1":
+    mandate_issuers:
+      urn:buyer:hotel-chain:
+        - kid: <printed kid>
+          kty: OKP
+          crv: Ed25519
+          alg: EdDSA
+          use: sig
+          x: <printed public x>
+```
+
+Use authenticated `GET /v1/policy`, preserve its other fields, add this customer
+section, then `PUT /v1/policy` with `{policy: ..., updated_by: "Buyer onboarding"}`
+using the **operator** Bearer token. This is audited as `POLICY_UPDATED`.
+Public keys alone belong in policy; private keys stay with the buyer.
+
+Present the file over stdio:
+
+```sh
+.venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent --mandate /tmp/hotel-mandate.jwt
+```
+
+For REST, and MCP HTTP on every request, send both headers:
+`Authorization: Bearer <agent secret>` and `Agent-Mandate: <JWT file contents>`.
+For example (environment `AGENT_SECRET` contains that agent's credential):
+
+```python
+import os
+from pathlib import Path
+import httpx
+headers = {"Authorization": "Bearer " + os.environ["AGENT_SECRET"],
+           "Agent-Mandate": Path("/tmp/hotel-mandate.jwt").read_text().strip()}
+# Reuse these headers for POST /v1/offers, /v1/quotes and /v1/orders.
+# Pass lookup_id as need_ref when quoting; send Idempotency-Key when ordering.
+with httpx.Client(base_url="http://localhost:8000", headers=headers) as client:
+    print(client.get("/v1/orders").json())
+```
+
+Revoke the mandate using the `jti` printed at issuance, with the same issuer key:
+
+```sh
+.venv/bin/python scripts/issue_mandate.py --revoke <issued-jti> --out /tmp/hotel-revocation.jwt
+```
+
+Submit it to the gateway with an authenticated credential (the signed buyer
+revocation is the authority, not the submitting agent's identity):
+
+```python
+from pathlib import Path
+import httpx
+response = httpx.post("http://localhost:8000/v1/mandates/revocations",
+    headers=headers, json={"jwt": Path("/tmp/hotel-revocation.jwt").read_text().strip()})
+response.raise_for_status()
+```
+
+An invalid revocation returns 422 `REVOCATION_INVALID`. The next procurement
+call with that mandate returns 403 `MANDATE_INVALID`, naming `revoked`.
+Other named checks include `format`, `signature`, `issuer`, `nbf`, `exp`,
+`sub`, `customer`, `category`, and `binding`. Invalid calls are audited.
+Lookup filters out categories outside the mandate before live calls; explicit
+quote/order lines must all be allowed. Quote/order records bind the original
+JWT privately, so omitting a later header or swapping the mandate cannot bypass
+revocation. Human approval revalidates the **placing agent's stored mandate**,
+including expiry, issuer, customer and category, while the approver must still
+be an authenticated operator. A revoked pending order can be rejected.
+Objects and successful audit entries expose `mandate {id, issuer, limits,
+valid_until}` with effective limits; stats `agents_seen` includes `mandate_id`.
+The JWT itself is not returned in objects or audit entries. Holder binding uses
+the existing agent secret; key-bound proof of possession and OAuth remain follow-ups.
+
+## Public audit anchoring (spec 21)
+
+Anchoring is off unless all four required environment variables below are set.
+`Settings.from_env()` loads them from repo-root `.env.local` without overriding
+the process environment. Keep the wallet key only in that local file/environment;
+`.env.example` lists names with empty values. No RPC calls are made while off.
+
+| Variable | Polygon mainnet | Amoy testnet |
+|---|---|---|
+| `ANCHOR_RPC_URL` | `https://polygon-rpc.com` or your provider | `https://rpc-amoy.polygon.technology` or your provider |
+| `ANCHOR_CHAIN_ID` | `137` | `80002` |
+| `ANCHOR_PRIVATE_KEY` | Your funded anchoring wallet key | Your test wallet key |
+| `ANCHOR_EXPLORER_TX_URL` | `https://polygonscan.com/tx/` | `https://amoy.polygonscan.com/tx/` |
+| `ANCHOR_EVERY_N_ENTRIES` (optional) | Positive integer, e.g. `100` | Positive integer, e.g. `10` |
+
+These are example public RPC URLs; no live endpoint was contacted during implementation.
+The RPC chain ID must match configuration. The wallet signs locally using
+`eth-account`; httpx sends plain JSON-RPC. A type-2 EIP-1559 transaction sends
+zero value **to the same wallet** with data
+`VAIMO-AUDIT-1:<entries>:<head_hash>`. Only the count and hash leave the gateway;
+no business data or private key is sent. A funded wallet pays transaction gas.
+The public wallet address appears in `/health`'s `anchoring` section when enabled.
+
+From `backend/`, anchor once:
+
+```sh
+.venv/bin/python scripts/anchor_audit.py
+# Isolated database:
+.venv/bin/python scripts/anchor_audit.py --db /tmp/demo/app.db
+```
+
+The command prints `sent:` or `confirmed:` and the explorer link. Without
+configuration it exits 1 and names the missing variables. Run again to poll a
+sent transaction; it is not resubmitted. Confirmed receipts update `audit_anchors`
+and append exactly one `AUDIT_ANCHORED` event. RPC errors produce sanitized
+messages and a failed row; retry preserves a previously broadcast transaction
+hash. `GET /v1/audit/anchors` lists checkpoints for authenticated callers.
+
+With `ANCHOR_EVERY_N_ENTRIES` set, a post-commit background worker anchors after
+N new audit entries. RPC work runs outside the request database transaction;
+failures do not fail business calls and the next new-entry trigger retries.
+`AUDIT_ANCHORED` entries do not recursively trigger anchors. Pending receipts
+are checked on a subsequent trigger or CLI invocation. Configuration and worker
+state are process-local; a file lock serializes CLI/worker submissions across
+processes sharing the database.
+
+Use an authenticated client to call `GET /v1/audit/verify?anchor=latest` or
+`?anchor=0x<transaction hash>`. Verification reads the chain transaction and
+successful receipt, validates its self-addressed payload, recomputes the local
+prefix, and returns `anchor_match` plus `anchor_block_time`. Later appended
+entries do not invalidate an earlier anchor; edited, deleted or rehashed old
+history fails the checkpoint comparison. Missing, malformed or unavailable chain
+evidence returns `anchor_match: false`. An anchor is an external timestamped
+checkpoint, not proof of the upstream business facts. Chain reorganization and
+confirmation-depth policies are production follow-ups.
+
+Tests use temporary DB/key folders and respx JSON-RPC mocks, with no external
+network. `test_ac_6_local_anvil_real_transaction_and_verification` uses loopback
+Anvil when it is on PATH and is otherwise skipped.

@@ -10,6 +10,13 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class MandateRecord(Model):
+    id: str
+    issuer: str
+    limits: dict[str, float]
+    valid_until: datetime
+
+
 class Quantity(Model):
     value: float = Field(gt=0, le=1_000_000, strict=True, description="Requested positive quantity, at most 1,000,000.")
     unit: Literal["L", "KG", "SALES_UNIT"] = Field(description="Litres, kilograms or product sales units.")
@@ -213,6 +220,7 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     lookup_id: str = Field(description="Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.")
     need: NeedSpec
@@ -261,6 +269,7 @@ class QuoteRequest(RequestScope):
 
 
 class Quote(Model):
+    mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     signature: str | None = Field(default=None, description="Detached RFC 7515 EdDSA JWS over RFC 8785 quote_payload (decimal-string units and money, line provenance and price_commitment). kid is in the protected header; public keys at /.well-known/jwks.json. Legacy unsigned quotes cannot be placed.")
     price_commitment: Literal["gateway-locked"] = Field(default="gateway-locked", description="Gateway holds the fixed price until expires_at; included in the signature.")
@@ -285,6 +294,7 @@ class OrderRequest(Model):
 
 
 class Order(Model):
+    mandate: MandateRecord | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     customer_id: str | None = None
     commitment: Literal["gateway-simulated"] = Field(default="gateway-simulated", description="Recorded locally; no supplier order transmitted. Included in the signed receipt.")
@@ -396,6 +406,23 @@ class AuditVerification(Model):
     head_hash: str
     first_break: int | None = None
     checkpoint_match: bool | None = None
+    anchor_match: bool | None = Field(default=None, exclude_if=lambda v: v is None)
+    anchor_block_time: datetime | None = Field(default=None, exclude_if=lambda v: v is None)
+
+
+class AuditAnchor(Model):
+    entries: int
+    head_hash: str
+    chain_id: int
+    tx_hash: str | None = None
+    block_number: int | None = None
+    status: Literal["sent", "confirmed", "failed"]
+    explorer_url: str | None = None
+    at: datetime
+
+
+class RevocationRequest(Model):
+    jwt: str = Field(min_length=1, description="Buyer-signed EdDSA JWT containing iss, jti_revoked and iat.")
 
 
 class ErrorResponse(Model):
@@ -408,6 +435,7 @@ class Health(Model):
     status: str
     catalog_rows: int
     coverage: dict[str, dict[str, int]] = Field(default_factory=dict, description="Catalog build coverage: filled and empty counts per field.")
+    anchoring: dict | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class ApprovalPolicy(Model):
@@ -454,7 +482,17 @@ class AgentMandate(Model):
         return self
 
 
+class BuyerJWK(Model):
+    kty: Literal["OKP"] = "OKP"
+    crv: Literal["Ed25519"] = "Ed25519"
+    x: str
+    kid: str
+    alg: Literal["EdDSA"] = "EdDSA"
+    use: Literal["sig"] = "sig"
+
+
 class CustomerConstraints(Model):
+    mandate_issuers: dict[str, list[BuyerJWK]] = Field(default_factory=dict, description="Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator onboarding only.")
     required_claims: list[str] = Field(default_factory=list)
     exclude_allergens: list[str] = Field(default_factory=list)
     note: str = ""
@@ -545,6 +583,7 @@ class AgentStats(Model):
     actor: str = Field(description="Distinct agent audit actor, including the agent: prefix.")
     order_count: int = Field(description="Orders created by this agent in the window, regardless of current status.")
     registered: bool = Field(description="Whether the agent currently has a mandate in the effective policy.")
+    mandate_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class Stats(Model):

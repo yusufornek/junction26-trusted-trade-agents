@@ -112,16 +112,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /v1/offers:
+  /v1/mandates/revocations:
     post:
-      summary: Rank live offers and substitutes; propose fulfilment plans with caller
-        policy previews
-      operationId: offers_v1_offers_post
+      summary: Record a buyer-signed mandate revocation
+      operationId: revoke_mandate_v1_mandates_revocations_post
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/NeedSpec'
+              $ref: '#/components/schemas/RevocationRequest'
         required: true
       responses:
         '200':
@@ -129,7 +128,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LookupResult'
+                additionalProperties:
+                  anyOf:
+                  - type: string
+                  - items:
+                      type: string
+                    type: array
+                type: object
+                title: Response Revoke Mandate V1 Mandates Revocations Post
         '401':
           description: Unauthorized
           content:
@@ -174,6 +180,81 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
       security:
       - BearerAuth: []
+  /v1/offers:
+    post:
+      summary: Rank live offers and substitutes; propose fulfilment plans with caller
+        policy previews
+      operationId: offers_v1_offers_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated
+            agent ID.
+          title: Agent-Mandate
+        description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated agent
+          ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NeedSpec'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LookupResult'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+        '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
   /v1/lookups/{lookup_id}:
     get:
       summary: Retrieve stored alternatives behind a quote's need_ref
@@ -545,12 +626,27 @@ paths:
       description: Lookup, quote and order require a customer mandate and enforce
         agent ownership.
       operationId: create_quote_v1_quotes_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated
+            agent ID.
+          title: Agent-Mandate
+        description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated agent
+          ID.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/QuoteRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
@@ -559,49 +655,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Quote'
         '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Conflict
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '502':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
           description: Bad Gateway
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: Service Unavailable
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-      security:
-      - BearerAuth: []
+          description: Service Unavailable
   /v1/quotes/{id}:
     get:
       summary: Get Quote
@@ -683,6 +777,18 @@ paths:
           description: 'Retry key: same quote and agent returns the same order.'
           title: Idempotency-Key
         description: 'Retry key: same quote and agent returns the same order.'
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated
+            agent ID.
+          title: Agent-Mandate
+        description: Buyer-signed EdDSA VC-JWT; sub must equal the authenticated agent
+          ID.
       requestBody:
         required: true
         content:
@@ -1129,8 +1235,9 @@ paths:
         stock and policy; changed decision evidence stays pending at a new revision
         and returns 409 EVIDENCE_CHANGED with data {evidence_revision, changes}. Review
         the refreshed order before approving again. Unchanged evidence confirms. A
-        revoked mandate returns 403 AGENT_NOT_REGISTERED with rule hits in data; the
-        order remains pending and can be rejected.
+        revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate
+        returns 403 AGENT_NOT_REGISTERED with rule hits in data; the order remains
+        pending and can be rejected.
       operationId: approve_v1_approvals__order_id__approve_post
       security:
       - BearerAuth: []
@@ -1395,6 +1502,64 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
       security:
       - BearerAuth: []
+  /v1/audit/anchors:
+    get:
+      summary: Public chain checkpoints; hashes and counts only
+      operationId: audit_anchors_v1_audit_anchors_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/AuditAnchor'
+                type: array
+                title: Response Audit Anchors V1 Audit Anchors Get
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bad Gateway
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/audit/verify:
     get:
       summary: Verify the gateway chain and optional external checkpoint; hashes/counts
@@ -1421,6 +1586,15 @@ paths:
             pattern: ^[0-9a-f]{64}$
           - type: 'null'
           title: Checkpoint Hash
+      - name: anchor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^(latest|0x[0-9a-fA-F]{64})$
+          - type: 'null'
+          title: Anchor
       responses:
         '200':
           description: Successful Response
@@ -1522,6 +1696,11 @@ components:
           title: Registered
           description: Whether the agent currently has a mandate in the effective
             policy.
+        mandate_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mandate Id
       additionalProperties: false
       type: object
       required:
@@ -1599,6 +1778,52 @@ components:
       required:
       - approver
       title: ApprovalRequest
+    AuditAnchor:
+      properties:
+        entries:
+          type: integer
+          title: Entries
+        head_hash:
+          type: string
+          title: Head Hash
+        chain_id:
+          type: integer
+          title: Chain Id
+        tx_hash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tx Hash
+        block_number:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Block Number
+        status:
+          type: string
+          enum:
+          - sent
+          - confirmed
+          - failed
+          title: Status
+        explorer_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Explorer Url
+        at:
+          type: string
+          format: date-time
+          title: At
+      additionalProperties: false
+      type: object
+      required:
+      - entries
+      - head_hash
+      - chain_id
+      - status
+      - at
+      title: AuditAnchor
     AuditEntry:
       properties:
         id:
@@ -1696,6 +1921,17 @@ components:
           - type: boolean
           - type: 'null'
           title: Checkpoint Match
+        anchor_match:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Anchor Match
+        anchor_block_time:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Anchor Block Time
       additionalProperties: false
       type: object
       required:
@@ -1762,6 +1998,40 @@ components:
       - price
       - availability
       title: AverageLiveCalls
+    BuyerJWK:
+      properties:
+        kty:
+          type: string
+          const: OKP
+          title: Kty
+          default: OKP
+        crv:
+          type: string
+          const: Ed25519
+          title: Crv
+          default: Ed25519
+        x:
+          type: string
+          title: X
+        kid:
+          type: string
+          title: Kid
+        alg:
+          type: string
+          const: EdDSA
+          title: Alg
+          default: EdDSA
+        use:
+          type: string
+          const: sig
+          title: Use
+          default: sig
+      additionalProperties: false
+      type: object
+      required:
+      - x
+      - kid
+      title: BuyerJWK
     CancelRequest:
       properties:
         cancelled_by:
@@ -1816,6 +2086,15 @@ components:
       title: CoveredQuantity
     CustomerConstraints:
       properties:
+        mandate_issuers:
+          additionalProperties:
+            items:
+              $ref: '#/components/schemas/BuyerJWK'
+            type: array
+          type: object
+          title: Mandate Issuers
+          description: Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator
+            onboarding only.
         required_claims:
           items:
             type: string
@@ -1935,6 +2214,12 @@ components:
           type: object
           title: Coverage
           description: 'Catalog build coverage: filled and empty counts per field.'
+        anchoring:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Anchoring
       additionalProperties: false
       type: object
       required:
@@ -1986,6 +2271,10 @@ components:
       title: LiveCalls
     LookupResult:
       properties:
+        mandate:
+          anyOf:
+          - $ref: '#/components/schemas/MandateRecord'
+          - type: 'null'
         agent_id:
           anyOf:
           - type: string
@@ -2076,6 +2365,31 @@ components:
       - live_calls
       - decision_calls
       title: LookupResult
+    MandateRecord:
+      properties:
+        id:
+          type: string
+          title: Id
+        issuer:
+          type: string
+          title: Issuer
+        limits:
+          additionalProperties:
+            type: number
+          type: object
+          title: Limits
+        valid_until:
+          type: string
+          format: date-time
+          title: Valid Until
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - issuer
+      - limits
+      - valid_until
+      title: MandateRecord
     NeedSpec:
       properties:
         customer_id:
@@ -2318,6 +2632,10 @@ components:
       title: OfferCard
     Order:
       properties:
+        mandate:
+          anyOf:
+          - $ref: '#/components/schemas/MandateRecord'
+          - type: 'null'
         id:
           type: string
           title: Id
@@ -2967,6 +3285,10 @@ components:
       title: Quantity
     Quote:
       properties:
+        mandate:
+          anyOf:
+          - $ref: '#/components/schemas/MandateRecord'
+          - type: 'null'
         id:
           type: string
           title: Id
@@ -3193,6 +3515,18 @@ components:
       additionalProperties: false
       type: object
       title: Retrieval
+    RevocationRequest:
+      properties:
+        jwt:
+          type: string
+          minLength: 1
+          title: Jwt
+          description: Buyer-signed EdDSA JWT containing iss, jti_revoked and iat.
+      additionalProperties: false
+      type: object
+      required:
+      - jwt
+      title: RevocationRequest
     RuleCount:
       properties:
         rule:

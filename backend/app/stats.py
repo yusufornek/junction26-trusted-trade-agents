@@ -45,6 +45,12 @@ def read_stats(db, since=None, *, registered_agents=()):
         rules.update(hit["rule"] for hit in event.data.get("rule_hits", []))
 
     count = len(lookup_events)
+    mandate_ids = {}
+    for event in events:
+        if event.data.get("mandate"):
+            identity = event.actor if event.actor.startswith("agent:") else None
+            if identity:
+                mandate_ids[identity] = event.data["mandate"]["id"]
     agents = sorted({event.actor for event in events if event.actor.startswith("agent:")})
     agent_orders = Counter(f"agent:{order.agent_id}" for order in orders)
     spend = sum((Decimal(str(order.total)) for order in orders
@@ -63,5 +69,6 @@ def read_stats(db, since=None, *, registered_agents=()):
         top_warning_codes=[{"code": code, "count": n} for code, n in sorted(warnings.items(), key=lambda x: (-x[1], x[0]))[:5]],
         top_rule_hits=[{"rule": rule, "count": n} for rule, n in sorted(rules.items(), key=lambda x: (-x[1], x[0]))[:5]],
         agents_seen=[{"actor": actor, "order_count": agent_orders[actor],
-                      "registered": actor.removeprefix("agent:") in registered_agents} for actor in agents],
+                      "registered": actor.removeprefix("agent:") in registered_agents or actor in mandate_ids,
+                      **({"mandate_id": mandate_ids[actor]} if actor in mandate_ids else {})} for actor in agents],
     )

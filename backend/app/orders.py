@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from cryptography.exceptions import InvalidSignature
 
 from . import audit
+from .mandates import evidence as mandate_evidence
 from .auth import check_owner
 from .catalog import hard_violations
 from .db import DomainError
@@ -45,9 +46,10 @@ def evidence_changes(before, after):
 
 
 class Orders:
-    def __init__(self, db, catalog, valio, policy, signing):
+    def __init__(self, db, catalog, valio, policy, signing, mandates):
         self.db, self.catalog, self.valio, self.policy = db, catalog, valio, policy
         self.signing = signing
+        self.mandates = mandates
 
     def _sign_receipt(self, order, quote, kind):
         order.customer_id = quote.customer_id
@@ -133,19 +135,22 @@ class Orders:
                     audit.append(conn, "system", "ORDER_EXPIRED", "Approval deadline passed; local reservations released.",
                                  order_id=order.id, quote_id=order.quote_id)
 
-    def create_quote(self, request, agent_id="external", *, operator=False):
+    def create_quote(self, request, agent_id="external", *, operator=False, mandate=None):
         self.expire()
         actor = f"agent:{agent_id}"
         return self._run("CREATE_QUOTE", actor, request.model_dump(mode="json"),
-                         lambda counter: self._create_quote(request, actor, counter, operator))
+                         lambda counter: self._create_quote(request, actor, counter, operator, mandate))
 
-    def _create_quote(self, request, actor, counter, operator=False):
+    def _create_quote(self, request, actor, counter, operator=False, mandate=None):
         agent_id = actor.removeprefix("agent:")
-        if agent_id not in self.policy.get().agents:
-            self.policy.check_customer(agent_id, request.customer_id)
-        if not request.need_ref:
-            self.policy.check_customer(agent_id, request.customer_id)
-            raise DomainError("NEED_REF_REQUIRED", "Explicit lines require need_ref to a stored request", 422)
+        with self.db.connect() as conn:
+            if mandate is not None:
+                self.mandates.authorize(conn, mandate, agent_id, request.customer_id)
+            if mandate is None and self.mandates.stored(conn, "lookup", request.need_ref) is None and agent_id not in self.policy.get().agents:
+                self.policy.check_customer(agent_id, request.customer_id)
+            if not request.need_ref:
+                self.mandates.authorize(conn, mandate, agent_id, request.customer_id)
+                raise DomainError("NEED_REF_REQUIRED", "Explicit lines require need_ref to a stored request", 422)
         lookup = None
         if request.need_ref:
             with self.db.connect() as conn:
@@ -154,7 +159,9 @@ class Orders:
                 raise DomainError("NEED_NOT_FOUND", "need_ref must be a lookup_id returned by this gateway", 404)
             lookup = LookupResult.model_validate_json(row["data"], context={"stored": True})
             check_owner(lookup, None if operator else agent_id, "LOOKUP_NOT_FOUND")
-            self.policy.check_customer(agent_id, request.customer_id)
+            with self.db.connect() as conn:
+                policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id,
+                    bound=("lookup", request.need_ref))
             if lookup.need.customer_id != request.customer_id or lookup.need.deliver_by != request.deliver_by:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
         plan = None
@@ -166,6 +173,8 @@ class Orders:
             requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units)
                                for line in plan.lines]
         products = {line.product_id: self.catalog.get(line.product_id) for line in requested_lines}
+        with self.db.connect() as conn:
+            self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products)
         for line in requested_lines:
             p = products[line.product_id]
             step = Decimal(str(p.allowed_lot_size if p.sales_unit == "KG" else 1))
@@ -183,7 +192,7 @@ class Orders:
                      for o in all_offers if o.fit is not None}
         with self.db.connect(write=True) as conn:
             # Recheck after taking the same lock used by policy updates.
-            self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
+            policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products)
             need, effective = self.policy.effective_need(lookup.need)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in requested_lines:
@@ -200,7 +209,7 @@ class Orders:
                     expiries.append(offer.availability.closing_time)
                 violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens, effective))
                 lines.append(offer)
-            quote = Quote(id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
+            quote = Quote(mandate=record, id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
                           need_ref=request.need_ref, plan_ref=request.plan_ref,
                           warnings=[w for w in plan.warnings if w.code == "PARTIAL_STOCK"] if plan else [],
                           status="OPEN", created_at=now, expires_at=min(expiries),
@@ -209,36 +218,43 @@ class Orders:
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
             quote.signature = self.signing.sign(quote_payload(quote))
+            self.mandates.bind(conn, "quote", quote.id, mandate)
             conn.execute("INSERT INTO quotes VALUES(?,?,?,?)", (quote.id, quote.status, quote.expires_at.isoformat(), quote.model_dump_json()))
             audit.append(conn, actor, "CREATE_QUOTE", f"Locked {len(lines)} fixed-price lines for {quote.total:.2f} EUR.",
                          quote_id=quote.id, data={"inputs": request.model_dump(mode="json"),
-                         "live_calls": counter.live().model_dump(), "fit_scores": {o.product_id: o.fit for o in lines},
+                         "live_calls": counter.live().model_dump(), **mandate_evidence(record), "fit_scores": {o.product_id: o.fit for o in lines},
                          "hard_constraint_violations": violations, "warnings": {o.product_id: [w.code for w in o.warnings] for o in lines}})
         return quote
 
-    def place_order(self, quote_id, idempotency_key, agent_id="external", *, operator=False):
+    def place_order(self, quote_id, idempotency_key, agent_id="external", *, operator=False, mandate=None):
         if not idempotency_key or not idempotency_key.strip():
             raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
         self.expire()
         inputs = {"quote_id": quote_id, "idempotency_key": idempotency_key}
         return self._run("PLACE_ORDER", f"agent:{agent_id}", inputs,
-                         lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator))
+                         lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator, mandate))
 
-    def _place_order(self, quote_id, key, agent_id, counter, operator=False):
+    def _place_order(self, quote_id, key, agent_id, counter, operator=False, mandate=None):
         # Serializes idempotency, reservation reads and writes across REST/MCP processes.
         with self.db.connect(write=True) as conn:
             policy = self.policy.get()
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=?", (key,)).fetchone()
-            if not existing and agent_id not in policy.agents:
+            stored_mandate = self.mandates.stored(conn, "quote", quote_id)
+            if not existing and mandate is None and stored_mandate is None and agent_id not in policy.agents:
                 raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
             quote = self._verified_quote(conn, quote_id, None if operator else agent_id)
+            if mandate is not None or stored_mandate is not None:
+                policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
+                    products=[o.product_id for o in quote.lines], bound=("quote", quote_id), policy=policy)
+            else:
+                record = None
             if existing:
                 order = Order.model_validate_json(existing["data"])
                 if order.quote_id != quote_id or order.agent_id != agent_id:
                     raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another quote or agent")
                 audit.append(conn, f"agent:{agent_id}", "ORDER_REPLAY", "Idempotent retry returned the existing order.",
                              order_id=order.id, quote_id=order.quote_id,
-                             data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump()})
+                             data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump(), **mandate_evidence(order.mandate)})
                 return order
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
@@ -252,21 +268,25 @@ class Orders:
             lines = self._refresh_stock(conn, quote.lines, quote.deliver_by, stock)
             # Re-read catalog hard facts as well as preserving original quote violations.
             now = audit.utcnow()
+            if mandate is not None:
+                policy, record, _ = self.mandates.authorize(conn, mandate, agent_id, quote.customer_id,
+                    products=[o.product_id for o in lines], policy=policy)
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
                                                 agent_id=agent_id, customer_id=quote.customer_id,
                                                 policy=policy, warnings=quote.warnings)
-            order = Order(id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
+            order = Order(mandate=record, id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
                           policy=result, live_calls=counter.live())
             self._sign_receipt(order, quote, "operator" if operator else "agent")
+            self.mandates.bind(conn, "order", order.id, mandate)
             conn.execute("INSERT INTO orders VALUES(?,?,?,?,?)", (order.id, quote.id, key, order.status, order.model_dump_json()))
             quote.status = "ACCEPTED"
             self._save_quote(conn, quote)
             self._reserve(conn, order)
             audit.append(conn, f"agent:{agent_id}", "PLACE_ORDER", f"Order {order.status} at the locked total of {order.total:.2f} EUR.",
                          order_id=order.id, quote_id=quote.id, data={"inputs": {"idempotency_key": key},
-                         "outcome": order.status,
+                         "outcome": order.status, **mandate_evidence(record),
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
                          "live_calls": counter.live().model_dump()})
             return order
@@ -388,16 +408,24 @@ class Orders:
                                   data={"evidence_revision": order.evidence_revision, "changes": []})
             quote = self._quote(conn, order.quote_id)
             if approve:
+                policy, record = self.policy.get(), None
+                if self.mandates.stored(conn, "order", order_id) is not None:
+                    policy, record, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
+                        products=[o.product_id for o in order.lines], bound=("order", order_id))
                 previous = order.model_copy(deep=True)
+                order.mandate = record
                 stock = self.valio.fetch("availability", quote.customer_id, quote.deliver_by,
                                          [o.product_id for o in order.lines], counter, fresh=True)
                 order.lines = self._refresh_stock(conn, order.lines, quote.deliver_by, stock, order.id)
                 # Human review may accept delivery warnings, but never hard violations or unverifiable stock.
                 # Evaluate as the placing agent so the audit keeps the mandate rules the human signs off
                 # (per-order and daily limits); only REJECTED blocks an approval.
+                if order.mandate is not None:
+                    policy, order.mandate, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
+                        products=[o.product_id for o in order.lines], bound=("order", order_id))
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, customer_id=quote.customer_id,
-                                                        warnings=quote.warnings)
+                                                        warnings=quote.warnings, policy=policy)
                 if evaluation.outcome == "REJECTED":
                     if any(hit.rule == "unregistered_agent" for hit in evaluation.hits):
                         raise DomainError("AGENT_NOT_REGISTERED", "Approval requires a mandate for the placing agent", 403,
@@ -420,7 +448,7 @@ class Orders:
             self._save_order(conn, order)
             self._reserve(conn, order)
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
-                    "evidence_revision": order.evidence_revision,
+                    "evidence_revision": order.evidence_revision, **mandate_evidence(order.mandate),
                     "rule_hits": [h.model_dump() for h in order.policy.hits],
                     "fit_scores": {o.product_id: o.fit for o in order.lines},
                     "warnings": {o.product_id: [w.code for w in o.warnings] for o in order.lines},

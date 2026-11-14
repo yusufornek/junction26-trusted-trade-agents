@@ -17,7 +17,7 @@ from .db import DomainError
 from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, ErrorResponse, Health,
                      LookupResult, NeedSpec, Order, OrderRequest, OrderTimeline, Product, Quote, QuoteRequest)
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
-from .models import JWKSet, AuditHead, AuditVerification
+from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
 from .service import Gateway
 from .stats import read_stats
 
@@ -93,17 +93,24 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def health(request: Request):
         count = svc(request).catalog.count()
         return Health(status="ok" if count else "catalog_empty", catalog_rows=count,
-                      coverage=svc(request).catalog.metadata("coverage"))
+                      coverage=svc(request).catalog.metadata("coverage"), anchoring=svc(request).anchoring.health())
 
     @app.get("/.well-known/jwks.json", response_model=JWKSet,
              summary="Public Ed25519 signing keys for detached quote, receipt and audit-head JWS")
     def jwks(request: Request):
         return svc(request).signing.jwks()
 
+    def presented_mandate(agent_mandate: Annotated[str | None, Header(description="Buyer-signed EdDSA VC-JWT; sub must equal the authenticated agent ID.")] = None):
+        return agent_mandate
+
+    @app.post("/v1/mandates/revocations", response_model=dict[str, str | list[str]], summary="Record a buyer-signed mandate revocation")
+    def revoke_mandate(body: RevocationRequest, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).mandates.revoke(body.jwt, "human:operator" if principal.operator else f"agent:{principal.agent_id}")
+
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
-    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}")
+    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
+        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate)
 
     @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
     def get_lookup(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -133,8 +140,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
               description="Lookup, quote and order require a customer mandate and enforce agent ownership.")
-    def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator)
+    def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
+        return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate)
 
     @app.get("/v1/quotes/{id}", response_model=Quote)
     def get_quote(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -146,8 +153,8 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "Registered agents are subject to policy and may require human approval.")
     def place_order(body: OrderRequest, request: Request,
                     idempotency_key: Annotated[str, Header(min_length=1, description="Retry key: same quote and agent returns the same order.")],
-                    principal: Principal = Depends(resolve_principal)):
-        return svc(request).orders.place_order(body.quote_id, idempotency_key, principal.agent_id, operator=principal.operator)
+                    principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
+        return svc(request).orders.place_order(body.quote_id, idempotency_key, principal.agent_id, operator=principal.operator, mandate=mandate)
 
     @app.get("/v1/orders", response_model=list[Order])
     def orders(request: Request, principal: Principal = Depends(resolve_principal)):
@@ -188,7 +195,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                           "returns 409 EVIDENCE_CHANGED without upstream calls. Refresh stock and policy; changed decision "
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
-                          "Unchanged evidence confirms. A revoked mandate returns 403 AGENT_NOT_REGISTERED "
+                          "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
                           "with rule hits in data; the order remains pending and can be rejected.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_operator)):
         return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision, actor="human:operator")
@@ -206,14 +213,22 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def audit_head(request: Request, principal: Principal = Depends(resolve_principal)):
         return audit_log.head(svc(request).db, svc(request).signing)
 
+    @app.get("/v1/audit/anchors", response_model=list[AuditAnchor], summary="Public chain checkpoints; hashes and counts only")
+    def audit_anchors(request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).anchoring.list()
+
     @app.get("/v1/audit/verify", response_model=AuditVerification,
              summary="Verify the gateway chain and optional external checkpoint; hashes/counts only")
     def audit_verify(request: Request, checkpoint_entries: int | None = Query(default=None, ge=0),
                      checkpoint_hash: str | None = Query(default=None, pattern="^[0-9a-f]{64}$"),
+                     anchor: str | None = Query(default=None, pattern="^(latest|0x[0-9a-fA-F]{64})$"),
                      principal: Principal = Depends(resolve_principal)):
         if (checkpoint_entries is None) != (checkpoint_hash is None):
             raise DomainError("INVALID_CHECKPOINT", "Supply checkpoint_entries and checkpoint_hash together", 422)
-        return audit_log.verify(svc(request).db, checkpoint_entries, checkpoint_hash)
+        result = audit_log.verify(svc(request).db, checkpoint_entries, checkpoint_hash)
+        if anchor is not None:
+            result.update(svc(request).anchoring.verify(anchor))
+        return result
 
     return app
 

@@ -1,4 +1,6 @@
 import argparse
+from contextvars import ContextVar
+from pathlib import Path
 import json
 from typing import Literal
 
@@ -10,6 +12,14 @@ from .db import DomainError
 from .auth import Credentials, MCPBearerMiddleware
 from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
+
+PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
+
+MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+                "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
+                "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
+                "policy only tightens its per-order and daily limits. Quote/order bind and expose mandate metadata; "
+                "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
@@ -36,6 +46,14 @@ class GatewayMCPServer(MCPServer):
         return app
 
     async def call_tool(self, name, arguments, context=None):
+        mandate = self.mandate
+        if context is not None:
+            try:
+                if context.headers is not None:
+                    mandate = context.headers.get("agent-mandate")
+            except ValueError:
+                pass
+        token = PRESENTED_MANDATE.set(mandate)
         try:
             return await super().call_tool(name, arguments, context)
         except (ToolError, DomainError, ValidationError) as error:
@@ -50,13 +68,16 @@ class GatewayMCPServer(MCPServer):
                     raise ToolError(json.dumps({"code": code, "message": message})) from error
                 cause = cause.__cause__
             raise
+        finally:
+            PRESENTED_MANDATE.reset(token)
 
 
-def create_server(gateway, agent_id="mcp-agent"):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     # The agent identity is fixed when the server is launched for that agent, not self-declared per call.
     server = GatewayMCPServer("Valio Aimo Trusted Trade Agents", instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
+        "Buyer VC-JWT: present --mandate FILE on stdio or Agent-Mandate on each HTTP request, with the agent Bearer credential. EdDSA, issuer, validity, revocation, sub/customer/category are verified at every step; errors are MANDATE_INVALID with the check. Policy can only tighten buyer limits. Orders and audit show mandate metadata; revoke via signed REST POST /v1/mandates/revocations. "
         "Lookup, quote and order require a mandate; unregistered agents receive AGENT_NOT_REGISTERED. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
         "Previews include mandate and daily limits; stock and policy may change, so placement is authoritative. "
@@ -70,30 +91,31 @@ def create_server(gateway, agent_id="mcp-agent"):
         "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS))
     server.keys = gateway.settings.keys or Credentials()
     server.agent_id = agent_id
+    server.mandate = mandate
 
-    @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path.")
+    @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path." + MANDATE_HELP)
     def search_products(query: str, required_claims: list[str] | None = None,
                         exclude_allergens: list[str] | None = None, limit: int = 10) -> list[Product]:
-        products, _ = gateway.catalog.search(query, required_claims, exclude_allergens, limit)
-        return products
+        return gateway.mandates.search(query, required_claims, exclude_allergens, limit,
+                                       token=PRESENTED_MANDATE.get(), agent_id=agent_id)
 
-    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool, then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. " + WARNINGS)
+    @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool, then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. " + WARNINGS + MANDATE_HELP)
     def find_offers(need: NeedSpec) -> LookupResult:
-        return gateway.find_offers(need, actor=f"agent:{agent_id}")
+        return gateway.find_offers(need, actor=f"agent:{agent_id}", mandate=PRESENTED_MANDATE.get())
 
-    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over RFC 8785 quote_payload, decimal-string quantities/money and provenance; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation.")
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. Ed25519 detached JWS over RFC 8785 quote_payload, decimal-string quantities/money and provenance; kid names a public key at /.well-known/jwks.json. Offline: scripts/verify_quote.py quote.json --jwks jwks.json --customer ID. price_commitment=gateway-locked. No negotiation." + MANDATE_HELP)
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id)
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref), agent_id=agent_id, mandate=PRESENTED_MANDATE.get())
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists.")
+    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists." + MANDATE_HELP)
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
-            return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id)
+            return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id, mandate=PRESENTED_MANDATE.get())
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
@@ -122,10 +144,11 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--agent-id", default="mcp-agent", help="Buyer agent identity recorded in the audit log")
+    parser.add_argument("--mandate", type=Path, help="Buyer-issued VC-JWT file (stdio); HTTP uses Agent-Mandate header")
     args = parser.parse_args()
     gateway = Gateway()
     try:
-        server = create_server(gateway, args.agent_id)
+        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None)
         if args.http:
             server.run(transport="streamable-http", host=args.host, port=args.port)
         else:

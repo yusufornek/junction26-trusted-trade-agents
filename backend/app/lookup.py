@@ -9,6 +9,7 @@ from uuid import uuid4
 from .auth import check_owner
 
 from . import audit
+from .mandates import evidence as mandate_evidence, decode
 from .catalog import allergen_evidence, constraint_failures, number
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
@@ -311,8 +312,9 @@ def rank(offers, weights, fit_floor=None, *, catalog_stats=None, reject_codes=()
 
 
 class Lookup:
-    def __init__(self, db, catalog, valio, decisions, policy):
+    def __init__(self, db, catalog, valio, decisions, policy, mandates):
         self.db, self.catalog, self.valio, self.decisions, self.policy = db, catalog, valio, decisions, policy
+        self.mandates = mandates
 
     def get(self, lookup_id, agent_id=None):
         with self.db.connect() as conn:
@@ -322,18 +324,23 @@ class Lookup:
         return check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
                            agent_id, "LOOKUP_NOT_FOUND")
 
-    def find_offers(self, need, actor="agent:external"):
-        # Check authority before catalog screening, Decisions or any Valio call.
+    def find_offers(self, need, actor="agent:external", *, mandate=None):
+        counter = RequestCounter()
         try:
-            self.policy.check_customer(actor.removeprefix("agent:"), need.customer_id)
+            return self._find_offers(need, actor, mandate, counter)
         except DomainError as error:
             with self.db.connect(write=True) as conn:
                 audit.append(conn, actor, "LOOKUP_FAILED", error.message,
                              data={"inputs": need.model_dump(mode="json"), "error": error.code,
-                                   "live_calls": {"price": 0, "availability": 0}, "decision_calls": 0})
+                                   "live_calls": counter.live().model_dump(),
+                                   "decision_calls": counter.decision_calls, **error.data})
             raise
+
+    def _find_offers(self, need, actor, mandate, counter):
+        # Check authority before catalog screening, Decisions or any Valio call.
+        with self.db.connect() as conn:
+            policy, record, mandate = self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), need.customer_id)
         query = " ".join(need.search_terms) if need.search_terms else need.intent
-        policy = self.policy.get()
         original_need = need
         need, effective = self.policy.effective_need(need, policy)
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
@@ -352,8 +359,11 @@ class Lookup:
                                                  removed_by=removed_by, mode="or", counts=counts, sources=effective)
             global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
                 f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
+        if mandate is not None:
+            categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories")
+            if categories is not None:
+                pool = [p for p in pool if p.category in categories]
         matched_count = counts.get("matched_count", len(pool))
-        counter = RequestCounter()
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = len(pool)
@@ -404,17 +414,19 @@ class Lookup:
             "required_claims": self.catalog.normalize_codes(original_need.required_claims, "required_claims"),
             "exclude_allergens": self.catalog.normalize_codes(original_need.exclude_allergens, "exclude_allergens"),
             "preferences": need.preferences})
-        result = LookupResult(lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
+        result = LookupResult(mandate=record, lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
                               exclusion_counts=removed_by, offers=returned, plans=plans,
                               no_match_reason=no_match_reason, excluded_count=excluded,
                               retrieval=retrieval, matched_count=matched_count,
                               priced_count=len(candidates), screened_count=screened_count,
                               live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
+            _, result.mandate, _ = self.mandates.authorize(conn, mandate, agent_id, need.customer_id, products=[o.product_id for o in offers])
+            self.mandates.bind(conn, "lookup", result.lookup_id, mandate)
             conn.execute("INSERT INTO lookups VALUES(?,?)", (result.lookup_id, result.model_dump_json()))
             conn.execute("INSERT INTO lookup_offers VALUES(?,?)", (result.lookup_id, json.dumps([o.model_dump(mode="json") for o in offers])))
             audit.append(conn, actor, "LOOKUP", f"Priced {len(candidates)} candidates, returned {len(result.offers)} offers and excluded {excluded} hard-filter failures.",
-                         data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id,
+                         data={"inputs": need.model_dump(mode="json"), "lookup_id": result.lookup_id, **mandate_evidence(result.mandate),
                                "fit_scores": {o.product_id: o.fit for o in offers}, "screened_by_decisions": len(pool) if fits else 0,
                                "retrieval": result.retrieval.model_dump(), "matched_count": result.matched_count,
                                "priced_count": result.priced_count, "screened_count": result.screened_count,
