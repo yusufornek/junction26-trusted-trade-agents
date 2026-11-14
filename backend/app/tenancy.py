@@ -47,7 +47,7 @@ def migrate(conn):
     """)
     from .audit import utcnow
     for tid, name, customer in [(HOTEL, "Hotel Aurora chain", "1"), (HOSPITAL, "Kaari Hospital Kitchen", "2")]:
-        conn.execute("INSERT OR IGNORE INTO tenants VALUES(?,?,?,NULL)", (tid, name, utcnow().isoformat()))
+        conn.execute("INSERT OR IGNORE INTO tenants(id,name,created_at,disabled_at) VALUES(?,?,?,NULL)", (tid, name, utcnow().isoformat()))
         conn.execute("INSERT OR IGNORE INTO tenant_customers VALUES(?,?)", (customer, tid))
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     # Audit is append-only except for this additive, non-hash-changing backfill.
@@ -96,11 +96,15 @@ def migrate(conn):
                        "scopes": "TEXT NOT NULL DEFAULT '[\"*\"]'", "created_by": "TEXT", "expires_at": "TEXT"}.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE connections ADD COLUMN {name} {decl}")
+    from .governance import migrate as migrate_governance
+    migrate_governance(conn)
 
 
 class TenantConnection(sqlite3.Connection):
     def install_scope(self, columns=None):
         self.create_function("caller_tenant", 0, tenant)
+        self.create_function("caller_user", 0, lambda: principal().user_id if principal() else None)
+        self.create_function("caller_member", 0, lambda: int(bool(principal() and principal().kind == "tenant_user" and principal().role == "member")))
         self.create_function("global_audit", 0, lambda: int(GLOBAL_AUDIT.get()))
         self.create_function("write_tenant", 0, lambda: self.inserting_tenant)
         self.business_columns = columns or {}
@@ -112,8 +116,24 @@ class TenantConnection(sqlite3.Connection):
         referenced = set(re.findall(r'\b(?:FROM|JOIN)\s+["`\[]?(\w+)', sql, re.I))
         for name in referenced & self.business_columns.keys() - self.scoped_views:
             extra = " OR global_audit()=1" if name == "audit" else ""
+            owned_agents = "SELECT agent_id FROM main.tenant_agents WHERE owner_user_id=caller_user()"
+            owned_orders = f"SELECT id FROM main.orders WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            owned_quotes = f"SELECT id FROM main.quotes WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            owned_lookups = f"SELECT id FROM main.lookups WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            ownership = {
+                "lookups": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "quotes": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "orders": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "connections": f"agent_id IN ({owned_agents})",
+                "lookup_offers": f"lookup_id IN ({owned_lookups})",
+                "basket_lookups": f"id IN ({owned_lookups})",
+                "reservations": f"order_id IN ({owned_orders})",
+                "evidence_snapshots": f"order_id IN ({owned_orders})",
+                "audit": f"global_audit()=1 OR actor IN (SELECT 'agent:'||agent_id FROM main.tenant_agents WHERE owner_user_id=caller_user()) OR json_extract(data,'$.agent_id') IN ({owned_agents}) OR order_id IN ({owned_orders}) OR quote_id IN ({owned_quotes})",
+            }.get(name)
+            member_filter = f" AND (caller_member()=0 OR ({ownership}))" if ownership else ""
             super().execute(f'CREATE TEMP VIEW IF NOT EXISTS "{name}" AS SELECT *,rowid AS rowid FROM main."{name}" '
-                            f'WHERE caller_tenant() IS NULL OR tenant_id=caller_tenant(){extra}')
+                            f'WHERE (caller_tenant() IS NULL OR tenant_id=caller_tenant(){extra}){member_filter}')
             self.scoped_views.add(name)
 
     def execute(self, sql, parameters=(), /):

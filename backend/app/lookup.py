@@ -452,6 +452,9 @@ class Lookup:
         # Check authority before catalog screening, Decisions or any Valio call.
         with self.db.connect() as conn:
             policy, record, mandate = self.mandates.authorize(conn, mandate, actor.removeprefix("agent:"), need.customer_id, supplier_id=need.supplier_id)
+            governance = getattr(self.policy, "governance", None)
+            if governance:
+                governance.check_operation(conn, actor.removeprefix("agent:"), "lookup", need.customer_id, need.deliver_by, effective=policy._governance)
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         original_need = need
         need, effective = self.policy.effective_need(need, policy)
@@ -461,6 +464,8 @@ class Lookup:
         functional = functional_categories(catalog, need)
         if functional is not None:
             categories = sorted(functional if categories is None else functional.intersection(categories))
+        if governance:
+            categories = governance.categories(policy._governance, categories)
         removed_by, counts = {}, {}
         retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
                               terms_used=list(need.search_terms) if need.search_terms else
@@ -572,8 +577,18 @@ class Lookup:
                               live_calls=counter.live(), decision_calls=counter.decision_calls, warnings=global_warnings)
         with self.db.connect(write=True) as conn:
             _, result.mandate, _ = self.mandates.authorize(conn, mandate, agent_id, need.customer_id, products=[o.product_id for o in offers], supplier_id=need.supplier_id)
+            if governance := getattr(self.policy, "governance", None):
+                candidate_products = {p.id: p for p in candidates}
+                current = governance.check_operation(conn, agent_id, "lookup", need.customer_id, need.deliver_by,
+                    products=[candidate_products[o.product_id] for o in offers])
+                if current.version_id != policy._governance.version_id:
+                    raise DomainError("POLICY_CHANGED", "Policy changed while looking up offers; submit a fresh lookup", 409)
+                governance.snapshot(conn, current)
+                result.policy_version_id = current.version_id
             from .foundation import CORRELATION, procurement_context, trace_id
             result.context = procurement_context(self.policy, need.customer_id, result.lookup_id, effective, result.mandate, supplier_id=need.supplier_id)
+            if result.policy_version_id:
+                result.context["governance_policy_version_id"] = result.policy_version_id
             result.correlation_id = CORRELATION.get()
             result.links = {"request_id": result.lookup_id, "trace_id": trace_id(),
                             "event_id": str(uuid4()), "task_id": None}

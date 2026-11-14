@@ -45,6 +45,7 @@ def test_ac_1_prices_all_suitable_in_one_batch(gateway, upstream, shortlist):
     assert len(upstream.price_calls[0]["products"]) == 15
     assert upstream.price_calls[0]["products"] == upstream.availability_calls[0]["products"]
     assert result.live_calls.model_dump() == {"price": 1, "availability": 1}
+    assert result.policy_version_id == gateway.governance.resolve("external").version_id
     assert gateway.lookup.get(result.lookup_id) == result
     assert gateway.audit()[-1].data["priced_count"] == 15
 

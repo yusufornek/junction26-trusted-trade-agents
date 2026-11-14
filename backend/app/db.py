@@ -309,6 +309,7 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
             conn.install_scope(self._tenant_columns)
+            conn.governance = getattr(self, "governance", None)
         except BaseException:
             try:
                 if conn is not None:

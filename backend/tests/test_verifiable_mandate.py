@@ -441,7 +441,8 @@ mcp_server.main()
         assert not found["result"].get("isError"), (found, error_log.read_text())
         searches = [e for e in gateway.audit() if e.action == "LOOKUP_SEARCH"]
         assert searches, "CLI must load the mandate for a fresh search"
-        assert searches[-1].data["mandate"]["id"] == decode(token)[1]["jti"]
+        assert (searches[-1].data.get("mandate") or {}).get("id") == decode(token)[1]["jti"]
+        assert searches[-1].data["policy_version_id"].startswith("eff_")
         assert searches[-1].data["mandate"]["limits"]["max_auto_total_eur"] == 500
         result = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "place_order", "arguments": {"quote_id": q.id, "idempotency_key": "stdio-vc"}}})
         assert not result["result"].get("isError"), (result, error_log.read_text())

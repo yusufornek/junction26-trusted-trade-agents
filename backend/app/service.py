@@ -85,6 +85,10 @@ class Gateway:
         self.connections = Connections(self)
         from .accounts import Accounts
         self.accounts = Accounts(self)
+        from .governance import Governance
+        self.governance = Governance(self)
+        self.policy.governance = self.governance
+        self.db.governance = self.governance
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")

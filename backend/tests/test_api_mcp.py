@@ -159,6 +159,7 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/audit/verify", "/v1/orders/{id}/ubl", "/v1/audit/anchors", "/v1/mandates/revocations", "/v1/meta", "/v1/me",
                                     "/v1/agents/{agent_id}/track-record", "/v1/agents/{agent_id}/autonomy",
                                     "/.well-known/agent-card.json", "/a2a", "/approvals/{order_id}",
+                                    "/a2a/tenant", "/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json",
                                     "/v1/webhook-subscriptions", "/v1/webhook-subscriptions/{subscription_id}",
                                     "/v1/webhook-subscriptions/{subscription_id}/deliveries",
                                     "/v1/webhook-subscriptions/{subscription_id}/deliveries/{delivery_id}/redeliver",

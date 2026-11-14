@@ -40,6 +40,7 @@ def quote(g, result):
 
 def test_AC_1_stockout_offers_functional_substitute_with_allergen_evidence(hospital):
     result = lookup(hospital)
+    assert result.policy_version_id == hospital.governance.resolve("sandbox-agent").version_id
     assert [o.product_id for o in result.offers] == ["approved-oat"]
     best = result.offers[0]
     assert best.rank_label == "best"

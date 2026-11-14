@@ -86,6 +86,7 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
             if path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
+                        "/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json",
                         "/.well-known/jwks-history.json", "/v1/meta",
                         "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connect/catalog", "/v1/auth/login",
                         "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept"}:
@@ -183,9 +184,11 @@ def test_ac_4_object_ownership(client, gateway, need, upstream):
     assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
     # A customer's scope must not disclose another agent's lookup through a different error.
     policy = gateway.policy.get().model_dump(mode="json")
-    policy["agents"]["agent-b"]["customer_ids"].append("2")
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT INTO tenant_customers VALUES('3','hotel-aurora')")
+    policy["agents"]["agent-b"]["customer_ids"].append("3")
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
-    other_need = need.model_copy(update={"customer_id": "2"})
+    other_need = need.model_copy(update={"customer_id": "3"})
     foreign = gateway.find_offers(other_need, "agent:agent-b")
     response = client.post("/v1/quotes", headers=agent_headers("agent-a"),
                            json=quote_request(other_need, qty=1, need_ref=foreign.lookup_id).model_dump(mode="json"))

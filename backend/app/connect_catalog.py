@@ -34,11 +34,11 @@ async def catalog(request: Request, audience: str = Query(default="buyer", patte
         setups[client] = {k: setup[k] for k in ("steps", "snippet", "language", "secret_placeholder")}
     return {"audience": audience, "audiences": AUDIENCES, "scopes": ["*", "read", "write", "lookup", "quotes", "orders", "approvals:decide", "connections:manage", "agents:manage", "mandates:manage", "users:manage", "policy:manage"], "types": [
         {"type": kind, "clients": clients, "credential_methods": ["api_key", "oauth"] if kind in {"mcp", "a2a"} else ["api_key"],
-         "documentation_links": [DOCS[kind]], "available": kind == "rest" or (kind == "mcp" and audience == "buyer" and request.app.state.mcp_served),
+         "documentation_links": [DOCS[kind]], "available": kind == "rest" or (kind == "mcp" and audience in {"buyer", "tenant"} and request.app.state.mcp_served),
          "transports": ["streamable_http", "stdio"] if kind == "mcp" else ["http"],
          "client_details": [{"client": client, "credential_methods": ["oauth"] if client == "chatgpt" else ["api_key"],
                              **setups[client],
-                             "available": client != "chatgpt" and (kind == "rest" or kind == "mcp" and audience == "buyer" and request.app.state.mcp_served)} for client in clients],
+                             "available": client != "chatgpt" and (kind == "rest" or kind == "mcp" and audience in {"buyer", "tenant"} and request.app.state.mcp_served)} for client in clients],
          "oauth_available": False, "rest_base_path": AUDIENCES[audience]["rest"]}
         for kind, clients in CLIENTS.items()]}
 

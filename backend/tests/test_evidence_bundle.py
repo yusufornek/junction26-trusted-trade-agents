@@ -151,6 +151,7 @@ def test_ac_5_optional_rpc_matches_checkpoint_transaction(gateway, purchase, tmp
 def test_ac_6_other_customer_data_is_hash_only(gateway, need, upstream, buyer_setup, tmp_path):
     other = place(gateway, need.model_copy(update={"customer_id": "2"}), agent="agent-b")
     own = place(gateway, need)
+    assert other.policy_version_id != own.policy_version_id
     with TestClient(create_app(gateway), headers=agent_headers("agent-b")) as client:
         denied = client.post(f"/v1/orders/{own.id}/cancel", json={"cancelled_by": "Foreign buyer", "reason": "PRIVATE FOREIGN REASON"},
                              headers={"X-Correlation-Id": "private-foreign-correlation"})
@@ -177,6 +178,12 @@ def test_review_historical_foreign_snapshot_is_not_disclosed(gateway, purchase, 
     from app import evidence
     with TestClient(create_app(gateway), headers=agent_headers("agent-b")) as client:
         assert client.post(f"/v1/orders/{purchase.id}/cancel", json={"cancelled_by": "Foreign", "reason": "PRIVATE LEGACY REASON"}).status_code == 404
+    # The tenant boundary now refuses this request before retaining its body.
+    # Explicitly seed the historical unsafe record this migration test exercises.
+    from app import audit
+    with gateway.db.connect(write=True) as conn:
+        audit.append(conn, "agent:agent-b", "CANCEL_FAILED", "Historical foreign denial.", order_id=purchase.id,
+                     data={"error": "ORDER_NOT_FOUND", "inputs": {"reason": "PRIVATE LEGACY REASON"}})
     # Recreate a ZIP persisted by the earlier disclosure predicate, without changing the audit chain.
     with monkeypatch.context() as legacy:
         legacy.setattr(evidence, "audit_visible", lambda row, agent: True)

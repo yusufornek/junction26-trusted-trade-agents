@@ -133,6 +133,14 @@ def admit_credential(service, keys, source, secret):
     if not known:
         check_source(service, source)
     principal = resolve_credential(keys, secret, service)
+    if principal.kind == "agent" and hasattr(service, "governance"):
+        try:
+            service.governance.check_active(principal.agent_id)
+        except DomainError as error:
+            service.governance.note_refusal(principal.agent_id, error)
+            raise
+        if principal.connection_id:
+            service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
     if not known:
         service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
@@ -155,6 +163,8 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     else:
         principal = admit_credential(service, request.app.state.keys, source, secret)
     service.accounts.guard(principal, request.url.path, request.method)
+    if principal.kind == "agent":
+        service.governance.check_active(principal.agent_id)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)
@@ -200,8 +210,9 @@ def check_scope(principal, resource, permission, action=None):
 
 class MCPBearerMiddleware:
     """Guard every HTTP request, including initialization, GET and DELETE."""
-    def __init__(self, app, keys, agent_id, gateway):
+    def __init__(self, app, keys, agent_id, gateway, audience="buyer"):
         self.app, self.keys, self.agent_id, self.gateway = app, keys, agent_id, gateway
+        self.audience = audience
 
     async def __call__(self, scope, receive, send):
         from .foundation import CORRELATION, PRINCIPAL, correlation_id
@@ -217,9 +228,13 @@ class MCPBearerMiddleware:
                 scheme, _, token = value.partition(" ")
                 secret = token if scheme.lower() == "bearer" else ""
                 principal = admit_credential(self.gateway, self.keys, source, secret)
-                if principal.connection_id and principal.audience != "buyer":
+                if self.audience == "tenant" and principal.kind == "agent":
+                    raise DomainError("HUMAN_REQUIRED", "The tenant audience requires a human account", 403)
+                if principal.connection_id and principal.audience != self.audience:
                     raise DomainError("WRONG_AUDIENCE", "This key is bound to a different resource audience", 401)
-                if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
+                if self.audience == "tenant" and (principal.kind != "tenant_user" or not principal.user_id):
+                    raise DomainError("HUMAN_REQUIRED", "The tenant audience requires a tenant human account", 403)
+                if self.audience == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:

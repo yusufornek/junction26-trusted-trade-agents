@@ -35,7 +35,12 @@ from .db import DomainError
 from .signing import unb64
 
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
-                    "order.cancelled", "order.expired", "mandate.revoked", "proposal.received"]
+                    "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
+                    "governance.alert", "governance.policy_changed", "governance.guardrails_changed",
+                    "governance.agent_registered",
+                    "governance.change_requested", "governance.request_decided", "governance.rolled_back",
+                    "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
+                    "governance.tenant_resumed", "governance.agent_transferred"]
 EVENT_TYPES = set(EventType.__args__)
 
 
@@ -59,7 +64,7 @@ class SubscriptionCreate(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     customer_ids: list[str] = Field(min_length=1)
     event_types: list[EventType] = Field(min_length=1)
-    audience: Literal["agent", "approver"] = "agent"
+    audience: Literal["agent", "approver", "tenant"] = "agent"
 
 
 class SubscriptionPatch(BaseModel):
@@ -67,7 +72,7 @@ class SubscriptionPatch(BaseModel):
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     customer_ids: list[str] | None = Field(default=None, min_length=1)
     event_types: list[EventType] | None = Field(default=None, min_length=1)
-    audience: Literal["agent", "approver"] | None = None
+    audience: Literal["agent", "approver", "tenant"] | None = None
     enabled: bool | None = None
 
 
@@ -211,6 +216,8 @@ class Webhooks:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Subscription customers exceed principal scope", 403)
         if audience == "approver":
             require_reviewer(principal)
+        if audience == "tenant" and not (principal.kind == "tenant_user" and principal.role == "tenant_admin"):
+            raise DomainError("TENANT_ADMIN_REQUIRED", "Tenant webhooks require a tenant administrator", 403)
 
     def _get(self, subscription_id, principal, conn):
         row = conn.execute("SELECT * FROM webhook_subscriptions WHERE id=?", (subscription_id,)).fetchone()
@@ -224,6 +231,7 @@ class Webhooks:
         self._scope(principal, body.customer_ids, body.audience)
         self._challenge(body.url, notification_headers(push_config or {}))
         sub = {"id": uuid4().hex, **body.model_dump(), "enabled": True, "verified": True,
+               "tenant_id": principal.tenant_id,
                "owner": principal.id, "owner_kind": principal.kind, "operator": principal.operator,
                "created_at": audit.utcnow().isoformat(), "task_id": task_id, "push_config": push_config}
         with self.db.connect(write=True) as conn:
@@ -329,7 +337,18 @@ class Webhooks:
                 matches = event["customer_id"] in sub["customer_ids"] and self.event_type(event) in sub["event_types"]
                 if sub.get("task_id"):
                     matches = event["customer_id"] in sub["customer_ids"] and self.gateway.a2a.event_matches(event, sub["task_id"])
-                if not sub.get("operator"):
+                if sub["audience"] == "tenant":
+                    # Recheck the live human account on every delivery, including
+                    # after role changes and user removal. Tenant events need no
+                    # customer_id (e.g. pauses and policy changes).
+                    with self.db.connect() as conn:
+                        user = conn.execute("SELECT * FROM main.users WHERE id=?", (sub["owner"],)).fetchone()
+                    matches = bool(user and not user["disabled_at"] and not user["removed_at"] and user["role"] == "tenant_admin"
+                        and user["tenant_id"] == sub.get("tenant_id") == event["tenant_id"]
+                        and self.event_type(event) in sub["event_types"])
+                elif self.event_type(event) and self.event_type(event).startswith("governance."):
+                    matches = False
+                elif not sub.get("operator"):
                     policy = self.gateway.policy.get()
                     identity = policy.identities.get(sub["owner"])
                     organisation = policy.organisations.get(identity.organisation_id) if identity else None

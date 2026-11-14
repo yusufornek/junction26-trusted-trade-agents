@@ -24,7 +24,7 @@ from .recurring import Deviations, RecurringRequest
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
-MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. The buyer MCP resource remains /mcp; OAuth and human MCP audiences are part 2. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. The buyer MCP resource is /mcp; tenant humans use /mcp/tenant for agent_governance. OAuth and the operator MCP audience remain part 2. Three-layer effective governance policy is exposed with source/version/author at /v1/tenant/agents/{id}/policy/effective; every new lookup, quote and order stores policy_version_id. A paused buyer gets 423 AGENT_PAUSED with CONTACT_ADMIN guidance. Tenant autonomy promotions follow policy change requests; the requester cannot approve its own loosening. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
                 "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
@@ -114,8 +114,9 @@ class GatewayMCPServer(MCPServer):
             credential_ref="stdio:" + active_agent)
         principal_token = PRINCIPAL.set(PRINCIPAL.get() or self.gateway.accounts.bind(local_principal))
         try:
+            self.gateway.governance.check_active(active_agent)
             from .auth import check_scope
-            if name != "get_agent_context":
+            if name not in {"get_agent_context", "agent_governance"}:
                 resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name else "orders" if "order" in name else "read"
                 permission = "write" if name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_")) else "read"
                 check_scope(PRINCIPAL.get(), resource, permission, name)
@@ -125,6 +126,8 @@ class GatewayMCPServer(MCPServer):
             cause = error
             while cause is not None:
                 if isinstance(cause, DomainError):
+                    if cause.code == "AGENT_PAUSED":
+                        self.gateway.governance.note_refusal(active_agent, cause)
                     payload = problem(cause)
                     return CallToolResult(is_error=True, structured_content=payload,
                                           content=[TextContent(type="text", text=json.dumps(payload))])

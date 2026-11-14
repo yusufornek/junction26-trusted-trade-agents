@@ -77,7 +77,9 @@ class Baskets:
         agent_id = actor.removeprefix("agent:")
         with self.db.connect() as conn:
             policy, record, mandate = g.mandates.authorize(conn, mandate, agent_id, request.customer_id)
+            g.governance.check_operation(conn, agent_id, "lookup", request.customer_id, request.deliver_by, effective=policy._governance)
         categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories") if mandate else None
+        categories = g.governance.categories(policy._governance, categories)
         factor = Decimal(str(request.servings or request.manifest.servings)) / Decimal(str(request.manifest.base_servings or request.manifest.servings))
         data = request.manifest.model_dump()
         data["servings"] = request.servings or request.manifest.servings
@@ -207,8 +209,14 @@ class Baskets:
         from .foundation import procurement_context, CORRELATION
         with self.db.connect(write=True) as conn:
             _, aggregate.mandate, _ = g.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=ids)
-            _, effective = g.policy.effective_need(aggregate_need)
+            current = g.governance.check_operation(conn, agent_id, "lookup", request.customer_id, request.deliver_by, products=[products[pid] for pid in ids])
+            if current.version_id != policy._governance.version_id:
+                raise DomainError("POLICY_CHANGED", "Policy changed while looking up this basket; submit a fresh lookup", 409)
+            g.governance.snapshot(conn, current)
+            aggregate.policy_version_id = result.policy_version_id = current.version_id
+            _, effective = g.policy.effective_need(aggregate_need, policy)
             aggregate.context = procurement_context(g.policy, request.customer_id, lookup_id, effective, record)
+            aggregate.context["governance_policy_version_id"] = current.version_id
             result.context = aggregate.context
             aggregate.correlation_id = CORRELATION.get()
             g.mandates.bind(conn, "lookup", lookup_id, mandate)

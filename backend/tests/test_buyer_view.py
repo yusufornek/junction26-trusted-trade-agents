@@ -14,7 +14,21 @@ from datetime import timedelta
 
 
 @pytest.fixture
-def buyer_setup(gateway):
+def buyer_setup(gateway, monkeypatch):
+    # Legacy organisation scenarios predate spec 43's tenant registry. Keep their
+    # synthetic agent registrations aligned with the customer assignments too.
+    original_update = gateway.policy.update
+    def update(request, *args, **kwargs):
+        result = original_update(request, *args, **kwargs)
+        with gateway.db.connect(write=True) as conn:
+            for aid, mandate in result.agents.items():
+                tenants = {r[0] for customer in mandate.customer_ids for r in conn.execute(
+                    "SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer,))}
+                if len(tenants) == 1:
+                    tid = next(iter(tenants))
+                    conn.execute("UPDATE tenant_agents SET tenant_id=?,owner_user_id=(SELECT id FROM users WHERE tenant_id=? AND role='tenant_admin' ORDER BY created_at,id LIMIT 1) WHERE agent_id=?", (tid, tid, aid))
+        return result
+    monkeypatch.setattr(gateway.policy, "update", update)
     body = gateway.policy._editable(gateway.policy.get())
     body["organisations"] = {"H": {"customer_ids": ["1"]}, "B": {"customer_ids": ["2"]}}
     body["identities"] = {
