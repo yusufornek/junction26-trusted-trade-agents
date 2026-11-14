@@ -3,3 +3,5 @@ AI kullanarak prediction yaparak, "abi sen her ay şundan alıyorusun demek ki s
 tarzı bir öneri yapsa nasıl olur ? 
 
 2)Kullanıcılar istedikleri agent provider ını örneğin claude,gemini,gpt seçebiliyor olabilir mi demo arayüzünde ? sonuçta mcp ye öyle bağlanacaklar ya?
+
+3)şuana kadar hiç bu üründen almamıştınız ya da hiç bu kadar fazla miktarda almamıştınız emin misiniz ? diye soru sorsa iyi olabilir mi ?
