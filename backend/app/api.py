@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Request, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -241,7 +241,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return svc(request).suppliers.list()
 
     class SandboxReset(BaseModel):
-        scenario: str
+        scenario: str = Field(max_length=200)
 
     def sandbox_admin(request: Request, principal: Principal = Depends(require_operator)):
         if svc(request).sandbox is None:
@@ -273,7 +273,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
               description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key binds this target and payload, rechecks current target scope, and replays the first result without changing authority again; changed target or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows the enclosing command commit. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
                         principal: Principal = Depends(resolve_principal),
-                        idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                        idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).autonomy.change(agent_id, body, principal, command_key=idempotency_key)
 
     def audit_cancel_validation(request, raw_body, message):
@@ -315,13 +315,14 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
 
     @app.post("/v1/mandates/revocations", response_model=dict[str, str | list[str]], summary="Record a buyer-signed mandate revocation")
     def revoke_mandate(body: RevocationRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                      idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).mandates.revoke(body.jwt, "human:operator" if principal.operator else f"agent:{principal.agent_id}", command_key=idempotency_key)
 
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")
-    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate)):
-        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate)
+    def offers(need: NeedSpec, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
+               idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
+        return svc(request).find_offers(need, actor=f"agent:{principal.agent_id}", mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref",
              description="Authorized stored lookup with forward links to related quotes, orders, events, audit checkpoints and traces, including historical records.")
@@ -331,8 +332,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     @app.post("/v1/basket-lookups", response_model=BasketLookupResult,
               summary="Scale an agent-supplied recipe and price one deduplicated basket in two supplier batches")
     def basket_offers(body: BasketLookupRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                      mandate=Depends(presented_mandate)):
-        return svc(request).baskets.find_basket_offers(body, actor=f"agent:{principal.agent_id}", mandate=mandate)
+                      mandate=Depends(presented_mandate),
+                      idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
+        return svc(request).baskets.find_basket_offers(body, actor=f"agent:{principal.agent_id}", mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/basket-lookups/{lookup_id}", response_model=BasketLookupResult, summary="Read this agent's stored recipe basket")
     def get_basket(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
@@ -344,12 +346,12 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
 
     @app.put("/v1/policy", response_model=PolicyResource, summary="Persist policy for subsequent operations and audit changed fields")
     def put_policy(body: PolicyUpdateRequest, request: Request, principal: Principal = Depends(require_operator),
-                   idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                   idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).policy.update(body, actor="human:operator", command_key=idempotency_key)
 
     @app.post("/v1/policy/reset", response_model=PolicyResource, summary="Restore committed policy defaults with a human audit event")
     def reset_policy(body: PolicyResetRequest, request: Request, principal: Principal = Depends(require_operator),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).policy.update(body, reset=True, actor="human:operator", command_key=idempotency_key)
 
     @app.get("/v1/stats", response_model=Stats, summary="Operator metrics from persisted evidence; no upstream calls")
@@ -367,7 +369,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
               description="Lookup, quote and order require a customer mandate and enforce agent ownership. "
                           "Cached replays recheck current ownership and mandate scope; refusals record CREATE_QUOTE_FAILED without repeating quote creation.")
     def create_quote(body: QuoteRequest, request: Request, principal: Principal = Depends(resolve_principal), mandate=Depends(presented_mandate),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.create_quote(body, principal.agent_id, operator=principal.operator, mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/quotes/{id}", response_model=Quote,
@@ -417,7 +419,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
     def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None, mandate=Depends(presented_mandate)):
+                     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None, mandate=Depends(presented_mandate)):
         return svc(request).orders.cancel(order_id,
             actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
             stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key)
@@ -438,14 +440,14 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                           "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope. "
                           "Refused replay checks record APPROVE_FAILED without repeating approval.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
-                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
             actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 
     @app.post("/v1/approvals/{order_id}/reject", response_model=Order,
               description="Reject a pending order. Optional Idempotency-Key replays the first result; cached responses recheck the reviewer's current organisation and customer scope.")
     def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
-               idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+               idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         return svc(request).orders.reject(order_id, body.approver, body.comment,
             actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
 

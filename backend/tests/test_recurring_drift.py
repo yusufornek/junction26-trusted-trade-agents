@@ -76,7 +76,13 @@ def test_ac_2_third_price_step_exceeds_cumulative_tolerance(gateway, upstream, r
     assert any("cumulative +9.3" in h and "unit cost" in h for h in hits)
 
 
-def test_ac_3_smaller_pack_shows_conversion_and_requires_review(gateway, upstream, recurring_setup, tmp_path):
+@pytest.mark.parametrize("request_unit", ["L", "SALES_UNIT"])
+def test_ac_3_smaller_pack_shows_conversion_and_requires_review(gateway, upstream, recurring_setup, tmp_path, need, request_unit):
+    if request_unit == "SALES_UNIT":
+        need.quantity = Quantity(value=2, unit="SALES_UNIT")
+        lookup = gateway.find_offers(need)
+        q = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=lookup.lookup_id))
+        recurring_setup = gateway.orders.place_order(q.id, "sales-unit-ac3")
     row = create(gateway, recurring_setup, price_pct=100, cumulative_price_pct=100, quantity_pct=100, cumulative_quantity_pct=100)
     rebuild_catalog(gateway, tmp_path, [raw_product("1", "Milk 25 cl lactose free", volume=.25), raw_product("3", "Milk egg mix", egg=True)])
     upstream.sizes["1"] = 2.5
@@ -151,7 +157,7 @@ def test_ac_7_revoked_mandate_and_suspension_skip_with_event(gateway, need, upst
     assert len(events) == 2 and {e["customer_id"] for e in events} == {"1"}
 
 
-def test_ac_8_dst_preserves_local_time_and_catch_up_once(gateway, upstream, recurring_setup):
+def test_ac_8_dst_preserves_local_time_and_catch_up_once(gateway, upstream, recurring_setup, monkeypatch):
     row = create(gateway, recurring_setup)
     row["cadence"].update(start_at="2026-10-24T09:00:00+03:00", rrule="FREQ=DAILY")
     rule = rule_for(row)
@@ -159,7 +165,36 @@ def test_ac_8_dst_preserves_local_time_and_catch_up_once(gateway, upstream, recu
     after = rule.after(before)
     assert before.hour == after.hour == 9
     assert before.utcoffset() == timedelta(hours=3) and after.utcoffset() == timedelta(hours=2)
+    # Exercise actual scheduler purchases, including the UTC-offset change.
+    row["next_run_at"] = before.isoformat()
+    with gateway.db.connect(write=True) as conn:
+        gateway.recurring.save(conn, row)
+    original_now = audit.utcnow
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return occurrence.astimezone(tz) if tz else occurrence.replace(tzinfo=None)
+    monkeypatch.setattr("app.models.datetime", FrozenDateTime)
+    from app.runtime import CLOCK
+    clock_token = CLOCK.set(lambda: occurrence)
+    try:
+        for occurrence, expected in ((before, 1), (after, 2)):
+            upstream.need.deliver_by = occurrence.date() + timedelta(days=row["delivery_offset_days"])
+            upstream.cutoff = occurrence + timedelta(hours=1)
+            monkeypatch.setattr(audit, "utcnow", lambda: occurrence - timedelta(minutes=1))
+            gateway.recurring.due(audit.utcnow())
+            assert len(gateway.recurring.runs(row["id"])) == expected - 1
+            monkeypatch.setattr(audit, "utcnow", lambda: occurrence)
+            gateway.recurring.due(occurrence)
+            gateway.recurring.due(occurrence)
+            runs = gateway.recurring.runs(row["id"])
+            assert len(runs) == expected
+            assert datetime.fromisoformat(runs[-1]["occurrence_at"]).hour == 9
+    finally:
+        CLOCK.reset(clock_token)
+    monkeypatch.setattr(audit, "utcnow", original_now)
     # A missed week consumes only the latest local occurrence and moves the durable cursor.
+    row = create(gateway, recurring_setup)
     now = audit.utcnow()
     row["cadence"]["start_at"] = (now - timedelta(days=7)).isoformat()
     row["next_run_at"] = row["cadence"]["start_at"]
@@ -169,6 +204,170 @@ def test_ac_8_dst_preserves_local_time_and_catch_up_once(gateway, upstream, recu
     gateway.recurring.due(now)
     assert len(gateway.recurring.runs(row["id"])) == 1
     assert datetime.fromisoformat(gateway.recurring.get(row["id"])["next_run_at"]) > now
+
+
+def test_review_sales_unit_template_detects_physical_shrink(gateway, need, upstream, recurring_setup, tmp_path):
+    from app.models import QuoteRequest
+    need.quantity = Quantity(value=2, unit="SALES_UNIT")
+    lookup = gateway.find_offers(need)
+    q = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=lookup.lookup_id))
+    order = gateway.orders.place_order(q.id, "sales-baseline")
+    row = create(gateway, order, price_pct=100, cumulative_price_pct=100)
+    assert run(gateway, row, upstream, 0)["comparison"]["diff"] == []
+    rebuild_catalog(gateway, tmp_path, [raw_product("1", "Milk 25 cl lactose free", volume=.25), raw_product("3", "Milk egg mix", egg=True)])
+    upstream.sizes["1"] = 2.5
+    result = run(gateway, row, upstream, 1)
+    assert result["status"] == "PENDING_APPROVAL"
+    assert any("pack: 5.0 → 2.5" in d for d in result["comparison"]["diff"])
+
+
+def test_review_approved_quantity_and_multiple_lines_are_retained(gateway, need, upstream, recurring_setup, tmp_path):
+    from app.models import QuoteRequest
+    rebuild_catalog(gateway, tmp_path, [raw_product("1", "Milk 5 dl lactose free"),
+        raw_product("2", "Milk second 1 l lactose free", volume=1, multiplier=1), raw_product("3", "Milk egg mix", egg=True)])
+    upstream.sizes["2"], upstream.prices["2"] = 1, 8
+    need.quantity = Quantity(value=5, unit="L")
+    lookup = gateway.find_offers(need)
+    q = gateway.orders.create_quote(QuoteRequest(customer_id="1", deliver_by=need.deliver_by, need_ref=lookup.lookup_id,
+        lines=[{"product_id": "1", "quantity_sales_units": 4}, {"product_id": "2", "quantity_sales_units": 3}]))
+    order = gateway.orders.place_order(q.id, "approved-overbuy")
+    row = create(gateway, order)
+    assert len(row["approved_lines"]) == 2
+    # Templates stored before approved_lines existed recover quantities from their baseline.
+    row.pop("approved_lines")
+    with gateway.db.connect(write=True) as conn:
+        gateway.recurring.save(conn, row)
+    result = run(gateway, row, upstream, 0)
+    assert result["status"] == "CONFIRMED" and result["comparison"]["diff"] == []
+    assert [(l.product_id, l.units_needed) for l in gateway.orders.get_order(result["order_id"]).lines] == [("1", 4), ("2", 3)]
+
+
+def test_review_overdue_weekly_catchup_executes_once(gateway, upstream, recurring_setup):
+    row = create(gateway, recurring_setup)
+    row["cadence"].update(start_at=(audit.utcnow() - timedelta(days=6)).isoformat(), rrule="FREQ=WEEKLY")
+    row["next_run_at"] = row["cadence"]["start_at"]
+    with gateway.db.connect(write=True) as conn:
+        gateway.recurring.save(conn, row)
+    gateway.recurring.due()
+    gateway.recurring.due()
+    runs = gateway.recurring.runs(row["id"])
+    assert len(runs) == 1
+    assert runs[0]["occurrence_key"].endswith((audit.utcnow() - timedelta(days=6)).date().isoformat())
+    assert gateway.orders.get_quote(runs[0]["quote_id"]).deliver_by >= audit.utcnow().date()
+
+
+def test_review_placement_delivery_is_compared(gateway, upstream, recurring_setup, monkeypatch):
+    row = create(gateway, recurring_setup)
+    original = gateway.orders.place_order
+    def shifted(*args, **kwargs):
+        upstream.shift = 1
+        return original(*args, **kwargs)
+    monkeypatch.setattr(gateway.orders, "place_order", shifted)
+    result = run(gateway, row, upstream, 0)
+    assert result["comparison"]["current"]["lines"][0]["delivery_offset"] == 1
+    assert any("delivery_offset" in d for d in result["comparison"]["diff"])
+    assert any(h.rule == "recurring_drift" for h in gateway.orders.get_order(result["order_id"]).policy.hits)
+
+
+def test_review_ancient_schedule_does_not_enumerate_under_writer(gateway, recurring_setup, monkeypatch):
+    import app.recurring as module
+    row = create(gateway, recurring_setup)
+    row["cadence"].update(start_at="0001-01-01T09:00:00+02:00", rrule="FREQ=DAILY")
+    row["next_run_at"] = row["cadence"]["start_at"]
+    with gateway.db.connect(write=True) as conn:
+        gateway.recurring.save(conn, row)
+    original = module.rule_for
+    def bounded(data):
+        # The scheduler may re-anchor a valid ancient record, without scanning millennia.
+        assert datetime.fromisoformat(data["cadence"]["start_at"]).year >= audit.utcnow().year - 3
+        with gateway.db.connect() as conn:
+            assert not conn.in_transaction
+        return original(data)
+    monkeypatch.setattr(module, "rule_for", bounded)
+    monkeypatch.setattr(gateway.recurring, "run", lambda *args: {"status": "SKIPPED"})
+    gateway.recurring.due()
+    assert datetime.fromisoformat(gateway.recurring.get(row["id"])["next_run_at"]) > audit.utcnow()
+
+
+@pytest.mark.parametrize("start,rule,now", [
+    ("2026-01-31T09:00:00+02:00", "FREQ=MONTHLY;BYMONTHDAY=31", "2026-07-15T12:00:00+03:00"),
+    ("2024-02-29T09:00:00+02:00", "FREQ=MONTHLY;INTERVAL=12;BYMONTHDAY=29", "2027-02-28T12:00:00+02:00"),
+    ("2096-02-29T09:00:00+02:00", "FREQ=MONTHLY;INTERVAL=48;BYMONTHDAY=29", "2104-02-28T12:00:00+02:00"),
+])
+def test_review_bounded_monthly_schedule_preserves_skipped_calendar_dates(start, rule, now):
+    from app.recurring import recent_schedule
+    row = {"cadence": {"start_at": start, "rrule": rule, "timezone": "Europe/Helsinki"}}
+    when = datetime.fromisoformat(now).astimezone(ZoneInfo("Europe/Helsinki"))
+    original = rule_for(row)
+    assert recent_schedule(row, when) == (original.before(when, inc=True), original.after(when))
+
+
+def test_review_recurring_create_retry_uses_shared_command(gateway, recurring_setup, upstream):
+    args = {"approved_order_id": recurring_setup.id, "cadence": {"start_at": (audit.utcnow() - timedelta(seconds=1)).isoformat()}}
+    with TestClient(create_app(gateway), headers={**agent_headers("external"), "Idempotency-Key": "recurring-create"}) as client:
+        first = client.post("/v1/recurring-orders", json=args)
+        again = client.post("/v1/recurring-orders", json=args)
+        assert first.status_code == again.status_code == 200
+        assert first.json()["id"] == again.json()["id"]
+        args["permitted_deviations"] = {"price_pct": 3}
+        assert client.post("/v1/recurring-orders", json=args).status_code == 409
+    gateway.recurring.due()
+    assert len(gateway.recurring.rows()) == 1
+    assert len(gateway.orders.list_orders()) == 2
+
+
+def test_review_recurring_rest_mcp_replay_rechecks_permission(gateway, recurring_setup):
+    import asyncio
+    from app.mcp_server import create_server
+    args = {"approved_order_id": recurring_setup.id, "cadence": {"start_at": (audit.utcnow() + timedelta(hours=1)).isoformat()}}
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        first = client.post("/v1/recurring-orders", json=args, headers={"Idempotency-Key": "cross-recurring"})
+        assert first.status_code == 200
+        async def call():
+            return await create_server(gateway, "external").call_tool("create_recurring_order", {"request": args, "idempotency_key": "cross-recurring"})
+        replay = asyncio.run(call())
+        assert not replay.is_error and replay.structured_content["id"] == first.json()["id"]
+        policy = gateway.policy.get()
+        policy.agents["external"].recurring = False
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Permission removed"))
+        denied = client.post("/v1/recurring-orders", json=args, headers={"Idempotency-Key": "cross-recurring"})
+        assert denied.status_code == 403 and denied.json()["code"] == "RECURRING_NOT_AUTHORIZED"
+        assert len(gateway.recurring.rows()) == 1
+
+
+def test_review_recurring_replay_uses_bound_signed_mandate(gateway, need, upstream, recurring_setup, vc_issuer):
+    from app.mandates import decode, sign_jwt
+    claims = decode(issue(vc_issuer))[1]
+    claims["vc"]["credentialSubject"]["recurring"] = True
+    token = sign_jwt(vc_issuer, claims, kid="buyer-1")
+    lookup = gateway.find_offers(need, "agent:outsider", mandate=token)
+    quote = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=lookup.lookup_id), "outsider", mandate=token)
+    order = gateway.orders.place_order(quote.id, "bound-template", "outsider", mandate=token)
+    body = {"approved_order_id": order.id, "cadence": {"start_at": (audit.utcnow() + timedelta(hours=1)).isoformat()}}
+    with TestClient(create_app(gateway), headers={**agent_headers("outsider"), "Idempotency-Key": "bound-recurring"}) as client:
+        first = client.post("/v1/recurring-orders", json=body)
+        assert first.status_code == 200, first.text
+        replay = client.post("/v1/recurring-orders", json=body)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["id"] == first.json()["id"]
+
+
+def test_review_historical_sales_unit_template_loads_without_inventing_content(gateway, need, upstream, recurring_setup):
+    from app.signing import quote_payload
+    need.quantity = Quantity(value=2, unit="SALES_UNIT")
+    lookup = gateway.find_offers(need)
+    q = gateway.orders.create_quote(quote_request(need, qty=2, need_ref=lookup.lookup_id))
+    raw = q.model_dump(mode="json")
+    raw["context"]["product_evidence"]["1"].pop("physical_pack")
+    raw["signature"] = gateway.signing.sign(quote_payload(raw))
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(raw), q.id))
+    order = gateway.orders.place_order(q.id, "historical-sales")
+    row = create(gateway, order)
+    assert row["baseline"]["lines"][0]["pack"] is None
+    result = run(gateway, row, upstream, 0)
+    assert result["status"] == "PENDING_APPROVAL"
+    assert any("comparison evidence missing" in d for d in result["comparison"]["diff"])
 
 
 def test_r_1_recipe_template_and_explicit_recurring_authority(gateway, need, upstream, recurring_setup):

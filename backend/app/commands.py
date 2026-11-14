@@ -46,6 +46,9 @@ def failure_audit(gateway, route, arguments, identity, error):
 
 
 def json_value(value):
+    from datetime import date, datetime
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
     if is_dataclass(value):
         return json_value(asdict(value))
     if isinstance(value, BaseModel):
@@ -115,6 +118,74 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         gateway.buyer.authorize_control(arguments["agent_id"], principal or arguments["principal"])
     elif route == "buyer.revoke":
         gateway.buyer.authorize_revocation(arguments["jti"], principal or arguments["principal"])
+    elif route.startswith("recurring."):
+        who = principal or arguments["principal"]
+        recurring_id = saved["value"]["id"] if route == "recurring.create" else arguments["id"]
+        row = gateway.recurring.get(recurring_id, who)
+        if who.kind == "buyer_user":
+            from .recurring import reviewer
+            if not reviewer(who, row["customer_id"]):
+                raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
+        else:
+            token = arguments.get("mandate") or gateway.mandates.stored(conn, "recurring", row["id"])
+            gateway.recurring.workflow_authority(who, row["customer_id"], token)
+        gateway.recurring.authority(conn, row)
+    elif route == "proposals.submit":
+        who = principal or arguments["principal"]
+        if who.kind != "supplier_agent":
+            raise DomainError("SUPPLIER_REQUIRED", "Only a supplier_agent may submit proposals", 403)
+        if saved["value"].get("id"):
+            row = conn.execute("SELECT data FROM proposal_campaigns WHERE id=?", (saved["value"]["id"],)).fetchone()
+            if row is None:
+                raise DomainError("CAMPAIGN_NOT_FOUND", "Campaign was not found", 404)
+            gateway.proposals.counts(json.loads(row[0]), who)
+    elif route == "proposals.action":
+        who = gateway.proposals.effective_principal(principal or arguments["principal"], arguments.get("mandate"))
+        proposal = gateway.proposals.get(conn, arguments["id"], who)
+        if who.kind == "buyer_user" and who.role not in {"buyer_admin", "buyer_approver"}:
+            raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
+        if arguments["action"] == "accept":
+            body = arguments["body"]
+            agent = who.id if who.kind == "agent" else body.buyer_agent_id
+            if agent != proposal.get("accepted_by", agent):
+                raise DomainError("BUYER_AGENT_REQUIRED", "Replay requires the original purchasing agent", 403)
+            bound = ("order", proposal["order_id"]) if proposal.get("order_id") else ("quote", saved["value"]["quote"]["id"])
+            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, proposal["customer_id"],
+                                       products=proposal["products"], bound=bound)
+    elif route == "memory.act":
+        who = principal or arguments["principal"]
+        # Hidden state and a newer purchase are command effects, not loss of
+        # authority over the original result. Reauthorize its immutable scope.
+        scoped = gateway.memory.scoped(who, arguments.get("mandate"))
+        value = saved["value"]
+        if arguments["action"] == "prepared":
+            customer = value["need"]["customer_id"]
+            product = (value.get("context") or {}).get("suggestion_ref", {}).get("product_id")
+        else:
+            customer = value["customer_id"]
+            product = value.get("product_id") or value["baseline"]["lines"][0]["product"]
+        from .purchase_memory import preferences
+        prefs = preferences(conn, customer)
+        if (not scoped.operator and customer not in scoped.customer_ids or not prefs.get("enabled", True)
+                or prefs.get("forgotten_at") or product in prefs.get("excluded_products", [])):
+            raise DomainError("SUGGESTION_NOT_FOUND", "Suggestion was not found", 404)
+        pattern = {"customer_id": customer, "product_id": product}
+        if who.kind == "agent" and arguments.get("mandate"):
+            gateway.mandates.authorize(conn, arguments["mandate"], who.id, customer, products=[product] if product else [])
+        if who.kind == "buyer_user" and who.role not in {"buyer_admin", "buyer_approver"}:
+            raise DomainError("BUYER_APPROVER_REQUIRED", "A buyer approver is required", 403)
+        if arguments["action"] in {"prepared", "made_recurring"}:
+            body = arguments.get("body")
+            agent = gateway.memory.purchasing_agent(who, pattern["customer_id"], body.buyer_agent_id if body else None)
+            gateway.mandates.authorize(conn, arguments.get("mandate"), agent, pattern["customer_id"], products=[pattern["product_id"]])
+            if arguments["action"] == "made_recurring":
+                row = gateway.recurring.get(saved["value"]["id"])
+                from .auth import Principal
+                token = arguments.get("mandate") or gateway.mandates.stored(conn, "recurring", row["id"])
+                gateway.recurring.workflow_authority(Principal(agent, customer_ids=(customer,)), customer, token)
+                gateway.recurring.authority(conn, row)
+    elif route in {"memory.put_preferences", "proposals.put_preferences"}:
+        gateway.proposals.scope(principal or arguments["principal"], arguments.get("customer", arguments.get("customer_id")), admin=True)
     elif route in {"webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}:
         hooks = gateway.webhooks
         if route == "webhooks.create":
@@ -188,7 +259,9 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                           "orders.reject", "gateway.find_offers", "baskets.find_basket_offers", "policy.update", "mandates.revoke", "autonomy.change",
                            "buyer.control", "buyer.revoke",
-                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"})
+                          "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create",
+                          "recurring.create", "recurring.baseline", "recurring.run", "recurring.pause",
+                          "proposals.submit", "proposals.action", "proposals.put_preferences", "memory.act", "memory.put_preferences"})
 
 
 def omit_policy_defaults(route, values):
@@ -209,6 +282,8 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     if route == "connections.create":
         excluded.update({"origin", "mcp_served"})
     values = json_value({k: v for k, v in arguments.items() if k not in excluded})
+    if route == "gateway.find_offers" and values.get("product_ids") is None:
+        values.pop("product_ids", None)  # Preserve previously issued command fingerprints.
     if not policy_defaults:
         omit_policy_defaults(route, values)
     payload = {"principal": scope, "route": route, "arguments": values}
@@ -243,6 +318,8 @@ def matches_command(previous, digest, name, route, arguments, saved):
     # were hashed already; autonomy's omitted target must also match the saved result.
     legacy = {"command": name, "arguments": json_value({k: v for k, v in arguments.items()
               if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
+    if route == "gateway.find_offers" and legacy["arguments"].get("product_ids") is None:
+        legacy["arguments"].pop("product_ids", None)
     # Lane B excluded the resolved principal from its earlier payload hashes.
     lane_legacy = {"command": name, "arguments": {k: v for k, v in legacy["arguments"].items() if k != "principal"}}
     lane_versioned = dict(lane_legacy)
@@ -262,7 +339,7 @@ def matches_command(previous, digest, name, route, arguments, saved):
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets", "lookup", "connections") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets", "lookup", "connections", "recurring", "proposals", "memory") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")
@@ -285,6 +362,10 @@ def install(gateway, target, name, category):
         bound.apply_defaults()
         arguments = bound.arguments
         principal = PRINCIPAL.get() or arguments.get("principal")
+        if route == "recurring.run" and principal is None:
+            from .auth import Principal
+            row = gateway.recurring.get(arguments["id"])
+            principal = Principal(row["agent_id"], customer_ids=(row["customer_id"],))
         identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
         scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
@@ -295,12 +376,14 @@ def install(gateway, target, name, category):
         prepared_token = None
         try:
             def preflight():
-                if category != "read" and (principal is None or principal.kind == "agent"):
+                if category != "read" and route != "recurring.run" and (principal is None or principal.kind == "agent"):
                     from .buyer import check_suspension
                     check_suspension(gateway.db, identity)
                 if key is not None:
                     if not key.strip():
                         raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
+                    if len(key) > 200:
+                        raise DomainError("VALIDATION_ERROR", "Idempotency keys must be at most 200 characters", 422)
                     if route not in KEYED_ROUTES:
                         raise DomainError("VALIDATION_ERROR", "This read operation does not accept an idempotency key", 422)
             command_checks(gateway, route, arguments, principal, preflight)

@@ -17,6 +17,7 @@ from app.purchase_memory import PurchaseMemory, detect_patterns
 from app.sandbox import scenario_gateway
 from conftest import OPERATOR_HEADERS, agent_headers, raw_product
 from test_verifiable_mandate import buyer as vc_issuer, issue
+from test_webhooks import receiver, subscribe
 
 
 @pytest.fixture
@@ -62,6 +63,13 @@ def suggestions(client, **kwargs):
 def counts(gateway):
     with gateway.db.connect() as conn:
         return tuple(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("quotes", "orders"))
+
+
+def restart_memory(gateway):
+    from app.commands import install
+    gateway.memory = PurchaseMemory(gateway)
+    for name in ("act", "put_preferences"):
+        install(gateway, gateway.memory, name, "mutation")
 
 
 def tool(gateway, name, arguments, agent="external", mandate=None):
@@ -194,7 +202,7 @@ def test_ac_6_memory_controls_freeze_updates_and_persist_snooze_dismiss_exclusio
         quote = gateway.orders.create_quote(QuoteRequest(customer_id="1", deliver_by=need.deliver_by,
             need_ref=lookup.lookup_id, lines=[{"product_id": "1", "quantity_sales_units": 200}]))
         assert gateway.orders.place_order(quote.id, "memory-off").status == "CONFIRMED"
-        gateway.memory = PurchaseMemory(gateway)  # A restart must not backfill the disabled period.
+        restart_memory(gateway)  # A restart must not backfill the disabled period.
         client.put("/v1/buyer/memory-preferences", json={"suggestion_horizon": 60}, headers=admin).raise_for_status()
         assert client.get("/v1/suggestions").json()[0]["order_count"] == 6
         client.put("/v1/buyer/memory-preferences", json={"excluded_products": ["1"]}, headers=admin).raise_for_status()
@@ -202,12 +210,12 @@ def test_ac_6_memory_controls_freeze_updates_and_persist_snooze_dismiss_exclusio
         client.put("/v1/buyer/memory-preferences", json={"suggestion_horizon": 60}, headers=admin).raise_for_status()
         response = client.post(f"/v1/suggestions/{id}/snooze", json={"days": 3})
         assert response.status_code == 200
-        gateway.memory = PurchaseMemory(gateway)
+        restart_memory(gateway)
         assert suggestions(client) == []
         with patch("app.audit.utcnow", return_value=audit.utcnow() + timedelta(days=4)):
             assert len(suggestions(client)) == 1
             assert client.post(f"/v1/suggestions/{id}/dismiss").status_code == 200
-        gateway.memory = PurchaseMemory(gateway)
+        restart_memory(gateway)
         assert suggestions(client) == []
         assert client.delete("/v1/buyer/memory", headers=admin).status_code == 200
         client.put("/v1/buyer/memory-preferences", json={"enabled": True}, headers=admin).raise_for_status()
@@ -244,7 +252,8 @@ def test_ac_7_mcp_create_recurring_requires_permission_and_returns_recovery(gate
     assert not allowed.is_error and len(gateway.recurring.rows()) == 1
 
 
-def test_ac_8_each_suggestion_action_is_audited_and_emitted_in_scoped_durable_outbox(gateway, memory_setup):
+def test_ac_8_each_suggestion_action_is_audited_and_emitted_in_scoped_durable_outbox(gateway, memory_setup, receiver):
+    subscribe(gateway, event_types=["suggestion." + name for name in ("shown", "prepared", "made_recurring", "dismissed", "snoozed")])
     delivered = []
     gateway.outbox.register("memory-webhook-test", lambda event: delivered.append(event) if event["type"].startswith("suggestion.") else None)
     with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
@@ -272,3 +281,49 @@ def test_ac_8_each_suggestion_action_is_audited_and_emitted_in_scoped_durable_ou
             assert conn.execute("SELECT status FROM outbox WHERE event_id=? AND consumer='memory-webhook-test'", (event["id"],)).fetchone()[0] == "delivered"
         assert actions == {event["type"].split(".")[1] for event in events}
     assert actions == {event["type"].split(".")[1] for event in delivered}
+    assert actions == {json.loads(request.content)["type"].split(".")[1] for request in receiver["calls"]}
+
+
+@pytest.mark.parametrize("action,payload", [("prepare", {}), ("make-recurring", {}), ("dismiss", None), ("snooze", {"days": 3})])
+def test_review_suggestion_action_replay_is_atomic_and_authorized(gateway, memory_setup, action, payload):
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        id = suggestions(client)[0]["id"]
+        path = f"/v1/suggestions/{id}/{action}"
+        headers = {"Idempotency-Key": "suggestion-action"}
+        first = client.post(path, json=payload, headers=headers)
+        replay = client.post(path, json=payload, headers=headers)
+        assert first.status_code == replay.status_code == 200
+        assert first.json() == replay.json()
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT count(*) FROM commands WHERE key='suggestion-action'").fetchone()[0] == 1
+        policy = gateway.policy.get()
+        policy.agents["external"].customer_ids = ["different"]
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Scope removed"))
+        assert client.post(path, json=payload, headers=headers).status_code in {403, 404}
+
+
+def test_review_memory_interfaces_and_mcp_workflows_remain_registered(gateway):
+    schema = create_app(gateway).openapi()
+    for path, method in [("/v1/suggestions", "get"), ("/v1/buyer/memory-preferences", "put"),
+                         *[(f"/v1/suggestions/{{id}}/{name}", "post") for name in ("prepare", "make-recurring", "dismiss", "snooze")]]:
+        assert method in schema["paths"][path]
+    names = {t.name for t in asyncio.run(create_server(gateway, "external").list_tools())}
+    assert {"get_replenishment_suggestions", "prepare_suggestion", "create_recurring_from_suggestion",
+            "list_recurring_orders", "create_recurring_order", "run_recurring_order_now", "pause_recurring_order"} <= names
+
+
+def test_review_preparation_replay_survives_a_new_purchase(gateway, memory_setup, upstream, need):
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        id = suggestions(client)[0]["id"]
+        headers = {"Idempotency-Key": "prepare-before-new-purchase"}
+        path = f"/v1/suggestions/{id}/prepare"
+        prepared = client.post(path, headers=headers)
+        assert prepared.status_code == 200
+        need.quantity = Quantity(value=1000, unit="L")
+        lookup = gateway.find_offers(need)
+        quote = gateway.orders.create_quote(QuoteRequest(customer_id="1", deliver_by=need.deliver_by,
+            need_ref=lookup.lookup_id, lines=[{"product_id": "1", "quantity_sales_units": 200}]))
+        assert gateway.orders.place_order(quote.id, "new-purchase-after-preparation").status == "CONFIRMED"
+        replay = client.post(path, headers=headers)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["lookup_id"] == prepared.json()["lookup_id"]

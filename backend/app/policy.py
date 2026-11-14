@@ -199,6 +199,9 @@ class Policy:
         ignored_codes = set(policy.approval.ignored_warnings)
         hits, rejected, approval = [], False, False
         customer = policy.customers.get(customer_id)
+        from .substitution import apply_profile
+        for line in lines:
+            apply_profile(line, policy, customer_id)
         if customer and customer.clinical_review == "required":
             hits.append(RuleHit(rule="CLINICAL_REVIEW", detail="Clinical review by a buyer approver is required."))
             approval = True

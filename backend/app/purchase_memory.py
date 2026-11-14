@@ -16,23 +16,23 @@ from .auth import Principal, resolve_principal
 from .buyer import check_suspension
 from .db import DomainError
 from .foundation import PRINCIPAL
-from .models import LookupResult, Model, NeedSpec, Quote
+from .models import InputText, InputTexts, LookupResult, Model, NeedSpec, Quote
 from .recurring import Deviations, snapshot
 from .mandates import decode
 
 
 class MemoryPreferences(Model):
     enabled: bool = True
-    excluded_products: list[str] = Field(default_factory=list)
+    excluded_products: InputTexts = Field(default_factory=list)
     suggestion_horizon: int = Field(default=14, ge=1, le=365, strict=True)
 
 
 class SuggestionAction(Model):
-    buyer_agent_id: str | None = None
+    buyer_agent_id: InputText | None = None
 
 
 class MakeRecurring(SuggestionAction):
-    timezone: str = "Europe/Helsinki"
+    timezone: InputText = "Europe/Helsinki"
     permitted_deviations: Deviations = Field(default_factory=Deviations)
 
     @field_validator("timezone")
@@ -171,6 +171,12 @@ class PurchaseMemory:
             if mandate:
                 customer = decode(mandate)[1]["vc"]["credentialSubject"]["customer_id"]
                 principal = replace(principal, customer_ids=(customer,))
+            else:
+                grant = self.g.policy.get().agents.get(principal.id)
+                allowed = tuple(c for c in principal.customer_ids if grant and c in grant.customer_ids)
+                if not grant or principal.customer_ids and not allowed:
+                    raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Current agent authority excludes these customers", 403)
+                principal = replace(principal, customer_ids=allowed)
         return principal
 
     def patterns(self, principal, mandate=None):
@@ -251,7 +257,6 @@ class PurchaseMemory:
             raise DomainError("VALIDATION_ERROR", "Suggested date or quantity is outside the normal lookup window; prepare nearer the need date", 422) from error
 
     def act(self, id, action, principal, body=None, mandate=None):
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             pattern = self.get(id, principal, mandate)
             if principal.kind == "buyer_user" and principal.role == "buyer_viewer":
@@ -265,6 +270,8 @@ class PurchaseMemory:
                     context = PRINCIPAL.set(Principal(agent, customer_ids=(pattern["customer_id"],)))
                     try:
                         result = self.g.find_offers(self.need(pattern), f"agent:{agent}", mandate=mandate)
+                        result.context["suggestion_ref"] = {"id": id, "product_id": pattern["product_id"]}
+                        conn.execute("UPDATE lookups SET data=? WHERE id=?", (result.model_dump_json(), result.lookup_id))
                     finally:
                         PRINCIPAL.reset(context)
                 else:
@@ -285,7 +292,6 @@ class PurchaseMemory:
 
     def put_preferences(self, body, principal, customer=None, *, forget=False):
         customer = self.g.proposals.scope(principal, customer, admin=True)
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             prior = preferences(conn, customer)
             data = body.model_dump() if body else prior
@@ -309,24 +315,28 @@ def suggestions(request: Request, horizon: int | None = Query(default=None, ge=1
 
 @router.post("/v1/suggestions/{id}/prepare", response_model=LookupResult, summary="Run a normal lookup with plans; creates no quote or order")
 def prepare(id: str, request: Request, body: SuggestionAction = SuggestionAction(),
-            principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.memory.act(id, "prepared", principal, body, agent_mandate)
+            principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.act(id, "prepared", principal, body, agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/suggestions/{id}/make-recurring", response_model=dict, summary="Create a mandate-authorized recurring template using historical cadence and quantity, without buying")
 def make_recurring(id: str, request: Request, body: MakeRecurring = MakeRecurring(),
-                   principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.memory.act(id, "made_recurring", principal, body, agent_mandate)
+                   principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.act(id, "made_recurring", principal, body, agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/suggestions/{id}/dismiss", response_model=dict)
-def dismiss(id: str, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.memory.act(id, "dismissed", principal, mandate=agent_mandate)
+def dismiss(id: str, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.act(id, "dismissed", principal, mandate=agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/suggestions/{id}/snooze", response_model=dict)
-def snooze(id: str, body: Snooze, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.memory.act(id, "snoozed", principal, body, agent_mandate)
+def snooze(id: str, body: Snooze, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.act(id, "snoozed", principal, body, agent_mandate, command_key=idempotency_key)
 
 
 @router.get("/v1/buyer/memory-preferences", response_model=dict)
@@ -335,10 +345,12 @@ def get_preferences(request: Request, customer_id: str | None = None, principal:
 
 
 @router.put("/v1/buyer/memory-preferences", response_model=dict)
-def put_preferences(body: MemoryPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.memory.put_preferences(body, principal, customer_id)
+def put_preferences(body: MemoryPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal),
+                    idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.put_preferences(body, principal, customer_id, command_key=idempotency_key)
 
 
 @router.delete("/v1/buyer/memory", response_model=dict, summary="Record a forgetting request and hide this customer's memory permanently from suggestions")
-def forget(request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.memory.put_preferences(None, principal, customer_id, forget=True)
+def forget(request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal),
+           idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.memory.put_preferences(None, principal, customer_id, forget=True, command_key=idempotency_key)

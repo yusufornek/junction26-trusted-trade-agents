@@ -287,8 +287,12 @@ def test_ac_6_customer_and_subscription_ownership_isolation(gateway, need, upstr
         assert client.post("/v1/webhook-subscriptions", json={"url": "https://receiver.test/hook", "customer_ids": ["1"], "event_types": ["order.confirmed"]}).status_code == 403
     from app import audit
     with gateway.db.connect(write=True) as conn:
+        # This test isolates ownership with a consented event. Spec 36 forbids
+        # proposal delivery without both recorded and current webhook consent.
+        conn.execute("INSERT INTO proposal_preferences VALUES(?,?)", ("1", json.dumps({
+            "categories": ["10400"], "channels": ["webhook"]})))
         audit.append(conn, "buyer", "MANDATE_REVOKED", "Revoked", data={"issuer": "buyer", "customer_ids": ["1", "2"], "jti_revoked": ["authority"], "agent_id": "external"})
-        audit.append(conn, "supplier", "PROPOSAL_RECEIVED", "Proposal", data={"proposal_id": "proposal-one", "customer_id": "1", "agent_id": "external"})
+        audit.append(conn, "supplier", "PROPOSAL_RECEIVED", "Proposal", data={"proposal_id": "proposal-one", "customer_id": "1", "agent_id": "external", "channels": ["webhook"]})
     received = [json.loads(r.content) for r in receiver["calls"]]
     assert [r["type"] for r in received] == ["order.approval_required", "mandate.revoked", "proposal.received"]
     assert all(r["customer_id"] == "1" for r in received)

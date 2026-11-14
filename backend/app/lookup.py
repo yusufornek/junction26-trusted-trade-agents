@@ -430,8 +430,8 @@ class Lookup:
             result.links.update(forward_links(conn, request_id=lookup_id, agent_id=agent_id))
         return result
 
-    def find_offers(self, need, actor="agent:external", *, mandate=None):
-        return self._run(need, actor, lambda counter: self._find_offers(need, actor, mandate, counter))
+    def find_offers(self, need, actor="agent:external", *, mandate=None, product_ids=None):
+        return self._run(need, actor, lambda counter: self._find_offers(need, actor, mandate, counter, product_ids=product_ids))
 
     def _run(self, need, actor, operation):
         counter = RequestCounter()
@@ -446,7 +446,7 @@ class Lookup:
                 error.audited = True
             raise
 
-    def prepare(self, need, actor, mandate, counter):
+    def prepare(self, need, actor, mandate, counter, *, product_ids=None):
         adapter = self.suppliers.get(need.supplier_id)
         catalog = adapter.catalog
         # Check authority before catalog screening, Decisions or any Valio call.
@@ -481,6 +481,13 @@ class Lookup:
         matched_count = counts.get("matched_count", len(pool))
         from .substitution import include_preferred
         pool = include_preferred(pool, need, catalog, categories)[:pool_size]
+        if product_ids is not None:
+            if not 1 <= len(product_ids) <= 10:
+                raise DomainError("VALIDATION_ERROR", "Explicit procurement is limited to 10 products", 422)
+            pool = [catalog.get(pid) for pid in dict.fromkeys(product_ids)]
+            pool = [p for p in pool if not constraint_failures(p, need.required_claims, need.exclude_allergens)
+                    and (categories is None or p.category in categories)]
+            matched_count = len(pool)
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = counter.screened_count
@@ -507,8 +514,8 @@ class Lookup:
                 candidates = [preferred, *candidates[:max(0, policy.shortlist.live_max - 1)]]
         return (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool)
 
-    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None):
-        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter)
+    def _find_offers(self, need, actor, mandate, counter, *, prepared=None, evidence=None, product_ids=None):
+        (need, original_need, policy, record, mandate, effective, candidates, fits, global_warnings, removed_by, excluded, retrieval, matched_count, screened_count, pool) = prepared or self.prepare(need, actor, mandate, counter, product_ids=product_ids)
         adapter = self.suppliers.get(need.supplier_id)
         catalog = adapter.catalog
         ids = [p.id for p in candidates]

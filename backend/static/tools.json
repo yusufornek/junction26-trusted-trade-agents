@@ -124,12 +124,24 @@
     }
   },
   "prepare_suggestion": {
-    "description": "Prepare a replenishment suggestion as a normal fresh lookup with fulfilment plans under your mandate. Creates no quote or order; quote the returned plan separately, then place under normal policy and approval. Hidden, dismissed or out-of-scope suggestions return SUGGESTION_NOT_FOUND. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Prepare a replenishment suggestion as a normal fresh lookup with fulfilment plans under your mandate. Optional idempotency_key prevents duplicate preparations across REST/MCP. Creates no quote or order; quote the returned plan separately, then place under normal policy and approval. Hidden, dismissed or out-of-scope suggestions return SUGGESTION_NOT_FOUND. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "properties": {
         "suggestion_id": {
           "title": "Suggestion Id",
           "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -373,11 +385,13 @@
           "additionalProperties": false,
           "properties": {
             "product_type": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Type",
               "type": "string"
             },
             "intended_use": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intended Use",
               "type": "string"
@@ -385,6 +399,7 @@
             "preparation": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -516,6 +531,7 @@
           "properties": {
             "customer_id": {
               "description": "Required non-blank Valio customer identifier.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Customer Id",
               "type": "string"
@@ -551,12 +567,14 @@
             "supplier_id": {
               "default": "valio",
               "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Supplier Id",
               "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intent",
               "type": "string"
@@ -565,8 +583,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -580,16 +600,20 @@
             "required_claims": {
               "description": "All must exist as catalog nutritionalClaim IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -1099,8 +1123,10 @@
           "properties": {
             "brands": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Brands",
               "type": "array"
             },
@@ -1133,8 +1159,10 @@
             "labels": {
               "description": "Preferred catalog packaging label IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Labels",
               "type": "array"
             }
@@ -1319,6 +1347,7 @@
           "additionalProperties": false,
           "properties": {
             "product_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Id",
               "type": "string"
@@ -1350,6 +1379,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -1576,7 +1619,7 @@
     }
   },
   "create_recurring_from_suggestion": {
-    "description": "Create a standing workflow from a purchase rhythm's cadence and median quantity, with confirmed historical evidence as its baseline. Requires explicit recurring permission; creates no quote/order now. Each execution uses spec 35 drift, mandate, policy and approval checks. Zero deviations by default; configure permitted_deviations explicitly. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Create a standing workflow from a purchase rhythm's cadence and median quantity, with confirmed historical evidence as its baseline. Requires explicit recurring permission; creates no quote/order now. Each execution uses spec 35 drift, mandate, policy and approval checks. Zero deviations by default; configure permitted_deviations explicitly. Optional idempotency_key shares the REST command result and rechecks current authority on replay. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "Deviations": {
@@ -1639,8 +1682,21 @@
         },
         "timezone": {
           "default": "Europe/Helsinki",
+          "maxLength": 4000,
           "title": "Timezone",
           "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -1681,7 +1737,7 @@
     }
   },
   "create_recurring_order": {
-    "description": "Create a recurring workflow from your confirmed approved_order_id, cadence RRULE/timezone/start_at and permitted_deviations. Requires explicit recurring permission. No purchase at creation; future runs revalidate authority, stock, prices, policy and drift against the approved baseline. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Create a recurring workflow from your confirmed approved_order_id, cadence RRULE/timezone/start_at and permitted_deviations. Requires explicit recurring permission. Optional idempotency_key shares REST Idempotency-Key replay and current-authority checks. No purchase at creation; future runs revalidate authority, stock, prices, policy and drift against the approved baseline. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "Cadence": {
@@ -1689,11 +1745,13 @@
           "properties": {
             "rrule": {
               "default": "FREQ=WEEKLY",
+              "maxLength": 4000,
               "title": "Rrule",
               "type": "string"
             },
             "timezone": {
               "default": "Europe/Helsinki",
+              "maxLength": 4000,
               "title": "Timezone",
               "type": "string"
             },
@@ -1760,6 +1818,7 @@
           "additionalProperties": false,
           "properties": {
             "approved_order_id": {
+              "maxLength": 4000,
               "title": "Approved Order Id",
               "type": "string"
             },
@@ -1781,6 +1840,18 @@
       "properties": {
         "request": {
           "$ref": "#/$defs/RecurringRequest"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -1796,12 +1867,24 @@
     }
   },
   "run_recurring_order_now": {
-    "description": "Run one standing workflow occurrence now. Requires current recurring permission. Occurrences deduplicate by workflow and local date; fresh lookup/quote/order uses the stored mandate and baseline. Drift or policy exceptions require approval. Paused workflows refuse execution. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Run one standing workflow occurrence now. Requires current recurring permission. Occurrences deduplicate by workflow and local date; fresh lookup/quote/order uses the stored mandate and baseline. Drift or policy exceptions require approval. Paused workflows refuse execution. Optional idempotency_key replays the same result after current-authority checks. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "properties": {
         "recurring_order_id": {
           "title": "Recurring Order Id",
           "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -1817,12 +1900,24 @@
     }
   },
   "pause_recurring_order": {
-    "description": "Pause your standing workflow under current recurring permission. The scheduler and run-now stop purchasing; history stays visible. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Pause your standing workflow under current recurring permission. The scheduler and run-now stop purchasing; history stays visible. Optional idempotency_key prevents repeated pause records. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "properties": {
         "recurring_order_id": {
           "title": "Recurring Order Id",
           "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -1867,6 +1962,7 @@
     "inputSchema": {
       "properties": {
         "query": {
+          "maxLength": 4000,
           "title": "Query",
           "type": "string"
         },
@@ -2272,18 +2368,20 @@
     }
   },
   "find_offers": {
-    "description": "Find up to 10 ranked live priced offers for a structured need. function {product_type, intended_use, preparation?, acceptable_units} requires category and fit evidence; the fit question includes intended use. substitute_for {product_id} returns an available preferred product as best, otherwise ranks alternatives by category, claims superset, pack size and comparable price. Alternatives carry substitution {for, differences, allergen_evidence} and are described as compliant with the recorded procurement constraints. Customer substitution profiles gate brand, pack and percentage price changes. clinical_review=required forces a scoped buyer_approver; an operator alone cannot approve. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; without it, contradictory sizes are shown together, the plausible catalog package total is retained and human review is required. Either language can supply a price-confirmed exact name candidate within 3%. Nested name counts retain inner packages while consuming the outer multiplier once; full nested pcs/kpl counts require reconciliation with a package total. Slash portion counts do not multiply the total; consistent shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; Name sizes require a confirming live ratio within 3%, matching explicit catalog content within 3%, one count expression matching the sales multiplier without contradictory measures, or a single measure at multiplier 1. Otherwise size_per_sales_unit and units_needed are display estimates from the smallest plausible candidate and SIZE_UNCONFIRMED prevents autonomous placement. Spec 15 also requires SIZE_UNCONFIRMED for catalog/name sizes without a confirming live ratio. name_size_candidates lists every candidate with original source_text and local expression. Explicit package totals are never multiplied by portion counts; repeated complete pack expressions stay independent, and slash portion counts are retained (100 pieces / 25 per 625g pack = 2.5kg). NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Find up to 10 ranked live priced offers for a structured need. function {product_type, intended_use, preparation?, acceptable_units} requires category and fit evidence; the fit question includes intended use. substitute_for {product_id} returns an available preferred product as best, otherwise ranks alternatives by category, claims superset, pack size and comparable price. Alternatives carry substitution {for, differences, allergen_evidence} and are described as compliant with the recorded procurement constraints. Current customer substitution profiles are re-evaluated at placement and approval against signed quote-time brand, pack and comparable-price evidence; missing historical comparison evidence needs review. Category closeness ranks substitutes; function.product_type determines eligible categories. clinical_review=required forces a scoped buyer_approver; an operator alone cannot approve. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; SIZE_MISMATCH means pack content evidence differs by more than 3% and requires review. A live price ratio resolves catalog/name evidence; without it, contradictory sizes are shown together, the plausible catalog package total is retained and human review is required. Either language can supply a price-confirmed exact name candidate within 3%. Nested name counts retain inner packages while consuming the outer multiplier once; full nested pcs/kpl counts require reconciliation with a package total. Slash portion counts do not multiply the total; consistent shared-unit net/drained names use net weight. Zero/negative sizes are no evidence; OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. Hard constraints and sale blocks cannot be overridden by fit scores. SIZE_UNCONFIRMED, UNIT_MISMATCH (zero usable amount), STOCK_MODEL_UNKNOWN and CUTOFF_UNKNOWN require review; Name sizes require a confirming live ratio within 3%, matching explicit catalog content within 3%, one count expression matching the sales multiplier without contradictory measures, or a single measure at multiplier 1. Otherwise size_per_sales_unit and units_needed are display estimates from the smallest plausible candidate and SIZE_UNCONFIRMED prevents autonomous placement. Spec 15 also requires SIZE_UNCONFIRMED for catalog/name sizes without a confirming live ratio. name_size_candidates lists every candidate with original source_text and local expression. Explicit package totals are never multiplied by portion counts; repeated complete pack expressions stay independent, and slash portion counts are retained (100 pieces / 25 per 625g pack = 2.5kg). NO_STOCK rejects zero-stock products with no delivery date. Missing/zero/negative prices or missing currency give PRICE_ERROR. VARIABLE_WEIGHT (final price follows delivered weight) and DEPOSIT (details supplied) are informational. All warnings fail closed to approval unless explicitly ignored by policy; protected evidence warnings cannot be ignored. Naive closingTime uses Europe/Helsinki. Missing reliability/CO2 is neutral, not proof. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "FunctionalNeed": {
           "additionalProperties": false,
           "properties": {
             "product_type": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Type",
               "type": "string"
             },
             "intended_use": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intended Use",
               "type": "string"
@@ -2291,6 +2389,7 @@
             "preparation": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -2327,6 +2426,7 @@
           "properties": {
             "customer_id": {
               "description": "Required non-blank Valio customer identifier.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Customer Id",
               "type": "string"
@@ -2362,12 +2462,14 @@
             "supplier_id": {
               "default": "valio",
               "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Supplier Id",
               "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intent",
               "type": "string"
@@ -2376,8 +2478,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -2391,16 +2495,20 @@
             "required_claims": {
               "description": "All must exist as catalog nutritionalClaim IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -2467,8 +2575,10 @@
           "properties": {
             "brands": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Brands",
               "type": "array"
             },
@@ -2501,8 +2611,10 @@
             "labels": {
               "description": "Preferred catalog packaging label IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Labels",
               "type": "array"
             }
@@ -2542,6 +2654,7 @@
           "additionalProperties": false,
           "properties": {
             "product_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Id",
               "type": "string"
@@ -2800,11 +2913,13 @@
           "additionalProperties": false,
           "properties": {
             "product_type": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Type",
               "type": "string"
             },
             "intended_use": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intended Use",
               "type": "string"
@@ -2812,6 +2927,7 @@
             "preparation": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -2943,6 +3059,7 @@
           "properties": {
             "customer_id": {
               "description": "Required non-blank Valio customer identifier.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Customer Id",
               "type": "string"
@@ -2978,12 +3095,14 @@
             "supplier_id": {
               "default": "valio",
               "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Supplier Id",
               "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intent",
               "type": "string"
@@ -2992,8 +3111,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -3007,16 +3128,20 @@
             "required_claims": {
               "description": "All must exist as catalog nutritionalClaim IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -3526,8 +3651,10 @@
           "properties": {
             "brands": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Brands",
               "type": "array"
             },
@@ -3560,8 +3687,10 @@
             "labels": {
               "description": "Preferred catalog packaging label IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Labels",
               "type": "array"
             }
@@ -3746,6 +3875,7 @@
           "additionalProperties": false,
           "properties": {
             "product_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Id",
               "type": "string"
@@ -3777,6 +3907,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -4003,7 +4147,7 @@
     }
   },
   "find_basket_offers": {
-    "description": "Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Alternatively, explicit manifest.base_servings gives the base and manifest.servings the target; request.servings overrides that target. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs sum exact quantities before pack rounding. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; simulation reserves all lines or none.  Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
+    "description": "Find one purchasable recipe basket from a version 1 agent-supplied ingredient manifest. manifest.servings is the base; optional request.servings scales quantities. Alternatively, explicit manifest.base_servings gives the base and manifest.servings the target; request.servings overrides that target. Union standing customer constraints per ingredient, deduplicate SKUs and fetch one batched price and one availability response. Shared SKUs aggregate rational quantities and density conversions before one pack ceiling. Ingredient coverage uses unrounded content demand; offer coverage uses rounded purchased packs. Returns scaled_manifest, ranked ingredient offers, chosen_line, purchasable_quantity, overbuy, coverage and basket policy_preview. Uncovered ingredients give PARTIAL_BASKET and need approval. G/ML normalize to KG/L; mass-volume conversion requires explicit density_kg_per_l in the ingredient or catalog. Quote with basket_ref {basket_lookup_id}; known-stock shortages always require review and reserve none. Unknown-stock lines remain orderable without local reservations under spec 39. Optional idempotency_key replays the original basket lookup.  Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; policy only tightens its per-order and daily limits and autonomy. Levels: approval_required (default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may POST /v1/agents/{id}/autonomy with level and reason (optional Idempotency-Key binds the target and payload, rechecks current scope and prevents repeated changes). Quote/order bind and expose mandate metadata; human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.",
     "inputSchema": {
       "$defs": {
         "BasketLookupRequest": {
@@ -4011,6 +4155,7 @@
           "properties": {
             "customer_id": {
               "description": "Required non-blank Valio customer identifier.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Customer Id",
               "type": "string"
@@ -4052,6 +4197,7 @@
           "additionalProperties": false,
           "properties": {
             "name": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Name",
               "type": "string"
@@ -4063,8 +4209,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -4076,15 +4224,19 @@
             },
             "required_claims": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -4124,6 +4276,7 @@
               "type": "integer"
             },
             "recipe_name": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Recipe Name",
               "type": "string"
@@ -4162,6 +4315,7 @@
             "yield_note": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -4212,6 +4366,18 @@
       "properties": {
         "request": {
           "$ref": "#/$defs/BasketLookupRequest"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key"
         }
       },
       "required": [
@@ -4358,11 +4524,13 @@
           "additionalProperties": false,
           "properties": {
             "product_type": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Type",
               "type": "string"
             },
             "intended_use": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intended Use",
               "type": "string"
@@ -4370,6 +4538,7 @@
             "preparation": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -4405,6 +4574,7 @@
           "additionalProperties": false,
           "properties": {
             "name": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Name",
               "type": "string"
@@ -4416,8 +4586,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -4429,15 +4601,19 @@
             },
             "required_claims": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -4568,6 +4744,7 @@
               "type": "integer"
             },
             "recipe_name": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Recipe Name",
               "type": "string"
@@ -4606,6 +4783,7 @@
             "yield_note": {
               "anyOf": [
                 {
+                  "maxLength": 4000,
                   "type": "string"
                 },
                 {
@@ -4780,6 +4958,7 @@
           "properties": {
             "customer_id": {
               "description": "Required non-blank Valio customer identifier.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Customer Id",
               "type": "string"
@@ -4815,12 +4994,14 @@
             "supplier_id": {
               "default": "valio",
               "description": "One supplier per procurement request; valio by default. nordfood is synthetic.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Supplier Id",
               "type": "string"
             },
             "intent": {
               "description": "Buyer need; the outside agent structures this request.",
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Intent",
               "type": "string"
@@ -4829,8 +5010,10 @@
               "anyOf": [
                 {
                   "items": {
+                    "maxLength": 4000,
                     "type": "string"
                   },
+                  "maxItems": 100,
                   "type": "array"
                 },
                 {
@@ -4844,16 +5027,20 @@
             "required_claims": {
               "description": "All must exist as catalog nutritionalClaim IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Required Claims",
               "type": "array"
             },
             "exclude_allergens": {
               "description": "Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Exclude Allergens",
               "type": "array"
             },
@@ -5338,8 +5525,10 @@
           "properties": {
             "brands": {
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Brands",
               "type": "array"
             },
@@ -5372,8 +5561,10 @@
             "labels": {
               "description": "Preferred catalog packaging label IDs.",
               "items": {
+                "maxLength": 4000,
                 "type": "string"
               },
+              "maxItems": 100,
               "title": "Labels",
               "type": "array"
             }
@@ -5510,6 +5701,7 @@
           "additionalProperties": false,
           "properties": {
             "product_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Id",
               "type": "string"
@@ -5541,6 +5733,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -5682,6 +5888,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -5697,6 +5904,7 @@
           "additionalProperties": false,
           "properties": {
             "lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Lookup Id",
               "type": "string"
@@ -5719,6 +5927,7 @@
           "additionalProperties": false,
           "properties": {
             "product_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Product Id",
               "type": "string"
@@ -5913,6 +6122,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -6414,6 +6624,7 @@
           "additionalProperties": false,
           "properties": {
             "lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Lookup Id",
               "type": "string"
@@ -6530,6 +6741,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -6916,6 +7141,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -7605,6 +7831,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -8161,6 +8401,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -8850,6 +9091,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -9406,6 +9661,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -10095,6 +10351,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [
@@ -10686,6 +10956,7 @@
         },
         "reason": {
           "default": "",
+          "maxLength": 4000,
           "title": "Reason",
           "type": "string"
         },
@@ -10804,6 +11075,7 @@
           "additionalProperties": false,
           "properties": {
             "basket_lookup_id": {
+              "maxLength": 4000,
               "minLength": 1,
               "title": "Basket Lookup Id",
               "type": "string"
@@ -11493,6 +11765,20 @@
               },
               "title": "Allergen Evidence",
               "type": "array"
+            },
+            "comparison": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.",
+              "title": "Comparison"
             }
           },
           "required": [

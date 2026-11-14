@@ -11,12 +11,12 @@ COMPLIANCE_TEXT = "Compliant with the recorded procurement constraints."
 def functional_categories(catalog, need):
     if need.function and need.quantity.unit not in need.function.acceptable_units:
         raise DomainError("FUNCTION_UNIT_MISMATCH", "Requested unit is not in function.acceptable_units", 422)
-    if need.substitute_for:
-        preferred = catalog.get(need.substitute_for.product_id)
-        return {preferred.category} if preferred.category else set()
     if need.function:
         matches, _ = catalog.search(need.function.product_type, limit=100, max_limit=100)
         return {p.category for p in matches if p.category}
+    if need.substitute_for:
+        preferred = catalog.get(need.substitute_for.product_id)
+        return {preferred.category} if preferred.category else set()
     return None
 
 
@@ -53,20 +53,32 @@ def annotate(offer, need, catalog, policy, prices):
     else:
         differences.append("comparable price increase: unknown")
     evidence = [allergen_evidence(product, code)[1] for code in need.exclude_allergens]
-    offer.substitution = Substitution(**{"for": original.id, "differences": differences, "allergen_evidence": evidence})
+    offer.substitution = Substitution(**{"for": original.id, "differences": differences, "allergen_evidence": evidence,
+        "comparison": {"brand": product.brand, "pack_size": offer.size_per_sales_unit,
+                       "price_increase_pct": increase, "unit": need.quantity.unit}})
     if COMPLIANCE_TEXT not in offer.matched_because:
         offer.matched_because.append(COMPLIANCE_TEXT)
-    customer = policy.customers.get(need.customer_id)
+    apply_profile(offer, policy, need.customer_id)
+
+
+def apply_profile(offer, policy, customer_id):
+    """Current authority over immutable quoted comparison facts, never current prices."""
+    if offer.substitution is None:
+        return
+    customer = policy.customers.get(customer_id)
     profile = customer.substitution_profile if customer else None
+    comparison = offer.substitution.comparison or {}
+    brand, size, increase = (comparison.get(k) for k in ("brand", "pack_size", "price_increase_pct"))
+    offer.warnings = [w for w in offer.warnings if w.code != "SUBSTITUTION_PROFILE"]
     reasons = []
     if profile:
         if profile.requires_approval:
             reasons.append("profile requires substitution approval")
-        if profile.allowed_brands and (product.brand or "").casefold() not in {b.casefold() for b in profile.allowed_brands}:
+        if profile.allowed_brands and (brand or "").casefold() not in {b.casefold() for b in profile.allowed_brands}:
             reasons.append("brand outside approved substitution profile")
         bounds = profile.pack_size_range
-        if (not offer.size_per_sales_unit or (bounds.min is not None and offer.size_per_sales_unit < bounds.min)
-                or (bounds.max is not None and offer.size_per_sales_unit > bounds.max)):
+        if (not size or (bounds.min is not None and size < bounds.min)
+                or (bounds.max is not None and size > bounds.max)):
             reasons.append("pack size outside approved substitution profile")
         if increase is None or increase > profile.max_price_increase_pct + 1e-9:
             reasons.append(f"price increase exceeds {profile.max_price_increase_pct:g}% or cannot be verified")

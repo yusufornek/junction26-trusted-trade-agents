@@ -18,6 +18,46 @@ from test_verifiable_mandate import buyer as vc_issuer, issue
 KEYED_WRITES = ("create_quote", "place_order", "cancel", "approve", "reject", "update", "reset", "revoke", "change", "find_offers")
 
 
+@pytest.mark.parametrize("model,body", [
+    ("NeedSpec", {"intent": "x" * 5000}),
+    ("NeedSpec", {"preferences": {"labels": ["x" * 5000]}}),
+    ("CancelRequest", {"cancelled_by": "Buyer", "reason": "x" * 5000}),
+    ("ApprovalRequest", {"approver": "Buyer", "comment": "x" * 5000}),
+    ("ConnectionRequest", {"agent_id": "test-agent", "client": "rest", "customer_ids": ["1"], "label": "x" * 5000}),
+    ("CustomerConstraints", {"note": "x" * 5000}),
+])
+def test_review_request_text_fields_are_bounded(need, model, body):
+    from app import models
+    from pydantic import ValidationError
+    data = {**need.model_dump(mode="json"), **body} if model == "NeedSpec" else body
+    with pytest.raises(ValidationError) as error:
+        getattr(models, model).model_validate(data)
+    assert any(e["type"] == "string_too_long" for e in error.value.errors())
+
+
+def test_review_failure_audit_bounds_entire_request(gateway):
+    with gateway.db.connect(write=True) as conn:
+        audit.append(conn, "agent:external", "LOOKUP_FAILED", "Refused", data={"inputs": {
+            "intent": "x" * 100000, "notes": ["n" * 5000] * 1000}, "error": "RATE_LIMITED"})
+    event = gateway.audit()[-1]
+    assert len(json.dumps(event.data)) < 20000
+    assert "truncated" in json.dumps(event.data).lower()
+    assert audit.verify(gateway.db)["valid"]
+
+
+def test_review_historical_long_lookup_and_quote_keep_loading(gateway, need, upstream):
+    from app.models import LookupResult
+    lookup = gateway.find_offers(need)
+    with gateway.db.connect(write=True) as conn:
+        data = json.loads(conn.execute("SELECT data FROM lookups WHERE id=?", (lookup.lookup_id,)).fetchone()[0])
+        data["need"]["intent"] = "historical " * 1000
+        conn.execute("UPDATE lookups SET data=? WHERE id=?", (json.dumps(data), lookup.lookup_id))
+    loaded = gateway.lookup.get(lookup.lookup_id, "external")
+    assert len(loaded.need.intent) > 4000
+    quote = gateway.orders.create_quote(quote_request(need, need_ref=lookup.lookup_id))
+    assert gateway.orders.get_quote(quote.id).id == quote.id
+
+
 @pytest.mark.parametrize("old_field_present", [False, True])
 @pytest.mark.parametrize("version", [None, 2])
 def test_review_policy_default_fingerprint_upgrade(gateway, old_field_present, version):
@@ -125,7 +165,9 @@ def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command)
     assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                                    "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
                                    "buyer.control", "buyer.revoke", "baskets.find_basket_offers",
-                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"}
+                                   "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create",
+                                   "recurring.create", "recurring.baseline", "recurring.run", "recurring.pause",
+                                   "proposals.submit", "proposals.action", "proposals.put_preferences", "memory.act", "memory.put_preferences"}
     actor = "external"
     headers = agent_headers(actor)
     method, url, body = "POST", "", {}

@@ -324,10 +324,15 @@ class Orders:
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
             quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=supplier_id)
+            if (lookup.context or {}).get("proposal_ref"):
+                quote.context["proposal_ref"] = lookup.context["proposal_ref"]
             # Preserve the exact catalog evidence approved with this signed quote.
             quote.context["product_evidence"] = {p.id: {
                 "brand": p.brand, "claims": sorted(p.claims), "allergens": p.allergen_status,
                 "allergen_declaration": p.has_allergen_declaration} for p in products.values()}
+            from .recurring import physical_pack
+            for p in products.values():
+                quote.context["product_evidence"][p.id]["physical_pack"] = physical_pack(p, price[p.id])
 
             if basket or lookup.basket:
                 quote.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
@@ -412,8 +417,14 @@ class Orders:
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
                                                 agent_id=agent_id, customer_id=quote.customer_id,
                                                 policy=policy, warnings=quote.warnings)
+            if quote.basket_ref and any(not line.availability.enough for line in lines):
+                from .models import RuleHit
+                result.hits.append(RuleHit(rule="basket_stock_unavailable", detail="All basket lines must be available before confirmation."))
+                if result.outcome == "CONFIRMED":
+                    result.outcome = "PENDING_APPROVAL"
             # Only the signed, stored quote can carry recurring comparison evidence.
-            drift = (quote.context or {}).get("recurring_drift", [])
+            comparison = self._recurring_comparison(quote, lines)
+            drift = comparison["diff"] if comparison else (quote.context or {}).get("recurring_drift", [])
             if drift:
                 from .models import RuleHit
                 result.hits.extend(RuleHit(rule="recurring_drift", detail=d) for d in drift)
@@ -434,6 +445,8 @@ class Orders:
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=quote.supplier_id)
                 if quote.basket_ref:
                     order.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
+            if comparison:
+                order.context["recurring_comparison"] = comparison
             order.correlation_id = CORRELATION.get() or quote.correlation_id
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
@@ -457,6 +470,17 @@ class Orders:
                 self._suggest_review(conn, order, "hard_constraint_refusal" if any(
                     h.rule == "hard_constraint_violation" for h in result.hits) else "policy_rejection")
             return order
+
+    @staticmethod
+    def _recurring_comparison(quote, lines):
+        context = (quote.context or {}).get("recurring_comparison")
+        if context is None:
+            return None
+        from .recurring import snapshot, compare, Deviations
+        current = snapshot(None, quote.model_copy(update={"lines": lines}))
+        return {**context, "current": current,
+                "diff": compare(current, context["previous"], context["baseline"],
+                                Deviations.model_validate(context["deviations"]))}
 
     def _execute(self, conn, order, quote):
         """Stable order UUID is the supplier idempotency key, including crash-before-commit retries."""
@@ -485,6 +509,21 @@ class Orders:
 
     def _violations(self, conn, quote):
         violations = [] if quote.need_ref else list(quote.hard_constraint_violations)
+        if proposal_id := (quote.context or {}).get("proposal_ref"):
+            from .proposals import Proposals, ProposalPreferences
+            row = conn.execute("SELECT data FROM proposals WHERE id=? AND customer_id=?", (proposal_id, quote.customer_id)).fetchone()
+            proposal = json.loads(row[0]) if row else {}
+            pref_row = conn.execute("SELECT data FROM proposal_preferences WHERE customer_id=?", (quote.customer_id,)).fetchone()
+            prefs = ProposalPreferences.model_validate_json(pref_row[0]) if pref_row else ProposalPreferences()
+            campaign_row = conn.execute("SELECT data FROM proposal_campaigns WHERE id=?", (proposal.get("campaign_id"),)).fetchone()
+            campaign = json.loads(campaign_row[0]) if campaign_row else {}
+            from .lookup import timestamp
+            valid_until = timestamp(proposal.get("valid_until"))
+            catalog = self.suppliers.get(quote.supplier_id).catalog
+            if (not valid_until or valid_until <= audit.utcnow() or not prefs.channels
+                    or campaign.get("campaign_id") in prefs.muted_campaigns or campaign.get("fingerprint") in prefs.muted_campaigns
+                    or any(not Proposals.relevant(catalog.get(line.product_id), prefs) for line in quote.lines)):
+                violations.append("Supplier proposal consent expired or was revoked (customer_policy)")
         if quote.need_ref:
             lookup = LookupResult.model_validate_json(conn.execute("SELECT data FROM lookups WHERE id=?", (quote.need_ref,)).fetchone()[0], context={"stored": True})
             need = lookup.need
@@ -688,10 +727,17 @@ class Orders:
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, customer_id=quote.customer_id,
                                                         warnings=quote.warnings, policy=policy)
-                if (quote.context or {}).get("recurring_drift"):
+                if order.basket_ref and any(not line.availability.enough for line in order.lines):
+                    from .models import RuleHit
+                    evaluation.hits.append(RuleHit(rule="basket_stock_unavailable", detail="All basket lines must be available before confirmation."))
+                    if evaluation.outcome == "CONFIRMED":
+                        evaluation.outcome = "PENDING_APPROVAL"
+                comparison = self._recurring_comparison(quote, order.lines)
+                drift = comparison["diff"] if comparison else (quote.context or {}).get("recurring_drift", [])
+                if drift:
                     from .models import RuleHit
                     evaluation.hits.extend(RuleHit(rule="recurring_drift", detail=d)
-                                           for d in quote.context["recurring_drift"])
+                                           for d in drift)
                 if evaluation.outcome == "REJECTED":
                     if any(hit.rule == "unregistered_agent" for hit in evaluation.hits):
                         raise DomainError("AGENT_NOT_REGISTERED", "Approval requires a mandate for the placing agent", 403,
@@ -711,6 +757,8 @@ class Orders:
                     _, effective = self.policy.effective_need(legacy_need, policy=policy)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective,
                     order.mandate, supplier_id=order.supplier_id, snapshot=policy_snapshot)
+                if comparison:
+                    order.context["recurring_comparison"] = comparison
                 if quote.basket_ref or (self.lookup_need(conn, quote.need_ref).basket if quote.need_ref else None):
                     order.context["atomicity"] = "all-or-none gateway simulation; no supplier transmission"
                 order.warnings = quote.warnings

@@ -7,8 +7,11 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from app.auth import Principal
 from app.models import PolicyUpdateRequest
 from conftest import agent_headers
+from test_webhooks import receiver, subscribe, due
+from test_verifiable_mandate import buyer as vc_issuer, issue
 
 
 @pytest.fixture
@@ -53,13 +56,15 @@ def inbox(client):
     return result.json()
 
 
-def test_ac_1_opt_in_delivery_inbox_mcp_and_outbox_unconsented_recorded(gateway, proposal_setup):
+@pytest.mark.parametrize("channels", [["inbox"], ["inbox", "webhook"]])
+def test_ac_1_opt_in_delivery_inbox_mcp_and_outbox_unconsented_recorded(gateway, proposal_setup, receiver, channels):
     import asyncio
     from app.mcp_server import create_server
     delivered = []
+    subscribe(gateway, event_types=["proposal.received"])
     gateway.outbox.register("proposal-webhook-test", lambda event: delivered.append(event) if event["type"] == "proposal.received" else None)
     with TestClient(create_app(gateway), base_url="http://localhost") as client:
-        opt_in(client)
+        opt_in(client, channels=channels)
         result = submit(client, targets=["1", "2"])
         assert result["delivery_count"] == 1 and result["held_back_count"] == 1
         own = inbox(client)
@@ -82,7 +87,8 @@ def test_ac_1_opt_in_delivery_inbox_mcp_and_outbox_unconsented_recorded(gateway,
         assert (None, "read") not in gateway.limiter.buckets
     assert len(delivered) == 1 and delivered[0]["customer_id"] == "1"
     assert delivered[0]["aggregate_id"] == own[0]["id"]
-    assert delivered[0]["payload"]["channels"] == ["inbox", "webhook"]
+    assert delivered[0]["payload"]["channels"] == channels
+    assert len(receiver["calls"]) == int("webhook" in channels)
     with gateway.db.connect() as conn:
         assert conn.execute("SELECT reason FROM proposal_filter_log WHERE customer_id='2'").fetchone()[0] == "no opt-in"
 
@@ -177,6 +183,14 @@ def test_ac_6_mute_and_equivalent_campaign_merge_and_decline_counts(gateway, pro
         assert client.post(f"/v1/proposals/{id}/mute", headers=agent_headers("external")).status_code == 200
         assert submit(client, name="milk", price=14)["new_delivery_count"] == 0
         assert len(inbox(client)) == 1
+        # Expiry bypasses the active-campaign merge path: only mute can block this.
+        with gateway.db.connect(write=True) as conn:
+            campaign_row = json.loads(conn.execute("SELECT data FROM proposal_campaigns WHERE id=?", (original["id"],)).fetchone()[0])
+            campaign_row["valid_until"] = (audit.utcnow() - timedelta(seconds=1)).isoformat()
+            conn.execute("UPDATE proposal_campaigns SET data=? WHERE id=?", (json.dumps(campaign_row), original["id"]))
+        assert submit(client, name="milk", price=14)["delivery_count"] == 0
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT reason FROM proposal_filter_log ORDER BY rowid DESC LIMIT 1").fetchone()[0] == "muted campaign"
         another = submit(client, name="different", price=15)
         second = next(p for p in inbox(client) if p["campaign_id"] == another["id"])
         assert client.post(f"/v1/proposals/{second['id']}/decline", headers=agent_headers("buyer")).status_code == 200
@@ -199,3 +213,124 @@ def test_ac_8_buyer_agent_cannot_submit_supplier_proposals(gateway, proposal_set
         response = client.post("/v1/proposals", json=campaign())
         assert response.status_code == 403 and response.json()["code"] == "SUPPLIER_REQUIRED"
         assert inbox(client) == []
+
+
+@pytest.mark.parametrize("channels", [["inbox"], ["webhook"], ["inbox", "webhook"]])
+def test_review_proposal_webhook_requires_channel_consent(gateway, proposal_setup, receiver, channels):
+    subscribe(gateway, event_types=["proposal.received"], principal=Principal("operator", operator=True, kind="operator", role="valio_operator"))
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client, channels=channels)
+        submit(client)
+    assert len(receiver["calls"]) == int("webhook" in channels)
+
+
+def test_review_proposal_retry_rechecks_current_webhook_consent(gateway, proposal_setup, receiver):
+    subscribe(gateway, event_types=["proposal.received"], principal=Principal("operator", operator=True, kind="operator", role="valio_operator"))
+    receiver["status"] = 503
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        submit(client)
+        assert len(receiver["calls"]) == 1
+        opt_in(client, channels=["inbox"])
+        receiver["status"] = 200
+        due(gateway)
+    assert len(receiver["calls"]) == 1
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_review_campaign_merge_delivers_to_new_targets(gateway, proposal_setup, renamed):
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        client.put("/v1/buyer/proposal-preferences", json={"categories": ["10400"]}, headers=agent_headers("agent-b")).raise_for_status()
+        first = submit(client)
+        second = submit(client, name="renamed" if renamed else "milk", targets=["2"])
+        assert first["id"] == second["id"] and second["merged"] is True
+        assert second["delivery_count"] == 2 and second["new_delivery_count"] == 1
+        assert len(client.get("/v1/proposals/inbox", headers=agent_headers("agent-b")).json()) == 1
+        assert submit(client, targets=["1", "2"])["new_delivery_count"] == 0
+
+
+def test_review_merged_campaign_rechecks_previously_held_customer(gateway, proposal_setup):
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        original = submit(client, targets=["1", "2"])
+        client.put("/v1/buyer/proposal-preferences", json={"categories": ["10400"]}, headers=agent_headers("agent-b")).raise_for_status()
+        merged = submit(client, targets=["2"])
+        assert merged["id"] == original["id"]
+        assert merged["new_delivery_count"] == 1
+
+
+@pytest.mark.parametrize("action", ["decline", "mute"])
+def test_review_proposal_actions_forward_signed_mandate(gateway, proposal_setup, vc_issuer, action):
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        submit(client)
+        token = issue(vc_issuer)
+        headers = {**agent_headers("outsider"), "Agent-Mandate": token}
+        own = client.get("/v1/proposals/inbox", headers=headers)
+        assert own.status_code == 200 and own.json()
+        response = client.post(f"/v1/proposals/{own.json()[0]['id']}/{action}", headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["proposal"]["status"] == ("declined" if action == "decline" else "muted")
+
+
+def test_review_proposal_accept_includes_advertised_sku_before_truncation(gateway, need, upstream, proposal_setup):
+    upstream.prices["4"] = 1
+    upstream.fits["4"] = .99
+    need.max_candidates = 1
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        submit(client)
+        id = inbox(client)[0]["id"]
+        response = client.post(f"/v1/proposals/{id}/accept", json={"need": need.model_dump(mode="json")}, headers=agent_headers("external"))
+        assert response.status_code == 200, response.text
+        assert response.json()["order"]["lines"][0]["product_id"] == "1"
+
+
+def test_review_duplicate_targets_are_bounded_without_repeat_log_writes(gateway, proposal_setup):
+    from app.proposals import ProposalRequest
+    from pydantic import ValidationError
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        first = submit(client)
+        targets = [f"unknown-{i}" for i in range(20)]
+        submit(client, targets=targets)
+        with gateway.db.connect() as conn:
+            before = conn.execute("SELECT count(*) FROM proposal_filter_log").fetchone()[0]
+        submit(client, targets=targets)
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT count(*) FROM proposal_filter_log").fetchone()[0] == before
+        with pytest.raises(ValidationError):
+            ProposalRequest.model_validate(campaign(targets=[f"unknown-{i}" for i in range(1000)]))
+
+
+@pytest.mark.parametrize("action", ["accept", "decline", "mute"])
+def test_review_proposal_decisions_are_keyed_commands(gateway, need, upstream, proposal_setup, action):
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        submit(client)
+        id = inbox(client)[0]["id"]
+        headers = {**agent_headers("external"), "Idempotency-Key": "proposal-decision"}
+        payload = {"need": need.model_dump(mode="json")} if action == "accept" else None
+        first = client.post(f"/v1/proposals/{id}/{action}", json=payload, headers=headers)
+        again = client.post(f"/v1/proposals/{id}/{action}", json=payload, headers=headers)
+        assert first.status_code == again.status_code == 200
+        assert first.json() == again.json()
+        assert sum(e.action == "PROPOSAL_ACTION" for e in gateway.audit()) == 1
+        with gateway.db.connect() as conn:
+            assert conn.execute("SELECT count(*) FROM commands WHERE key='proposal-decision'").fetchone()[0] == 1
+
+
+def test_review_proposal_quote_rechecks_revoked_buyer_consent(gateway, need, upstream, proposal_setup):
+    with TestClient(create_app(gateway)) as client:
+        opt_in(client)
+        submit(client)
+        id = inbox(client)[0]["id"]
+        upstream.price = 14
+        response = client.post(f"/v1/proposals/{id}/accept", json={"need": need.model_dump(mode="json")}, headers=agent_headers("external"))
+        assert response.json()["status"] == "REQUOTE_REQUIRED"
+        q = response.json()["quote"]
+        opt_in(client, categories=[], interests=[], channels=[])
+        placed = gateway.orders.place_order(q["id"], "revoked-proposal", "external")
+        assert placed.status == "REJECTED"
+        assert any("consent" in h.detail for h in placed.policy.hits)

@@ -16,7 +16,7 @@ from .canonical import canonical_json
 from .catalog import hard_violations
 from .db import DomainError
 from .foundation import PRINCIPAL
-from .models import Model, NeedSpec, QuoteRequest
+from .models import InputText, InputTexts, Model, NeedSpec, QuoteRequest
 from .mandates import decode
 
 
@@ -35,13 +35,13 @@ class QuietPeriod(Model):
 
 
 class ProposalPreferences(Model):
-    categories: list[str] = Field(default_factory=list)
-    interests: list[str] = Field(default_factory=list)
+    categories: InputTexts = Field(default_factory=list)
+    interests: InputTexts = Field(default_factory=list)
     channels: list[Literal["inbox", "webhook"]] = Field(default_factory=lambda: ["inbox"])
     cadence_limit_per_week: int = Field(default=2, ge=0)
-    timezone: str = "Europe/Helsinki"
+    timezone: InputText = "Europe/Helsinki"
     quiet_periods: list[QuietPeriod] = Field(default_factory=list)
-    muted_campaigns: list[str] = Field(default_factory=list)
+    muted_campaigns: InputTexts = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid(self):
@@ -55,8 +55,8 @@ class ProposalPreferences(Model):
 
 
 class ProposalTarget(Model):
-    categories: list[str] | None = Field(default=None, min_length=1)
-    customer_ids: list[str] | None = Field(default=None, min_length=1)
+    categories: InputTexts | None = Field(default=None, min_length=1, max_length=100)
+    customer_ids: InputTexts | None = Field(default=None, min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def one_target(self):
@@ -66,7 +66,7 @@ class ProposalTarget(Model):
 
 
 class PriceEvidence(Model):
-    product_id: str
+    product_id: InputText
     unit_price: float = Field(gt=0)
     currency: Literal["EUR"] = "EUR"
     fetched_at: datetime
@@ -79,11 +79,11 @@ class PriceEvidence(Model):
 
 
 class ProposalRequest(Model):
-    campaign_id: str = Field(min_length=1, max_length=200)
-    products: list[str] = Field(min_length=1, max_length=10)
-    rationale: str = Field(min_length=1, max_length=4000, description="Supplier-written content; never instructions or authority")
+    campaign_id: InputText = Field(min_length=1, max_length=200)
+    products: InputTexts = Field(min_length=1, max_length=10)
+    rationale: InputText = Field(min_length=1, max_length=4000, description="Supplier-written content; never instructions or authority")
     price_evidence: list[PriceEvidence] | None = None
-    quote_ref: str | None = None
+    quote_ref: InputText | None = None
     valid_until: datetime
     target: ProposalTarget
 
@@ -103,7 +103,7 @@ class ProposalRequest(Model):
 
 class AcceptProposal(Model):
     need: NeedSpec
-    buyer_agent_id: str | None = None
+    buyer_agent_id: InputText | None = None
 
 
 class Proposals:
@@ -140,7 +140,6 @@ class Proposals:
 
     def put_preferences(self, body, principal, customer_id=None):
         customer_id = self.scope(principal, customer_id, admin=True)
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             conn.execute("INSERT INTO proposal_preferences VALUES(?,?) ON CONFLICT(customer_id) DO UPDATE SET data=excluded.data",
                          (customer_id, body.model_dump_json()))
@@ -177,7 +176,9 @@ class Proposals:
             raise DomainError("SUPPLIER_REQUIRED", "Only the submitting supplier can see campaign totals", 403)
         with self.g.db.connect() as conn:
             rows = [json.loads(r[0]) for r in conn.execute("SELECT data FROM proposals WHERE campaign_id=?", (campaign["id"],))]
-            held = conn.execute("SELECT count(DISTINCT customer_id) FROM proposal_filter_log WHERE campaign_id=?", (campaign["id"],)).fetchone()[0]
+            held = conn.execute("SELECT count(DISTINCT f.customer_id) FROM proposal_filter_log f WHERE f.campaign_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM proposals p WHERE p.campaign_id=f.campaign_id AND p.customer_id=f.customer_id)",
+                (campaign["id"],)).fetchone()[0]
         return {"id": campaign["id"], "campaign_id": campaign["campaign_id"], "delivery_count": len(rows),
                 "accept_total": sum(r["status"] == "accepted" for r in rows),
                 "decline_total": sum(r["status"] == "declined" for r in rows), "held_back_count": held}
@@ -185,7 +186,6 @@ class Proposals:
     def submit(self, body, principal):
         if principal.kind != "supplier_agent":
             raise DomainError("SUPPLIER_REQUIRED", "Only a supplier_agent may submit proposals", 403)
-        self.g.limiter.consume(principal.id, "mutation")
         now = audit.utcnow()
         if body.valid_until <= now:
             raise DomainError("PROPOSAL_EXPIRED", "Campaign has expired", 409)
@@ -206,26 +206,31 @@ class Proposals:
             all_campaigns = [json.loads(r[0]) for r in conn.execute("SELECT data FROM proposal_campaigns WHERE supplier_id=?", (principal.id,))]
             duplicate = next((c for c in all_campaigns if (c["campaign_id"] == body.campaign_id or c["fingerprint"] == fingerprint)
                               and datetime.fromisoformat(c["valid_until"]) > now), None)
-            if duplicate:
-                for customer in sorted(set(body.target.customer_ids or [])):
-                    prefs = self.preferences(customer)
-                    muted = body.campaign_id in prefs.muted_campaigns or fingerprint in prefs.muted_campaigns
-                    reason = "muted campaign" if muted else "equivalent duplicate campaign"
-                    conn.execute("INSERT INTO proposal_filter_log(campaign_id,customer_id,reason,at) VALUES(?,?,?,?)",
-                                 (duplicate["id"], customer, reason, now.isoformat()))
-                return {**self.counts(duplicate, principal), "merged": True, "new_delivery_count": 0}
             count = sum(c["created_at"] >= self.week_start(now) for c in all_campaigns)
-            if count >= policy.proposal_quotas.per_supplier_per_week:
+            if not duplicate and count >= policy.proposal_quotas.per_supplier_per_week:
                 audit.append(conn, f"supplier:{principal.id}", "PROPOSAL_QUOTA", "Supplier weekly proposal quota reached.", data={"supplier_id": principal.id})
                 return {"campaign_id": body.campaign_id, "delivery_count": 0, "accept_total": 0, "decline_total": 0, "reason": "supplier quota"}
-            campaign = {**body.model_dump(mode="json"), "id": str(uuid4()), "supplier_id": principal.id,
+            campaign = duplicate or {**body.model_dump(mode="json"), "id": str(uuid4()), "supplier_id": principal.id,
                         "fingerprint": fingerprint, "created_at": now.isoformat(),
                         "price_evidence": [e.model_dump(mode="json") for e in evidence]}
-            conn.execute("INSERT INTO proposal_campaigns VALUES(?,?,?,?)", (campaign["id"], principal.id, fingerprint, json.dumps(campaign)))
+            if not duplicate:
+                conn.execute("INSERT INTO proposal_campaigns VALUES(?,?,?,?)", (campaign["id"], principal.id, fingerprint, json.dumps(campaign)))
+            else:
+                products = [self.g.catalog.get(pid) for pid in campaign["products"]]
+                evidence = [PriceEvidence.model_validate(e) for e in campaign["price_evidence"]]
+                fingerprint = campaign["fingerprint"]
             targets = set(body.target.customer_ids or [])
             if body.target.categories:
-                targets.update(r[0] for r in conn.execute("SELECT customer_id FROM proposal_preferences"))
+                targets.update(r[0] for r in conn.execute("SELECT customer_id FROM proposal_preferences LIMIT 101"))
+            processed = {r[0] for r in conn.execute("SELECT customer_id FROM proposals WHERE campaign_id=? UNION "
+                "SELECT customer_id FROM proposal_filter_log WHERE campaign_id=?", (campaign["id"], campaign["id"]))}
+            delivered_customers = {r[0] for r in conn.execute("SELECT customer_id FROM proposals WHERE campaign_id=?", (campaign["id"],))}
+            if len(targets | processed) > 100:
+                raise DomainError("VALIDATION_ERROR", "A campaign may target at most 100 customers, including merged submissions", 422)
+            new_deliveries = 0
             for customer in sorted(targets):
+                if customer in delivered_customers:
+                    continue
                 prefs = self.preferences(customer)
                 permitted = [p for p in products if (not body.target.categories or p.category in body.target.categories)
                              and self.relevant(p, prefs)]
@@ -249,11 +254,15 @@ class Proposals:
                         removed[p.id] = failures
                     else:
                         filtered.append(p.id)
+                if not filtered and reason is None:
+                    reason = "no relevant compliant products"
+                if reason:
+                    if conn.execute("SELECT 1 FROM proposal_filter_log WHERE campaign_id=? AND customer_id=? AND reason=?",
+                                    (campaign["id"], customer, reason)).fetchone():
+                        continue  # Retry without a changed recipient outcome writes nothing.
                 if removed:
                     audit.append(conn, "system:proposals", "PROPOSAL_FILTERED", "Noncompliant products removed before delivery.",
                                  data={"customer_id": customer, "campaign_id": campaign["id"], "removed": removed})
-                if not filtered and reason is None:
-                    reason = "no relevant compliant products"
                 if reason:
                     conn.execute("INSERT INTO proposal_filter_log(campaign_id,customer_id,reason,at) VALUES(?,?,?,?)",
                                  (campaign["id"], customer, reason, now.isoformat()))
@@ -261,16 +270,17 @@ class Proposals:
                                  data={"customer_id": customer, "campaign_id": campaign["id"], "reason": reason})
                     continue
                 proposal = {"id": str(uuid4()), "campaign_id": campaign["id"], "customer_id": customer,
-                            "supplier_id": principal.id, "products": filtered, "rationale": body.rationale,
-                            "valid_until": body.valid_until.isoformat(), "delivered_at": now.isoformat(),
+                            "supplier_id": principal.id, "products": filtered, "rationale": campaign["rationale"],
+                            "valid_until": campaign["valid_until"], "delivered_at": now.isoformat(),
                             "price_evidence": [e.model_dump(mode="json") for e in evidence if e.product_id in filtered],
                             "channels": prefs.channels, "status": "received"}
                 conn.execute("INSERT INTO proposals VALUES(?,?,?,?)", (proposal["id"], campaign["id"], customer, json.dumps(proposal)))
+                new_deliveries += 1
                 # The durable outbox feeds spec 33 consumers. Channels travel with the event;
                 # a webhook consumer must require the customer's explicit webhook consent.
                 audit.append(conn, f"supplier:{principal.id}", "PROPOSAL_RECEIVED", "Consented supplier proposal received.",
                              data=proposal)
-        return self.counts(campaign, principal)
+        return {**self.counts(campaign, principal), "merged": bool(duplicate), "new_delivery_count": new_deliveries}
 
     def inbox(self, principal, mandate=None):
         principal = self.effective_principal(principal, mandate)
@@ -288,7 +298,6 @@ class Proposals:
 
     def action(self, id, action, principal, body=None, mandate=None):
         principal = self.effective_principal(principal, mandate)
-        self.g.limiter.consume(principal.id, "mutation")
         with self.g.db.connect(write=True) as conn:
             proposal = self.get(conn, id, principal)
             if principal.kind == "buyer_user" and principal.role not in {"buyer_admin", "buyer_approver"}:
@@ -319,7 +328,9 @@ class Proposals:
                 context = PRINCIPAL.set(Principal(agent, customer_ids=(proposal["customer_id"],)))
                 try:
                     self.g.valio.cache.clear()
-                    lookup = self.g.find_offers(body.need, f"agent:{agent}", mandate=mandate)
+                    lookup = self.g.find_offers(body.need, f"agent:{agent}", mandate=mandate, product_ids=proposal["products"])
+                    lookup.context["proposal_ref"] = id
+                    conn.execute("UPDATE lookups SET data=? WHERE id=?", (lookup.model_dump_json(), lookup.lookup_id))
                     offers = [o for o in lookup.offers if o.product_id in proposal["products"] and o.units_needed]
                     if not offers:
                         raise DomainError("PROPOSAL_NO_MATCH", "No proposal product meets this current need", 409)
@@ -365,13 +376,15 @@ def get_preferences(request: Request, customer_id: str | None = None, principal:
 
 
 @router.put("/v1/buyer/proposal-preferences", response_model=dict)
-def put_preferences(body: ProposalPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.put_preferences(body, principal, customer_id)
+def put_preferences(body: ProposalPreferences, request: Request, customer_id: str | None = None, principal: Principal = Depends(resolve_principal),
+                    idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.proposals.put_preferences(body, principal, customer_id, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals", response_model=dict, summary="Submit supplier content; returns only aggregate campaign delivery and action counts")
-def submit(body: ProposalRequest, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.submit(body, principal)
+def submit(body: ProposalRequest, request: Request, principal: Principal = Depends(resolve_principal),
+           idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.proposals.submit(body, principal, command_key=idempotency_key)
 
 
 @router.get("/v1/proposals/inbox", response_model=list[dict])
@@ -393,15 +406,18 @@ def campaign(id: str, request: Request, principal: Principal = Depends(resolve_p
 
 @router.post("/v1/proposals/{id}/accept", response_model=dict, summary="Revalidate buyer lookup, price and stock; changed prices return a replacement quote without ordering")
 def accept(id: str, body: AcceptProposal, request: Request, principal: Principal = Depends(resolve_principal),
-           agent_mandate: str | None = Header(default=None)):
-    return request.app.state.gateway.proposals.action(id, "accept", principal, body, agent_mandate)
+           agent_mandate: str | None = Header(default=None),
+           idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.proposals.action(id, "accept", principal, body, agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals/{id}/decline", response_model=dict)
-def decline(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.action(id, "decline", principal)
+def decline(id: str, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+            idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.proposals.action(id, "decline", principal, mandate=agent_mandate, command_key=idempotency_key)
 
 
 @router.post("/v1/proposals/{id}/mute", response_model=dict)
-def mute(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-    return request.app.state.gateway.proposals.action(id, "mute", principal)
+def mute(id: str, request: Request, principal: Principal = Depends(resolve_principal), agent_mandate: str | None = Header(default=None),
+         idempotency_key: str | None = Header(default=None, min_length=1, max_length=200)):
+    return request.app.state.gateway.proposals.action(id, "mute", principal, mandate=agent_mandate, command_key=idempotency_key)

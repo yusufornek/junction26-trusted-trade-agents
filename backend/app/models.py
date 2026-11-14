@@ -1,10 +1,21 @@
 from datetime import date, datetime, timedelta
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WrapValidator, computed_field, field_validator, model_serializer, model_validator
 from pydantic_core import PydanticCustomError
+
+
+def historical_input(value, handler, info):
+    # New request bounds must not invalidate already persisted procurement evidence.
+    if (info.context or {}).get("stored"):
+        return value
+    return handler(value)
+
+
+InputText = Annotated[str, Field(max_length=4000), WrapValidator(historical_input)]
+InputTexts = Annotated[list[InputText], Field(max_length=100), WrapValidator(historical_input)]
 
 
 class Model(BaseModel):
@@ -56,10 +67,10 @@ class PackSizePreference(Model):
 
 
 class Preferences(Model):
-    brands: list[str] = Field(default_factory=list)
+    brands: InputTexts = Field(default_factory=list)
     max_price_per_unit: float | None = Field(default=None, ge=0, strict=True, description="Maximum net EUR per L or KG; strict number.")
     pack_size: PackSizePreference | None = Field(default=None, description="L or KG per sales unit.")
-    labels: list[str] = Field(default_factory=list, description="Preferred catalog packaging label IDs.")
+    labels: InputTexts = Field(default_factory=list, description="Preferred catalog packaging label IDs.")
 
     @field_validator("brands")
     @classmethod
@@ -70,7 +81,7 @@ class Preferences(Model):
 
 
 class RequestScope(Model):
-    customer_id: str = Field(min_length=1, description="Required non-blank Valio customer identifier.")
+    customer_id: InputText = Field(min_length=1, description="Required non-blank Valio customer identifier.")
     deliver_by: date = Field(description="Delivery date between today and today + 60 days, Europe/Helsinki.")
 
     @field_validator("customer_id")
@@ -94,25 +105,25 @@ class RequestScope(Model):
 
 
 class FunctionalNeed(Model):
-    product_type: str = Field(min_length=1)
-    intended_use: str = Field(min_length=1)
-    preparation: str | None = None
+    product_type: InputText = Field(min_length=1)
+    intended_use: InputText = Field(min_length=1)
+    preparation: InputText | None = None
     acceptable_units: list[Literal["L", "KG", "SALES_UNIT"]] = Field(min_length=1)
 
 
 class SubstituteFor(Model):
-    product_id: str = Field(min_length=1)
+    product_id: InputText = Field(min_length=1)
 
 
 class NeedSpec(RequestScope):
     function: FunctionalNeed | None = Field(default=None, exclude_if=lambda v: v is None)
     substitute_for: SubstituteFor | None = Field(default=None, exclude_if=lambda v: v is None)
-    supplier_id: str = Field(default="valio", min_length=1, description="One supplier per procurement request; valio by default. nordfood is synthetic.")
+    supplier_id: InputText = Field(default="valio", min_length=1, description="One supplier per procurement request; valio by default. nordfood is synthetic.")
 
-    intent: str = Field(min_length=1, description="Buyer need; the outside agent structures this request.")
-    search_terms: list[str] | None = Field(default=None, description="Optional FTS terms, combined with AND.")
-    required_claims: list[str] = Field(default_factory=list, description="All must exist as catalog nutritionalClaim IDs.")
-    exclude_allergens: list[str] = Field(default_factory=list, description="Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.")
+    intent: InputText = Field(min_length=1, description="Buyer need; the outside agent structures this request.")
+    search_terms: InputTexts | None = Field(default=None, description="Optional FTS terms, combined with AND.")
+    required_claims: InputTexts = Field(default_factory=list, description="All must exist as catalog nutritionalClaim IDs.")
+    exclude_allergens: InputTexts = Field(default_factory=list, description="Requires an uncontradicted free-from entry or a declaration not listing the excluded allergen; missing data never proves absence.")
     quantity: Quantity
     max_candidates: int = Field(default=10, ge=1, le=10, strict=True, description="Strict integer maximum ranked offers returned; suitable candidates are priced up to shortlist.live_max.")
     preferences: Preferences = Field(default_factory=Preferences, description="Soft preferences; differences mark substitutes and require approval by default.")
@@ -209,6 +220,8 @@ class Substitution(Model):
     for_product: str = Field(alias="for")
     differences: list[str]
     allergen_evidence: list[str]
+    comparison: dict | None = Field(default=None, exclude_if=lambda v: v is None,
+        description="Signed quote-time brand, pack and comparable price-increase evidence. Absent on historical records; missing evidence requires review.")
 
 
 class NameSizeCandidate(Model):
@@ -359,23 +372,23 @@ class IngredientQuantity(Model):
 
 
 class Ingredient(Model):
-    name: str = Field(min_length=1)
+    name: InputText = Field(min_length=1)
     quantity: IngredientQuantity
-    search_terms: list[str] | None = None
-    required_claims: list[str] = Field(default_factory=list)
-    exclude_allergens: list[str] = Field(default_factory=list)
+    search_terms: InputTexts | None = None
+    required_claims: InputTexts = Field(default_factory=list)
+    exclude_allergens: InputTexts = Field(default_factory=list)
     substitutions_allowed: bool = False
     density_kg_per_l: float | None = Field(default=None, gt=0, strict=True)
 
 
 class IngredientManifest(Model):
     version: Literal[1] = 1
-    recipe_name: str = Field(min_length=1)
+    recipe_name: InputText = Field(min_length=1)
     servings: float = Field(gt=0, le=1_000_000, strict=True, description="Servings represented by the quantities unless base_servings is supplied; then the target servings.")
     base_servings: float | None = Field(default=None, gt=0, le=1_000_000, strict=True, exclude_if=lambda v: v is None,
                                       description="Optional explicit base for per-serving manifests; quantities scale by target/base_servings.")
     ingredients: list[Ingredient] = Field(min_length=1, max_length=50)
-    yield_note: str | None = None
+    yield_note: InputText | None = None
 
 
 class BasketLookupRequest(RequestScope):
@@ -436,24 +449,24 @@ class BasketLookupResult(Model):
 
 
 class QuoteLineRequest(Model):
-    product_id: str = Field(min_length=1)
+    product_id: InputText = Field(min_length=1)
     quantity_sales_units: float = Field(gt=0, le=1_000_000, strict=True, description="Explicit whole sales quantity, at most 1,000,000, in allowedLotSize steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE.")
 
 
 class PlanRef(Model):
-    lookup_id: str = Field(min_length=1)
+    lookup_id: InputText = Field(min_length=1)
     plan_index: int = Field(ge=0, description="Zero-based index in the stored lookup's plans.")
 
 
 class BasketRef(Model):
-    basket_lookup_id: str = Field(min_length=1)
+    basket_lookup_id: InputText = Field(min_length=1)
 
 
 class QuoteRequest(RequestScope):
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None, description="Quote the selected, deduplicated lines of a stored recipe basket; mutually exclusive with lines and plan_ref.")
     lines: list[QuoteLineRequest] | None = Field(default=None, min_length=1, max_length=10)
     plan_ref: PlanRef | None = Field(default=None, description="Recheck a stored plan live. Exactly one of lines, plan_ref or basket_ref is required.")
-    need_ref: str | None = Field(default=None, description="Required with explicit lines: stored lookup_id binding fit, preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED.")
+    need_ref: InputText | None = Field(default=None, description="Required with explicit lines: stored lookup_id binding fit, preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED.")
 
     @model_validator(mode="after")
     def unique_lines(self):
@@ -505,7 +518,7 @@ class Quote(Model):
 
 
 class OrderRequest(Model):
-    quote_id: str = Field(description="An unexpired OPEN fixed-price quote.")
+    quote_id: InputText = Field(description="An unexpired OPEN fixed-price quote.")
 
 
 class Execution(Model):
@@ -592,8 +605,8 @@ class Order(Model):
 
 
 class CancelRequest(Model):
-    cancelled_by: str = Field(min_length=1, description="Non-blank human name responsible for cancellation.")
-    reason: str = ""
+    cancelled_by: InputText = Field(min_length=1, description="Non-blank human name responsible for cancellation.")
+    reason: InputText = ""
 
     @model_validator(mode="after")
     def named_human(self):
@@ -604,8 +617,8 @@ class CancelRequest(Model):
 
 
 class ApprovalRequest(Model):
-    approver: str = Field(min_length=1, description="Human approver name (MVP: one role, no authentication).")
-    comment: str = ""
+    approver: InputText = Field(min_length=1, description="Human approver name (MVP: one role, no authentication).")
+    comment: InputText = ""
     evidence_revision: int | None = Field(default=None, ge=1, description="Optional revision displayed to the approver. A stale revision prevents approval with 409 EVIDENCE_CHANGED before any upstream call; ignored for rejection.")
 
 
@@ -693,7 +706,7 @@ class AuditAnchor(Model):
 
 
 class RevocationRequest(Model):
-    jwt: str = Field(min_length=1, description="Buyer-signed EdDSA JWT containing iss, jti_revoked and iat.")
+    jwt: str = Field(min_length=1, max_length=32768, description="Buyer-signed EdDSA JWT containing iss, jti_revoked and iat.")
 
 
 class ErrorResponse(Model):
@@ -772,25 +785,25 @@ class RateLimits(Model):
 
 
 class Organisation(Model):
-    customer_ids: list[str] = Field(default_factory=list)
+    customer_ids: InputTexts = Field(default_factory=list)
 
 
 class IdentityPolicy(Model):
     kind: Literal["agent", "operator", "buyer_user", "supplier_agent"] = "agent"
-    organisation_id: str | None = None
+    organisation_id: InputText | None = None
     role: Literal["agent", "valio_operator", "buyer_admin", "buyer_approver", "buyer_viewer", "supplier_agent"] = "agent"
 
 
 class AgentMandate(Model):
     recurring: bool = False
-    supplier_ids: list[str] | None = Field(default=None, description="Allowed suppliers, intersected with buyer VC supplier_ids; omission is unrestricted.")
+    supplier_ids: InputTexts | None = Field(default=None, description="Allowed suppliers, intersected with buyer VC supplier_ids; omission is unrestricted.")
 
     autonomy: AutonomyLevel | None = Field(default=None, description="Omission uses policy.autonomy.default; new agents require sign-off by default.")
     rate_limits: RateLimits | None = None
-    customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
+    customer_ids: InputTexts = Field(min_length=1, description="Customers this agent may quote and order for.")
     max_auto_total_eur: float | None = Field(default=None, ge=0, description="Optional per-order ceiling; the lower of this and the global ceiling applies.")
     max_auto_daily_total_eur: float = Field(ge=0, description="Rolling 24-hour autonomous EUR ceiling; cancelled and human-approved orders are excluded.")
-    note: str = Field(default="", description="Free-text record of who granted the mandate.")
+    note: InputText = Field(default="", description="Free-text record of who granted the mandate.")
 
     @model_validator(mode="after")
     def named_customers(self):
@@ -803,10 +816,10 @@ ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatg
 
 
 class ConnectionRequest(Model):
-    agent_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
+    agent_id: InputText = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
     client: ClientKind
-    customer_ids: list[str] = Field(min_length=1)
-    label: str | None = None
+    customer_ids: InputTexts = Field(min_length=1)
+    label: InputText | None = None
 
 
 class Connection(Model):
@@ -836,7 +849,7 @@ class BuyerJWK(Model):
 
 
 class SubstitutionProfile(Model):
-    allowed_brands: list[str] | None = None
+    allowed_brands: InputTexts | None = None
     max_price_increase_pct: float = Field(ge=0, strict=True)
     pack_size_range: PackSizePreference
     requires_approval: bool
@@ -845,10 +858,10 @@ class SubstitutionProfile(Model):
 class CustomerConstraints(Model):
     substitution_profile: SubstitutionProfile | None = None
     clinical_review: Literal["required"] | None = None
-    mandate_issuers: dict[str, list[BuyerJWK]] = Field(default_factory=dict, description="Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator onboarding only.")
-    required_claims: list[str] = Field(default_factory=list)
-    exclude_allergens: list[str] = Field(default_factory=list)
-    note: str = ""
+    mandate_issuers: dict[InputText, list[BuyerJWK]] = Field(default_factory=dict, description="Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator onboarding only.")
+    required_claims: InputTexts = Field(default_factory=list)
+    exclude_allergens: InputTexts = Field(default_factory=list)
+    note: InputText = ""
 
 
 class ConstraintSource(Model):
@@ -899,7 +912,7 @@ class AgentTrackRecord(Model):
 
 class AutonomyChange(Model):
     level: AutonomyLevel
-    reason: str = Field(min_length=1)
+    reason: InputText = Field(min_length=1)
 
     @field_validator("reason")
     @classmethod
@@ -963,7 +976,7 @@ class PolicyResource(PolicyDocument):
 
 
 class PolicyResetRequest(Model):
-    updated_by: str = Field(min_length=1, description="Name of the human changing the policy.")
+    updated_by: InputText = Field(min_length=1, description="Name of the human changing the policy.")
 
     @model_validator(mode="after")
     def named_human(self):
@@ -975,7 +988,7 @@ class PolicyResetRequest(Model):
 
 class PolicyUpdateRequest(PolicyResetRequest):
     policy: PolicyResource = Field(description="Editable policy sections. Response metadata may be echoed; the server replaces it.")
-    comment: str | None = Field(default=None, description="Optional reason for the policy change.")
+    comment: InputText | None = Field(default=None, description="Optional reason for the policy change.")
 
 
 class AverageLiveCalls(Model):

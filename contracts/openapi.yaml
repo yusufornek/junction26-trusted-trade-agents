@@ -7248,242 +7248,46 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
   /v1/recurring-orders:
-    get:
-      tags:
-      - Recurring orders
-      summary: Listing
-      operationId: listing_v1_recurring_orders_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  additionalProperties: true
-                  type: object
-                type: array
-                title: Response Listing V1 Recurring Orders Get
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '401':
-          description: Unauthorized
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '403':
-          description: Forbidden
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '404':
-          description: Not Found
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '409':
-          description: Conflict
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '422':
-          description: Unprocessable Entity
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '429':
-          description: Too Many Requests
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-            Retry-After:
-              schema:
-                type: integer
-                minimum: 1
-              description: Seconds before retrying the same command, when retryable.
-        '500':
-          description: Internal Server Error
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-        '502':
-          description: Bad Gateway
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-            Retry-After:
-              schema:
-                type: integer
-                minimum: 1
-              description: Seconds before retrying the same command, when retryable.
-        '503':
-          description: Service Unavailable
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          headers:
-            X-Environment:
-              schema:
-                type: string
-                enum:
-                - live
-                - sandbox
-              description: Isolated gateway environment; sandbox observations are
-                synthetic fixtures.
-            X-Correlation-Id:
-              schema:
-                type: string
-              description: Accepted or generated request correlation identifier.
-            Retry-After:
-              schema:
-                type: integer
-                minimum: 1
-              description: Seconds before retrying the same command, when retryable.
-      security:
-      - BearerAuth: []
     post:
       tags:
       - Recurring orders
       summary: Approve a recurring template from a confirmed need or recipe order
       operationId: create_v1_recurring_orders_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RecurringRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
+                additionalProperties: true
                 title: Response Create V1 Recurring Orders Post
           headers:
             X-Environment:
@@ -7499,11 +7303,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '401':
-          description: Unauthorized
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
           headers:
             X-Environment:
               schema:
@@ -7518,11 +7322,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '403':
-          description: Forbidden
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
           headers:
             X-Environment:
               schema:
@@ -7537,11 +7341,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '404':
-          description: Not Found
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
           headers:
             X-Environment:
               schema:
@@ -7556,11 +7360,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '409':
-          description: Conflict
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
           headers:
             X-Environment:
               schema:
@@ -7575,11 +7379,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '422':
-          description: Unprocessable Entity
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
           headers:
             X-Environment:
               schema:
@@ -7594,11 +7398,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '429':
-          description: Too Many Requests
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
           headers:
             X-Environment:
               schema:
@@ -7618,11 +7422,11 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '500':
-          description: Internal Server Error
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
           headers:
             X-Environment:
               schema:
@@ -7637,11 +7441,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '502':
-          description: Bad Gateway
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
           headers:
             X-Environment:
               schema:
@@ -7661,11 +7465,11 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '503':
-          description: Service Unavailable
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
           headers:
             X-Environment:
               schema:
@@ -7684,8 +7488,223 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
+    get:
+      tags:
+      - Recurring orders
+      summary: Listing
+      operationId: listing_v1_recurring_orders_get
       security:
       - BearerAuth: []
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                title: Response Listing V1 Recurring Orders Get
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Environment:
+              schema:
+                type: string
+                enum:
+                - live
+                - sandbox
+              description: Isolated gateway environment; sandbox observations are
+                synthetic fixtures.
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
   /v1/recurring-orders/{id}/runs:
     get:
       tags:
@@ -7926,6 +7945,16 @@ paths:
         schema:
           type: string
           title: Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -8155,6 +8184,16 @@ paths:
         schema:
           type: string
           title: Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         content:
           application/json:
@@ -8610,6 +8649,16 @@ paths:
           - type: string
           - type: 'null'
           title: Customer Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -8831,20 +8880,33 @@ paths:
       summary: Submit supplier content; returns only aggregate campaign delivery and
         action counts
       operationId: submit_v1_proposals_post
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ProposalRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
+                additionalProperties: true
                 title: Response Submit V1 Proposals Post
           headers:
             X-Environment:
@@ -8860,11 +8922,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '401':
-          description: Unauthorized
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
           headers:
             X-Environment:
               schema:
@@ -8879,11 +8941,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '403':
-          description: Forbidden
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
           headers:
             X-Environment:
               schema:
@@ -8898,11 +8960,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '404':
-          description: Not Found
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
           headers:
             X-Environment:
               schema:
@@ -8917,11 +8979,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '409':
-          description: Conflict
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
           headers:
             X-Environment:
               schema:
@@ -8936,11 +8998,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '422':
-          description: Unprocessable Entity
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
           headers:
             X-Environment:
               schema:
@@ -8955,11 +9017,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '429':
-          description: Too Many Requests
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
           headers:
             X-Environment:
               schema:
@@ -8979,11 +9041,11 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '500':
-          description: Internal Server Error
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
           headers:
             X-Environment:
               schema:
@@ -8998,11 +9060,11 @@ paths:
                 type: string
               description: Accepted or generated request correlation identifier.
         '502':
-          description: Bad Gateway
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
           headers:
             X-Environment:
               schema:
@@ -9022,11 +9084,11 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '503':
-          description: Service Unavailable
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
           headers:
             X-Environment:
               schema:
@@ -9045,8 +9107,6 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
-      security:
-      - BearerAuth: []
   /v1/proposals/inbox:
     get:
       tags:
@@ -9521,6 +9581,16 @@ paths:
           - type: string
           - type: 'null'
           title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -9750,6 +9820,24 @@ paths:
         schema:
           type: string
           title: Id
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       responses:
         '200':
           description: Successful Response
@@ -9973,6 +10061,24 @@ paths:
         schema:
           type: string
           title: Id
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       responses:
         '200':
           description: Successful Response
@@ -10442,6 +10548,16 @@ paths:
           - type: string
           - type: 'null'
           title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         content:
           application/json:
@@ -10678,6 +10794,16 @@ paths:
           - type: string
           - type: 'null'
           title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         content:
           application/json:
@@ -10924,6 +11050,16 @@ paths:
           - type: string
           - type: 'null'
           title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       responses:
         '200':
           description: Successful Response
@@ -11155,6 +11291,16 @@ paths:
           - type: string
           - type: 'null'
           title: Agent-Mandate
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -11610,6 +11756,16 @@ paths:
           - type: string
           - type: 'null'
           title: Customer Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       requestBody:
         required: true
         content:
@@ -11842,6 +11998,16 @@ paths:
           - type: string
           - type: 'null'
           title: Customer Id
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       responses:
         '200':
           description: Successful Response
@@ -13394,6 +13560,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -14043,6 +14210,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -14272,6 +14440,16 @@ paths:
       security:
       - BearerAuth: []
       parameters:
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       - name: agent-mandate
         in: header
         required: false
@@ -14725,6 +14903,16 @@ paths:
       security:
       - BearerAuth: []
       parameters:
+      - name: idempotency-key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 200
+          - type: 'null'
+          title: Idempotency-Key
       - name: agent-mandate
         in: header
         required: false
@@ -15393,6 +15581,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -15621,6 +15810,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -16300,6 +16490,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       - name: agent-mandate
@@ -18124,6 +18315,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       - name: agent-mandate
@@ -18595,6 +18787,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -18832,6 +19025,7 @@ paths:
           anyOf:
           - type: string
             minLength: 1
+            maxLength: 200
           - type: 'null'
           title: Idempotency-Key
       requestBody:
@@ -19956,6 +20150,7 @@ components:
         buyer_agent_id:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Buyer Agent Id
       additionalProperties: false
@@ -20030,7 +20225,9 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
           - type: 'null'
           title: Supplier Ids
           description: Allowed suppliers, intersected with buyer VC supplier_ids;
@@ -20052,7 +20249,9 @@ components:
         customer_ids:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           minItems: 1
           title: Customer Ids
           description: Customers this agent may quote and order for.
@@ -20072,6 +20271,7 @@ components:
             orders are excluded.
         note:
           type: string
+          maxLength: 4000
           title: Note
           description: Free-text record of who granted the mandate.
           default: ''
@@ -20250,11 +20450,13 @@ components:
       properties:
         approver:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Approver
           description: 'Human approver name (MVP: one role, no authentication).'
         comment:
           type: string
+          maxLength: 4000
           title: Comment
           default: ''
         evidence_revision:
@@ -20450,6 +20652,7 @@ components:
           title: Level
         reason:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Reason
       additionalProperties: false
@@ -20613,6 +20816,7 @@ components:
       properties:
         approved_order_id:
           type: string
+          maxLength: 4000
           title: Approved Order Id
       additionalProperties: false
       type: object
@@ -20623,6 +20827,7 @@ components:
       properties:
         customer_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Customer Id
           description: Required non-blank Valio customer identifier.
@@ -20739,6 +20944,7 @@ components:
       properties:
         basket_lookup_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Basket Lookup Id
       additionalProperties: false
@@ -20800,10 +21006,12 @@ components:
       properties:
         rrule:
           type: string
+          maxLength: 4000
           title: Rrule
           default: FREQ=WEEKLY
         timezone:
           type: string
+          maxLength: 4000
           title: Timezone
           default: Europe/Helsinki
         start_at:
@@ -20824,11 +21032,13 @@ components:
       properties:
         cancelled_by:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Cancelled By
           description: Non-blank human name responsible for cancellation.
         reason:
           type: string
+          maxLength: 4000
           title: Reason
           default: ''
       additionalProperties: false
@@ -20887,6 +21097,7 @@ components:
       properties:
         agent_id:
           type: string
+          maxLength: 4000
           pattern: ^[a-z0-9][a-z0-9-]{1,47}$
           title: Agent Id
         client:
@@ -20903,12 +21114,15 @@ components:
         customer_ids:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           minItems: 1
           title: Customer Ids
         label:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Label
       additionalProperties: false
@@ -20971,6 +21185,8 @@ components:
             items:
               $ref: '#/components/schemas/BuyerJWK'
             type: array
+          propertyNames:
+            maxLength: 4000
           type: object
           title: Mandate Issuers
           description: Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator
@@ -20978,15 +21194,20 @@ components:
         required_claims:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Required Claims
         exclude_allergens:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Exclude Allergens
         note:
           type: string
+          maxLength: 4000
           title: Note
           default: ''
       additionalProperties: false
@@ -21211,15 +21432,18 @@ components:
       properties:
         product_type:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Product Type
         intended_use:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Intended Use
         preparation:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Preparation
         acceptable_units:
@@ -21299,6 +21523,7 @@ components:
         organisation_id:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Organisation Id
         role:
@@ -21319,6 +21544,7 @@ components:
       properties:
         name:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Name
         quantity:
@@ -21327,18 +21553,24 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
           - type: 'null'
           title: Search Terms
         required_claims:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Required Claims
         exclude_allergens:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Exclude Allergens
         substitutions_allowed:
           type: boolean
@@ -21414,6 +21646,7 @@ components:
           default: 1
         recipe_name:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Recipe Name
         servings:
@@ -21442,6 +21675,7 @@ components:
         yield_note:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Yield Note
       additionalProperties: false
@@ -21686,10 +21920,12 @@ components:
         buyer_agent_id:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Buyer Agent Id
         timezone:
           type: string
+          maxLength: 4000
           title: Timezone
           default: Europe/Helsinki
         permitted_deviations:
@@ -21739,7 +21975,9 @@ components:
         excluded_products:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Excluded Products
         suggestion_horizon:
           type: integer
@@ -21777,6 +22015,7 @@ components:
       properties:
         customer_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Customer Id
           description: Required non-blank Valio customer identifier.
@@ -21795,6 +22034,7 @@ components:
           - type: 'null'
         supplier_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Supplier Id
           description: One supplier per procurement request; valio by default. nordfood
@@ -21802,6 +22042,7 @@ components:
           default: valio
         intent:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Intent
           description: Buyer need; the outside agent structures this request.
@@ -21809,20 +22050,26 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
           - type: 'null'
           title: Search Terms
           description: Optional FTS terms, combined with AND.
         required_claims:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Required Claims
           description: All must exist as catalog nutritionalClaim IDs.
         exclude_allergens:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Exclude Allergens
           description: Requires an uncontradicted free-from entry or a declaration
             not listing the excluded allergen; missing data never proves absence.
@@ -22390,6 +22637,7 @@ components:
       properties:
         quote_id:
           type: string
+          maxLength: 4000
           title: Quote Id
           description: An unexpired OPEN fixed-price quote.
       additionalProperties: false
@@ -22460,7 +22708,9 @@ components:
         customer_ids:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Customer Ids
       additionalProperties: false
       type: object
@@ -22525,6 +22775,7 @@ components:
       properties:
         lookup_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Lookup Id
         plan_index:
@@ -22542,6 +22793,7 @@ components:
       properties:
         updated_by:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Updated By
           description: Name of the human changing the policy.
@@ -22640,6 +22892,7 @@ components:
       properties:
         updated_by:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Updated By
           description: Name of the human changing the policy.
@@ -22650,6 +22903,7 @@ components:
         comment:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Comment
           description: Optional reason for the policy change.
@@ -22664,7 +22918,9 @@ components:
         brands:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Brands
         max_price_per_unit:
           anyOf:
@@ -22681,7 +22937,9 @@ components:
         labels:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Labels
           description: Preferred catalog packaging label IDs.
       additionalProperties: false
@@ -22691,6 +22949,7 @@ components:
       properties:
         product_id:
           type: string
+          maxLength: 4000
           title: Product Id
         unit_price:
           type: number
@@ -22910,12 +23169,16 @@ components:
         categories:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Categories
         interests:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Interests
         channels:
           items:
@@ -22932,6 +23195,7 @@ components:
           default: 2
         timezone:
           type: string
+          maxLength: 4000
           title: Timezone
           default: Europe/Helsinki
         quiet_periods:
@@ -22942,7 +23206,9 @@ components:
         muted_campaigns:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           title: Muted Campaigns
       additionalProperties: false
       type: object
@@ -22966,14 +23232,15 @@ components:
       properties:
         campaign_id:
           type: string
-          maxLength: 200
+          maxLength: 4000
           minLength: 1
           title: Campaign Id
         products:
           items:
             type: string
+            maxLength: 4000
           type: array
-          maxItems: 10
+          maxItems: 100
           minItems: 1
           title: Products
         rationale:
@@ -22992,6 +23259,7 @@ components:
         quote_ref:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Quote Ref
         valid_until:
@@ -23015,7 +23283,9 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
             minItems: 1
           - type: 'null'
           title: Categories
@@ -23023,7 +23293,9 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
             minItems: 1
           - type: 'null'
           title: Customer Ids
@@ -23314,6 +23586,7 @@ components:
       properties:
         product_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Product Id
         quantity_sales_units:
@@ -23333,6 +23606,7 @@ components:
       properties:
         customer_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Customer Id
           description: Required non-blank Valio customer identifier.
@@ -23365,6 +23639,7 @@ components:
         need_ref:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Need Ref
           description: 'Required with explicit lines: stored lookup_id binding fit,
@@ -23421,6 +23696,7 @@ components:
       properties:
         reason:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Reason
           default: Buyer emergency control
@@ -23430,6 +23706,7 @@ components:
       properties:
         approved_order_id:
           type: string
+          maxLength: 4000
           title: Approved Order Id
         cadence:
           $ref: '#/components/schemas/Cadence'
@@ -23484,6 +23761,7 @@ components:
       properties:
         jwt:
           type: string
+          maxLength: 32768
           minLength: 1
           title: Jwt
           description: Buyer-signed EdDSA JWT containing iss, jti_revoked and iat.
@@ -23537,6 +23815,7 @@ components:
       properties:
         scenario:
           type: string
+          maxLength: 200
           title: Scenario
       type: object
       required:
@@ -23694,7 +23973,9 @@ components:
         customer_ids:
           items:
             type: string
+            maxLength: 4000
           type: array
+          maxItems: 100
           minItems: 1
           title: Customer Ids
         event_types:
@@ -23709,6 +23990,11 @@ components:
             - order.expired
             - mandate.revoked
             - proposal.received
+            - suggestion.shown
+            - suggestion.prepared
+            - suggestion.made_recurring
+            - suggestion.dismissed
+            - suggestion.snoozed
           type: array
           minItems: 1
           title: Event Types
@@ -23739,7 +24025,9 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
             minItems: 1
           - type: 'null'
           title: Customer Ids
@@ -23756,6 +24044,11 @@ components:
               - order.expired
               - mandate.revoked
               - proposal.received
+              - suggestion.shown
+              - suggestion.prepared
+              - suggestion.made_recurring
+              - suggestion.dismissed
+              - suggestion.snoozed
             type: array
             minItems: 1
           - type: 'null'
@@ -23780,6 +24073,7 @@ components:
       properties:
         product_id:
           type: string
+          maxLength: 4000
           minLength: 1
           title: Product Id
       additionalProperties: false
@@ -23802,6 +24096,14 @@ components:
             type: string
           type: array
           title: Allergen Evidence
+        comparison:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Comparison
+          description: Signed quote-time brand, pack and comparable price-increase
+            evidence. Absent on historical records; missing evidence requires review.
       additionalProperties: false
       type: object
       required:
@@ -23815,7 +24117,9 @@ components:
           anyOf:
           - items:
               type: string
+              maxLength: 4000
             type: array
+            maxItems: 100
           - type: 'null'
           title: Allowed Brands
         max_price_increase_pct:
@@ -23839,6 +24143,7 @@ components:
         buyer_agent_id:
           anyOf:
           - type: string
+            maxLength: 4000
           - type: 'null'
           title: Buyer Agent Id
       additionalProperties: false

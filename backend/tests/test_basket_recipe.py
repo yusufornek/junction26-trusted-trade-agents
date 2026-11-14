@@ -147,6 +147,8 @@ def test_AC_3_shared_sku_sums_quantities_before_pack_rounding(recipe):
     assert result.basket.lines[0].overbuy.amount == pytest.approx(.2)
     assert [r.chosen_line for r in result.ingredients] == ["oat", "oat"]
     assert all(c.covered == 1 for c in result.basket.coverage_by_ingredient)
+    _check_exact_shared_demand(recipe, False)
+    _check_exact_shared_demand(recipe, True)
 
 
 def test_AC_4_no_compliant_product_is_uncovered_partial_basket_needs_approval(recipe):
@@ -181,6 +183,10 @@ def test_AC_6_basket_quote_order_reserves_all_lines_or_none(recipe):
     with recipe.db.connect() as conn:
         assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (confirmed.id,)).fetchone()[0] == 5
     second = quote(recipe, find(recipe))
+    policy = recipe.policy.get()
+    policy.approval.warnings_need_approval = [w for w in policy.approval.warnings_need_approval if w != "PARTIAL_STOCK"]
+    policy.approval.ignored_warnings.append("PARTIAL_STOCK")
+    recipe.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Basket atomicity despite ignored warning"))
     recipe.valio.rows["tomato"]["stock"] = 0
     pending = recipe.orders.place_order(second.id, "no-lines", "sandbox-agent")
     assert pending.status == "PENDING_APPROVAL"
@@ -368,3 +374,65 @@ def test_explicit_base_servings_round_trip_and_request_override(gateway, need, u
     repeated = offers(gateway, {"customer_id": "1", "deliver_by": str(need.deliver_by), "manifest": manifest})
     assert repeated["scaled_manifest"] == manifest
     assert repeated["basket"]["total"] == result["basket"]["total"]
+
+
+@pytest.mark.parametrize("density", [False, True])
+def test_review_shared_sku_exact_demand_rounds_once(recipe, density):
+    _check_exact_shared_demand(recipe, density)
+
+
+def _check_exact_shared_demand(recipe, density):
+    manifest = deepcopy(MANIFEST)
+    if density:
+        manifest["ingredients"] = [dict(name="Oat", search_terms=["oat"], substitutions_allowed=True,
+            density_kg_per_l=1.2, quantity={"value": value, "unit": "KG"}) for value in (.4, .8)]
+        pid = "oat"
+    else:
+        manifest["ingredients"] = [dict(name="Pasta", search_terms=["pasta"], substitutions_allowed=True,
+            quantity={"value": .0625, "unit": "KG"}) for _ in range(24)]
+        pid = "pasta"
+        with recipe.db.connect(write=True) as conn:
+            product = recipe.catalog.get(pid)
+            product.sales_net_weight_kg = 1.5
+            product.base_net_weight_kg = 1.5
+            product.units[product.sales_unit] = 1
+            conn.execute("UPDATE products SET data=? WHERE id=?", (product.model_dump_json(), pid))
+        recipe.valio.rows[pid]["size"] = 1.5
+    result = find(recipe, manifest)
+    assert len(result.basket.lines) == 1
+    assert result.basket.lines[0].units_needed == 1
+    order = recipe.orders.place_order(quote(recipe, result).id, f"exact-packs:{density}", "sandbox-agent")
+    assert order.lines[0].units_needed == 1
+    assert order.total == result.basket.lines[0].unit_price
+
+
+def test_review_ingredient_coverage_uses_unrounded_demand(recipe):
+    recipe.valio.rows["oat"]["stock"] = 1
+    manifest = deepcopy(MANIFEST)
+    manifest["ingredients"] = [dict(name="Oat", search_terms=["oat"], substitutions_allowed=True,
+        quantity={"value": value, "unit": "L"}) for value in (.4, .7)]
+    result = find(recipe, manifest)
+    assert result.basket.lines[0].availability.coverage == .5
+    assert sum(c.quantity.value * c.coverage for c in result.basket.coverage_by_ingredient) == pytest.approx(1)
+    assert all(c.coverage == pytest.approx(1 / 1.1) for c in result.basket.coverage_by_ingredient)
+
+
+def test_review_basket_shortage_cannot_confirm_when_warning_ignored(recipe):
+    q = quote(recipe, find(recipe))
+    policy = recipe.policy.get()
+    policy.approval.warnings_need_approval = [w for w in policy.approval.warnings_need_approval if w != "PARTIAL_STOCK"]
+    policy.approval.ignored_warnings.append("PARTIAL_STOCK")
+    recipe.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Ignore stock warning"))
+    recipe.valio.rows["tomato"]["stock"] = 0
+    order = recipe.orders.place_order(q.id, "shortage-ignored", "sandbox-agent")
+    assert order.status == "PENDING_APPROVAL"
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (order.id,)).fetchone()[0] == 0
+
+
+def test_review_basket_unknown_stock_keeps_spec39_exception(recipe):
+    recipe.valio.rows["tomato"]["stock"] = 999999
+    order = recipe.orders.place_order(quote(recipe, find(recipe)).id, "unknown-stock", "sandbox-agent")
+    assert order.status == "CONFIRMED"
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (order.id,)).fetchone()[0] == 4

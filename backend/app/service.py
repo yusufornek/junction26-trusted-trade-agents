@@ -97,6 +97,12 @@ class Gateway:
         install(self, self.autonomy, "change", "mutation")
         install(self, self.buyer, "control", "mutation")
         install(self, self.buyer, "revoke", "mutation")
+        for name in ("create", "baseline", "run", "pause"):
+            install(self, self.recurring, name, "mutation")
+        for name in ("submit", "action", "put_preferences"):
+            install(self, self.proposals, name, "mutation")
+        for name in ("act", "put_preferences"):
+            install(self, self.memory, name, "mutation")
 
         from .webhooks import Webhooks
         self.webhooks = Webhooks(self)
@@ -122,9 +128,9 @@ class Gateway:
         with (self.sandbox.lock if self.sandbox else nullcontext()), scope(self.settings.environment, self.sandbox.now if self.sandbox else None), self.telemetry.activate():
             yield
 
-    def find_offers(self, need, actor="agent:external", *, mandate=None):
+    def find_offers(self, need, actor="agent:external", *, mandate=None, product_ids=None):
         self.orders.expire()
-        return self.lookup.find_offers(need, actor, mandate=mandate)
+        return self.lookup.find_offers(need, actor, mandate=mandate, product_ids=product_ids)
 
     def audit(self, order_id=None, quote_id=None):
         return audit.read(self.db, order_id, quote_id)

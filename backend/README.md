@@ -944,7 +944,7 @@ REST and MCP use `app.commands` for principal-scoped idempotency and token costs
 requires its existing `Idempotency-Key`; quote, cancel, approve and reject also accept this header
 (optional for compatibility). Policy update/reset, signed mandate revocation and autonomy changes accept it too.
 Buyer suspension, resumption and local mandate revocation use the same command boundary and header.
-MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
+MCP quote, cancel, basket lookup, suggestion actions and recurring workflow mutations accept `idempotency_key`. REST exposes the matching optional `Idempotency-Key` header on those commands, proposal submissions/decisions and buyer preference writes. Reuse a key only for the
 same principal, command route (including every target/path parameter) and payload.
 The added policy approval daily limit is omitted from command fingerprints at its default
 (5,000 EUR). Commands saved before that field existed, and commands saved with its
@@ -1152,7 +1152,7 @@ applies: two agents sharing a customer never share procurement events. Buyer sub
 explicit agent organisation assignment. Unowned historical records remain operator-only.
 
 Supported event types: `order.approval_required`, `order.evidence_changed`, `order.confirmed`,
-`order.rejected`, `order.cancelled`, `order.expired`, `mandate.revoked`, `proposal.received`.
+`order.rejected`, `order.cancelled`, `order.expired`, `mandate.revoked`, `proposal.received`, and `suggestion.shown|prepared|made_recurring|dismissed|snoozed` (each a separate `suggestion.*` event type).
 The procurement core retains its existing `order.placed` domain event; the webhook projection names
 the initial purchasing outcome appropriately. The envelope retains the durable event ID, customer,
 aggregate ID/revision, correlation and payload. Multi-customer revocations project one scoped event
@@ -1498,7 +1498,7 @@ cross-process restart state applies to an existing live gateway. No new backend 
 `cadence: {rrule, timezone, start_at, catch_up: "once"}` and
 `permitted_deviations: {price_pct, cumulative_price_pct, quantity_pct,
 cumulative_quantity_pct, brand_change, pack_change}`. Percent tolerances default
-to zero. The template is the original bound need or scaled recipe basket; its
+to zero. The template preserves approved product lines and purchased quantities alongside the bound need or scaled recipe basket; its
 delivery lead time is retained. The original agent needs policy `recurring: true`
 or a signed mandate credentialSubject `recurring: true`. This permission does not
 relax normal order limits, standing constraints or autonomy rules.
@@ -1554,7 +1554,7 @@ mute adds the campaign name and equivalent-content fingerprint to buyer consent.
 
 `proposal.received` events are written atomically to the durable outbox with customer scope and
 consented channels. The signed webhook service (spec 33) delivers through scoped subscriptions and
-requires `"webhook"` in `event.payload.channels` for proposal delivery.
+requires `"webhook"` in both `event.payload.channels` and the current buyer preferences on every attempt, including retries. Inbox-only consent never permits an external proposal webhook.
 
 Demo: configure the supplier identity and buyer opt-in, then run
 `SUPPLIER_AGENT_KEY=... .venv/bin/python demo/run_sales_agent.py` from `backend/`.
@@ -1701,3 +1701,18 @@ real confirmed sandbox purchases from `sandbox/monthly_milk_history.json` (Juneâ
 2026, roughly 1,000 L on each month's first), displays the December 1 suggestion,
 prepares it over MCP, then makes it recurring. A 60-day query horizon includes it
 on the hackathon date. Neither the demo nor tests touch `backend/var/`.
+
+
+## Reviewed safety and correctness guarantees
+
+Substitution profiles are re-evaluated at placement and approval under the writer lock, using signed quote-time brand, pack and comparable-price evidence. Locked prices never change. Missing historical comparison evidence remains readable and requires review. Functional product type determines eligible categories; same-category closeness is a ranking preference. Approval still follows spec 17: revision 1 at placement, incremented when approval-time decision evidence changes.
+
+Basket demand uses rational arithmetic through scaling, density conversion and shared-SKU aggregation, followed by a single sales-step ceiling. Ingredient coverage measures unrounded content demand, while offer coverage measures purchased packs. Known-stock shortages always hold the basket for review and reserve none, even if PARTIAL_STOCK is ignored. Spec 39 still permits unknown-stock lines without local reservations.
+
+Recurring snapshots sign physical pack content and physical-unit cost independently of SALES_UNIT requests. Comparisons use placement-refreshed delivery evidence before policy, receipt and run persistence. Catch-up retains the missed local-date occurrence key and uses an execution-relative delivery window. Recent recurrence calculations preserve cadence phase and DST wall time, skip old history arithmetically outside the writer lock, then revalidate the cursor under the lock. Fractional-second starts round upwards to RRULE second precision.
+
+Campaign merging deduplicates each delivered customer and rechecks previously held or newly targeted buyers. A campaign can target at most 100 distinct customers across merged submissions; repeated identical held outcomes do not append filter/audit rows. Accept screens advertised products explicitly before the general shortlist limit, under normal constraints, fit, mandate, live price and stock checks. Signed mandates are forwarded for decline and mute, too. Proposal-derived quotes bind their source and recheck current consent and expiry at placement and approval.
+
+Free-text request values are limited to 4,000 characters; string collections to 100 entries (narrower existing limits still apply), idempotency keys to 200, and revocation JWTs to 32,768. Refusal and rate-limit audit data use a bounded structured summary. Stored lookup text is read with historical validation context, so new request bounds do not invalidate old quotes/orders. Exact keyed retries recheck authority and replay the saved result at read cost.
+
+`demo/run_exception_journey.py` retries SDK `MCPError` only for `REQUEST_TIMEOUT`, using its existing bounded same-arguments retry; other protocol errors propagate. The review-to-test mapping and implementation decisions are in `REVIEW_FIXES.md`.

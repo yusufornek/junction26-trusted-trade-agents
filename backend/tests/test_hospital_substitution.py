@@ -39,7 +39,20 @@ def quote(g, result):
 
 
 def test_AC_1_stockout_offers_functional_substitute_with_allergen_evidence(hospital):
+    import httpx
+    import json
+    from app.decisions import OpenAIDecisions
+    outgoing = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        outgoing.extend(body["questions"])
+        return httpx.Response(200, json={"answers": [dict(type="predicate", name=q["name"], probability=hospital.valio.rows[q["name"][4:]].get("fit", .99))
+                                                      for q in body["questions"]]})
+
+    hospital.decisions = hospital.lookup.decisions = OpenAIDecisions("synthetic", httpx.Client(transport=httpx.MockTransport(respond)))
     result = lookup(hospital)
+    assert outgoing and all("hospital kitchen cooking" in q["instructions"] for q in outgoing)
     assert [o.product_id for o in result.offers] == ["approved-oat"]
     best = result.offers[0]
     assert best.rank_label == "best"
@@ -128,3 +141,91 @@ def test_functional_category_and_fit_cannot_be_bypassed_with_explicit_quote(hosp
     q = hospital.orders.create_quote(QuoteRequest(customer_id="hospital", deliver_by=result.need.deliver_by,
         need_ref=result.lookup_id, lines=[{"product_id": "wrong-type", "quantity_sales_units": 20}]), "sandbox-agent")
     assert hospital.orders.place_order(q.id, "wrong-type", "sandbox-agent").status == "REJECTED"
+
+
+@pytest.mark.parametrize("tightening", ["requires_approval", "price", "brand", "pack", "policy", "standing", "clinical"])
+def test_review_current_rules_after_quote(hospital, tightening):
+    policy = hospital.policy.get()
+    profile = policy.customers["hospital"]
+    profile.clinical_review = None
+    profile.substitution_profile.requires_approval = False
+    if tightening == "standing":
+        profile.required_claims = []
+        with hospital.db.connect(write=True) as conn:
+            product = hospital.catalog.get("approved-oat")
+            product.claims = []
+            conn.execute("UPDATE products SET claims=?,data=? WHERE id=?", ("[]", product.model_dump_json(), product.id))
+    hospital.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Initial authority"))
+    q = quote(hospital, lookup(hospital))
+    policy = hospital.policy.get()
+    profile = policy.customers["hospital"]
+    if tightening == "requires_approval":
+        profile.substitution_profile.requires_approval = True
+    elif tightening == "price":
+        profile.substitution_profile.max_price_increase_pct = 1
+    elif tightening == "brand":
+        profile.substitution_profile.allowed_brands = ["Unapproved"]
+    elif tightening == "pack":
+        profile.substitution_profile.pack_size_range.min = 2
+    elif tightening == "policy":
+        policy.approval.max_auto_total_eur = 1
+    elif tightening == "standing":
+        profile.required_claims = ["FREE_FROM_LACTOSE"]
+    else:
+        profile.clinical_review = "required"
+    hospital.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Tightened authority"))
+    order = hospital.orders.place_order(q.id, "tightening", "sandbox-agent")
+    assert order.total == q.total
+    assert order.status == ("REJECTED" if tightening == "standing" else "PENDING_APPROVAL")
+    assert order.evidence_revision == 1  # Spec 17 R-1: placement establishes the first revision.
+    if tightening in {"requires_approval", "price", "brand", "pack"}:
+        assert any(h.rule == "SUBSTITUTION_PROFILE" for h in order.policy.hits)
+
+
+def test_review_profile_tightening_during_approval_revises_evidence(hospital):
+    policy = hospital.policy.get()
+    policy.customers["hospital"].clinical_review = None
+    policy.customers["hospital"].substitution_profile.requires_approval = False
+    policy.approval.max_auto_total_eur = 1
+    hospital.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Initial authority"))
+    q = quote(hospital, lookup(hospital))
+    order = hospital.orders.place_order(q.id, "pending-profile", "sandbox-agent")
+    policy.customers["hospital"].substitution_profile.max_price_increase_pct = 1
+    hospital.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Tightened profile"))
+    with pytest.raises(DomainError) as error:
+        hospital.orders.approve(order.id, "Buyer", evidence_revision=order.evidence_revision)
+    assert error.value.code == "EVIDENCE_CHANGED"
+    revised = hospital.orders.get_order(order.id)
+    assert revised.evidence_revision == order.evidence_revision + 1
+    assert any(h.rule == "SUBSTITUTION_PROFILE" for h in revised.policy.hits)
+    assert hospital.orders.approve(order.id, "Buyer", evidence_revision=revised.evidence_revision).status == "CONFIRMED"
+
+
+def test_review_cross_category_functional_substitute_is_screened(hospital):
+    with hospital.db.connect(write=True) as conn:
+        product = hospital.catalog.get("approved-oat")
+        product.category = "other-oat"
+        conn.execute("UPDATE products SET category=?,data=? WHERE id=?", (product.category, product.model_dump_json(), product.id))
+    result = lookup(hospital)
+    assert [o.product_id for o in result.offers] == ["approved-oat"]
+    assert result.offers[0].substitution.allergen_evidence
+
+
+def test_review_historical_substitution_evidence_loads_and_fails_closed(hospital):
+    import json
+    from app.signing import quote_payload
+    policy = hospital.policy.get()
+    policy.customers["hospital"].clinical_review = None
+    policy.customers["hospital"].substitution_profile.requires_approval = False
+    hospital.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Historical authority"))
+    q = quote(hospital, lookup(hospital))
+    raw = q.model_dump(mode="json")
+    raw["lines"][0]["substitution"].pop("comparison")
+    raw["signature"] = hospital.signing.sign(quote_payload(raw))
+    with hospital.db.connect(write=True) as conn:
+        conn.execute("UPDATE quotes SET data=? WHERE id=?", (json.dumps(raw), q.id))
+    assert hospital.orders.get_quote(q.id).lines[0].substitution.comparison is None
+    order = hospital.orders.place_order(q.id, "historical-substitution", "sandbox-agent")
+    assert order.status == "PENDING_APPROVAL"
+    assert order.total == q.total
+    assert any(h.rule == "SUBSTITUTION_PROFILE" and "cannot be verified" in h.detail for h in order.policy.hits)

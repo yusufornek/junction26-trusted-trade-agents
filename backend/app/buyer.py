@@ -23,7 +23,7 @@ def check_suspension(db, agent_id):
 
 
 class Reason(BaseModel):
-    reason: str = Field(default="Buyer emergency control", min_length=1)
+    reason: str = Field(default="Buyer emergency control", min_length=1, max_length=4000)
 
 
 class Buyer:

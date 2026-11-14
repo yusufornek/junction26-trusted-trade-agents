@@ -1,6 +1,8 @@
 """Agent-decomposed recipes become one evidence-bound, batched procurement request."""
 import json
 from decimal import Decimal
+from fractions import Fraction
+from math import ceil
 from uuid import uuid4
 
 from . import audit
@@ -121,12 +123,17 @@ class Baskets:
         with self.db.connect() as conn:
             reservations = {pid: reserved(conn, pid) for pid in ids}
             autonomous_total = g.policy.autonomous_total(conn, agent_id)
-        results, selected, uncovered, allocations = [], {}, [], {}
+        results, selected, uncovered, allocations, exact_demands = [], {}, [], {}, {}
         for i, (ingredient, need, pool, fit, effective) in enumerate(zip(scaled.ingredients, needs, pools, fits, sources)):
             offers, converted = [], {}
             unit_failure = False
             for p in pool:
                 candidate_need = need
+                original_quantity = request.manifest.ingredients[i].quantity
+                exact = (Fraction(str(original_quantity.value)) * Fraction(str(request.servings or request.manifest.servings))
+                         / Fraction(str(request.manifest.base_servings or request.manifest.servings)))
+                if original_quantity.unit in {"G", "ML"}:
+                    exact /= 1000
                 if not reconcile_size(p, price.get(p.id, {}), need.quantity.unit)[0]:
                     other = {"KG": "L", "L": "KG"}.get(need.quantity.unit)
                     density = ingredient.density_kg_per_l or p.density_kg_per_l
@@ -134,7 +141,8 @@ class Baskets:
                         if density is None:
                             unit_failure = True
                             continue
-                        quantity = need.quantity.value / density if other == "L" else need.quantity.value * density
+                        exact = exact / Fraction(str(density)) if other == "L" else exact * Fraction(str(density))
+                        quantity = float(exact)
                         candidate_need = need.model_copy(update={"quantity": Quantity(value=quantity, unit=other)})
                     else:
                         unit_failure = True
@@ -143,6 +151,7 @@ class Baskets:
                     stock.get(p.id, {"error": True}), fit.get(p.id), reserved_amount=reservations[p.id], sources=effective)
                 offers.append(offer)
                 converted[p.id] = candidate_need
+                exact_demands[i, p.id] = exact
             rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability,
                  catalog_stats=g.catalog.metadata("ranking"), reject_codes=policy.reject.on)
             invalid = set(policy.reject.on) | {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "UNIT_MISMATCH"}
@@ -158,13 +167,14 @@ class Baskets:
         lines, line_needs, coverages = [], {}, []
         for pid, entries in selected.items():
             # Sum exact fractions of sales packs BEFORE rounding, including cross-dimensional ingredients.
-            packs = sum((Decimal(str(n.quantity.value)) / Decimal(str(o.size_per_sales_unit))
-                         for _, n, o in entries), Decimal(0))
-            lots = float(pack_quantity(1, requested=packs, step=sales_step(products[pid])))
+            packs = sum((exact_demands[i, pid] / Fraction(str(o.size_per_sales_unit))
+                         for i, n, o in entries), Fraction(0))
+            step = Fraction(sales_step(products[pid]))
+            lots = float(ceil(packs / step) * step)
             first = entries[0][1]
             first_size = entries[0][2].size_per_sales_unit
             merged = first.model_copy(update={
-                "quantity": Quantity(value=float(packs * Decimal(str(first_size))), unit=first.quantity.unit),
+                "quantity": Quantity(value=float(packs * Fraction(str(first_size))), unit=first.quantity.unit),
                 "required_claims": sorted({c for _, n, _ in entries for c in n.required_claims}),
                 "exclude_allergens": sorted({c for _, n, _ in entries for c in n.exclude_allergens})})
             # Store only request constraints; standing rules are re-unioned at every later step.
@@ -179,7 +189,8 @@ class Baskets:
             lines.append(line)
             line_needs[pid] = raw_merged
             for i, n, o in entries:
-                fraction = line.availability.coverage
+                fraction = (1.0 if line.availability.enough else
+                            min(1.0, float(Fraction(str(line.availability.available_amount or 0)) / packs)))
                 allocations[i] = (pid, fraction)
                 results[i].update(purchasable_quantity=lots, overbuy=line.overbuy, coverage=fraction)
                 if fraction < 1:

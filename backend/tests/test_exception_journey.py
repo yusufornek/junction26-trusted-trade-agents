@@ -159,7 +159,8 @@ def test_ac_6_changed_evidence_increases_revision_and_stays_pending(sandbox):
     assert approved.status_code == 200 and approved.json()["order_revision"] == 3
 
 
-def test_ac_7_reference_run_prints_receipt_and_recovers_lost_placement(sandbox, capsys, tmp_path):
+@pytest.mark.parametrize("sdk_timeout", [False, True])
+def test_ac_7_reference_run_prints_receipt_and_recovers_lost_placement(sandbox, capsys, tmp_path, sdk_timeout):
     gateway, server, client = sandbox
     state, placements, sleeps = {}, [], []
     saved = tmp_path / "journey-state.json"
@@ -169,6 +170,10 @@ def test_ac_7_reference_run_prints_receipt_and_recovers_lost_placement(sandbox, 
         if name == "place_order":
             placements.append(dict(arguments))
             if len(placements) == 1:
+                if sdk_timeout:
+                    from mcp.shared.exceptions import MCPError
+                    from mcp.types import ErrorData, REQUEST_TIMEOUT
+                    raise MCPError(code=REQUEST_TIMEOUT, message="Committed response lost")
                 raise TimeoutError("The order was committed but its response was lost")
         return result
 
@@ -184,12 +189,27 @@ def test_ac_7_reference_run_prints_receipt_and_recovers_lost_placement(sandbox, 
     assert len(placements) == 2 and placements[0] == placements[1]
     assert sleeps == [1, 5]
     assert len(gateway.orders.list_orders()) == 1
+
     assert json.loads(saved.read_text())["order_id"] == result["order"]["id"]
     transcript = capsys.readouterr().out
     assert f"Receipt id: {result['order']['id']}" in transcript
     assert "PENDING_APPROVAL" in transcript and "CONFIRMED" in transcript and "Evidence manifest:" in transcript
     assert result["evidence"]["environment"] == "sandbox"
     assert verify_jws(result["receipt"]["receipt"], receipt_payload(result["receipt"]), gateway.signing.jwks())
+
+
+def test_review_mcp_non_timeout_is_not_retried():
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ErrorData
+    calls = []
+
+    async def refused(name, arguments):
+        calls.append(name)
+        raise MCPError(code=-32602, message="Invalid arguments")
+
+    with pytest.raises(MCPError):
+        asyncio.run(ExceptionJourney(refused).run())
+    assert len(calls) == 1
 
 
 def test_ac_8_restarted_client_polls_same_order_to_same_outcome(sandbox, tmp_path):

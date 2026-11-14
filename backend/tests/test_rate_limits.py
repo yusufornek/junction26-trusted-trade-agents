@@ -107,7 +107,7 @@ def test_ac_6_policy_limit_effective_next_request_and_audited(gateway, need, ups
 
 def test_ac_7_bounded_global_supplier_concurrency(gateway, need, upstream, monkeypatch):
     from app import limits
-    guard = UpstreamGuard(concurrency=1, queue_size=1, wait_seconds=2)
+    guard = UpstreamGuard(concurrency=1, queue_size=1, wait_seconds=30)  # generous: the queued call must outlive the test client start-up under load
     monkeypatch.setattr(limits, "SUPPLIER_GUARD", guard)
     entered, release, queued, second_entered = (threading.Event() for _ in range(4))
     active, maximum = [0], [0]

@@ -15,6 +15,8 @@ from uuid import uuid4
 
 import httpx
 import httpx2
+from mcp.shared.exceptions import MCPError
+from mcp.types import REQUEST_TIMEOUT
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -49,6 +51,10 @@ class ExceptionJourney:
                     raise RuntimeError(json.dumps(payload))
                 delay = payload["retry_after_seconds"]
             except (TimeoutError, ConnectionError, httpx.TransportError, httpx2.TransportError):
+                delay = 1
+            except MCPError as error:
+                if error.error.code != REQUEST_TIMEOUT:
+                    raise
                 delay = 1
             if attempt == self.max_retries:
                 raise RuntimeError("Response still uncertain; resume with the saved state and the same key")
