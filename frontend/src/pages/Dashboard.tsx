@@ -142,7 +142,7 @@ export default function Dashboard() {
                 <Legend tone="bg-warn" label="Pending" value={pending} />
                 <Legend tone="bg-negative" label="Rejected" value={byStatus.REJECTED ?? 0} />
                 <Legend
-                  tone="bg-ink-soft"
+                  tone="bg-birch"
                   label="Cancelled / expired"
                   value={(byStatus.CANCELLED ?? 0) + (byStatus.EXPIRED ?? 0)}
                 />
@@ -441,7 +441,8 @@ function Metric({
       <div className="flex h-6 items-center justify-between gap-3">
         <span className="label whitespace-nowrap">{label}</span>
         {trend ? (
-          <div className="w-16 shrink-0">
+          // Up to 64px; it gives way to the label when the card narrows (four-up beside an open rail).
+          <div className="min-w-0 max-w-16 flex-1">
             <Sparkline values={trend} tone="brand" height={24} />
           </div>
         ) : null}
@@ -456,8 +457,9 @@ function Metric({
         <span className="min-w-0 truncate" title={foot}>
           {foot}
         </span>
+        {/* Gives way first when the card narrows, so the count beside it is never cut. */}
         {badge ? (
-          <span className="chip bg-brand-soft text-brand" title="Share of orders the agent confirmed on its own">
+          <span className="chip hidden bg-brand-soft text-brand @min-[144px]:inline-flex" title="Share of orders the agent confirmed on its own">
             {badge}
           </span>
         ) : null}

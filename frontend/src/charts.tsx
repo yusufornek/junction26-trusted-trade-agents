@@ -17,7 +17,7 @@ const TONE: Record<Tone, string> = {
   ink: "var(--color-ink)",
   brand: "var(--color-brand)",
   // Cancelled / expired: grey, so an event that no longer counts never reads as a status colour.
-  muted: "var(--color-ink-soft)",
+  muted: "var(--color-birch)",
 };
 
 /** Content width of a block element in CSS px, kept current while the layout changes. */
@@ -109,7 +109,7 @@ export function Sparkline({
 export type Marker = { index: number; label: string; tone: "positive" | "negative" | "ink" | "warn" | "brand" | "muted" };
 
 const AXIS_FONT = 11;
-/** Rough Inter width at 11px; only used to keep labels apart and inside the edges. */
+/** Rough UI-font width at 11px; only used to keep labels apart and inside the edges. */
 const labelWidth = (l: string) => l.length * AXIS_FONT * 0.56;
 
 /** The large balance chart: smooth area, dotted day rail, markers on the events that mattered. */

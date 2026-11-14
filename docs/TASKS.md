@@ -19,6 +19,8 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 35 | Live server + deploy on push | Frontend + Claude | done | https://trustedtrade.vps.webdock.cloud — see `docs/DEPLOY.md` "Live demo server" |
 | 36 | `OPENAI_API_KEY` on the live server (without it every order is held with NO_FIT_SCORE) | Gökalp | todo | add to `~/app/deploy/.env`, then `docker compose … up -d` |
 | 37 | Frontend for graduated autonomy (spec 40): path, track record, recommendation, grant / withdraw | Frontend | done | `/agents`, autonomy chips on `/policy`; R-5 signer display waits for a contract field |
+| 38 | Frontend: Connect page (`/connect`), rail with hover labels, phone menu, Schibsted Grotesk, forest status palette | Frontend | done | 14.11; degrades to `<YOUR_AGENT_KEY>` until #39 lands |
+| 39 | Backend: `/v1/connections` (issue / list / revoke agent keys) and MCP served at `/mcp` in the gateway process | Gökalp | todo | contract in `docs/CONNECT-API.md` |
 | 13 | Order cancel over REST + MCP (`POST /v1/orders/{id}/cancel`, tool `cancel_order`) | Backend | done | spec `docs/specs/04-order-cancel.md`, [issue #1](https://github.com/yusufornek/junction26-trusted-trade-agents/issues/1); verified live 13.11 |
 | 14 | Spec-driven core: audit + specs 01–03 as built (`docs/specs/`) | Backend | done | reviewed one by one after the MVP |
 | 15 | Size reconciliation — exact pack counts | Backend | done | spec `docs/specs/05-size-reconciliation.md` |

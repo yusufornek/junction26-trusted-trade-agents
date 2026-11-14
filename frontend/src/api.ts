@@ -337,6 +337,30 @@ export type AuditVerification = {
   anchor_block_time?: string | null;
 };
 
+/**
+ * Connections: an outside client plus the agent identity and key it uses. Proposed contract for the backend
+ * (docs/CONNECT-API.md); until the gateway serves it, the console falls back to placeholder keys.
+ */
+export type ClientKind = "claude_desktop" | "claude_code" | "cursor" | "vscode" | "chatgpt" | "mcp_other" | "rest";
+
+export type Connection = {
+  connection_id: string;
+  agent_id: string;
+  client: ClientKind;
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+};
+
+/** The key is returned once, at creation; the gateway keeps only a hash. */
+export type NewConnection = Connection & {
+  key: string;
+  mcp_url: string | null;
+  rest_base_url: string;
+  mandate: AgentMandate;
+};
+
 export type Me = {
   principal: { id: string; kind?: string; role?: string; organisation_id?: string | null };
   customer_ids: string[];
@@ -483,6 +507,15 @@ export const api = {
       body: JSON.stringify({ level, reason }),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
+  connections: () => call<Connection[]>("/v1/connections"),
+  createConnection: (body: { agent_id: string; client: ClientKind; customer_ids: string[]; label?: string }) =>
+    call<NewConnection>("/v1/connections", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    }),
+  revokeConnection: (id: string) =>
+    call<Connection>(`/v1/connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
   revokeMandate: (jwt: string) =>
     call<Record<string, unknown>>("/v1/mandates/revocations", { method: "POST", body: JSON.stringify({ jwt }) }),
   stats: (since?: string) => call<Stats>("/v1/stats" + (since ? `?since=${encodeURIComponent(since)}` : "")),

@@ -151,7 +151,8 @@ export default function Buyer() {
           </p>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-4">
+        {/* The last two columns hold claim and allergen codes (FREE_FROM_LACTOSE), so they get a larger share. */}
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.3fr)]">
           <label className="flex flex-col gap-1.5 lg:col-span-3">
             <span className="label">Intent</span>
             <input className="field" value={need.intent} onChange={(e) => setNeed({ ...need, intent: e.target.value })} />

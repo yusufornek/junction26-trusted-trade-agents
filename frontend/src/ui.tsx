@@ -54,8 +54,8 @@ const STATUS_STYLE: Record<string, string> = {
   CONFIRMED: "bg-positive-soft text-positive",
   PENDING_APPROVAL: "bg-warn-soft text-warn",
   REJECTED: "bg-negative-soft text-negative",
-  EXPIRED: "bg-chip text-ink-muted",
-  CANCELLED: "bg-chip text-ink-muted",
+  EXPIRED: "bg-birch-soft text-birch-ink",
+  CANCELLED: "bg-birch-soft text-birch-ink",
   OPEN: "bg-brand-soft text-brand",
   ACCEPTED: "bg-positive-soft text-positive",
 };

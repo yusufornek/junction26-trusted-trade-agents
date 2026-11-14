@@ -7,6 +7,7 @@
 import type {
   AgentTrackRecord,
   AuditEntry,
+  Connection,
   FulfilmentPlan,
   LookupResult,
   OfferCard,
@@ -292,6 +293,13 @@ const quoteFor = (o: Order): Quote => ({
   live_calls: { price: 1, availability: 1 },
 });
 
+/** Entries written after load, such as a new agent's first call from the Connect page. */
+const EXTRA_AUDIT: Omit<AuditEntry, "id">[] = [];
+const CONNECTIONS: Connection[] = [
+  { connection_id: "con_5d1e7a2b", agent_id: "hotel-chain-agent", client: "claude_desktop", key_prefix: "vak_3f9c",
+    created_at: ago(60 * 30), last_used_at: ago(6), revoked_at: null },
+];
+
 function auditFor(): AuditEntry[] {
   const rows: Omit<AuditEntry, "id">[] = [];
   for (const o of ORDERS) {
@@ -317,6 +325,7 @@ function auditFor(): AuditEntry[] {
   }
   rows.push({ ts: ago(60 * 22), actor: "human:operator", action: "POLICY_UPDATED", order_id: null, quote_id: null,
     summary: "Updated procurement policy.", data: { stated_name: "Ada", before: { max_auto_total_eur: 1000 }, after: { max_auto_total_eur: 1500 } } });
+  rows.push(...EXTRA_AUDIT);
   return rows.sort((a, b) => a.ts.localeCompare(b.ts)).map((r, i) => ({ id: i + 1, ...r }));
 }
 
@@ -511,6 +520,32 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
   }
   if (p === "/v1/policy/reset") return Object.assign(POLICY, { updated_by: body.updated_by, updated_at: new Date().toISOString() });
   if (p === "/v1/mandates/revocations") return { revoked: true };
+  // Copies, like a real response: handing React the same mutated array would skip the re-render.
+  if (p === "/v1/connections" && method === "GET") return CONNECTIONS.map((c) => ({ ...c }));
+  if (p === "/v1/connections" && method === "POST") {
+    const id: string = body.agent_id;
+    const agents = (POLICY.agents ??= {});
+    // docs/CONNECT-API.md: a new agent starts approval-first; an existing one keeps its mandate.
+    const mandate = (agents[id] ??= { autonomy: "approval_required", customer_ids: body.customer_ids, max_auto_daily_total_eur: 1000,
+      note: "connected from the console" });
+    const key = `vak_${crypto.randomUUID().replaceAll("-", "")}`;
+    const c: Connection = { connection_id: `con_${crypto.randomUUID().slice(0, 8)}`, agent_id: id, client: body.client,
+      key_prefix: key.slice(0, 8), created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+    CONNECTIONS.unshift(c);
+    // The new agent "calls" a few seconds later so the Check-it-works step can be reviewed turning green.
+    setTimeout(() => {
+      c.last_used_at = new Date().toISOString();
+      EXTRA_AUDIT.push({ ts: c.last_used_at, actor: `agent:${id}`, action: "LOOKUP", order_id: null, quote_id: null,
+        summary: "Shortlisted 10 offers from 40 screened.", data: null });
+    }, 6000);
+    return { ...c, key, mcp_url: null, rest_base_url: `${location.origin}/v1`, mandate };
+  }
+  if ((m = p.match(/^\/v1\/connections\/([^/]+)$/)) && method === "DELETE") {
+    const c = CONNECTIONS.find((x) => x.connection_id === decodeURIComponent(m![1]));
+    if (!c) throw new Error("mock: no such connection");
+    c.revoked_at = new Date().toISOString();
+    return c;
+  }
   if ((m = p.match(/^\/v1\/agents\/([^/]+)\/track-record$/)))
     return trackRecord(decodeURIComponent(m[1]), Number(url.searchParams.get("window_days") ?? 30));
   if ((m = p.match(/^\/v1\/agents\/([^/]+)\/autonomy$/)) && method === "POST") {

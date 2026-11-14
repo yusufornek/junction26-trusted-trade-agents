@@ -10,11 +10,14 @@ import {
   Inbox,
   LayoutGrid,
   LogOut,
+  Menu,
   Package,
+  Plug,
   Plus,
   ScrollText,
   Search,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { api, hasToken, onAuthChange, setToken } from "./api";
 import { Avatar } from "./charts";
@@ -25,10 +28,11 @@ const NAV = [
   { to: "/buyer", icon: Search, label: "Buyer flow" },
   { to: "/approvals", icon: Inbox, label: "Approvals" },
   { to: "/orders", icon: Package, label: "Orders" },
-  { to: "/audit", icon: ScrollText, label: "Audit" },
+  { to: "/audit", icon: ScrollText, label: "Audit trail" },
   { to: "/policy", icon: ShieldCheck, label: "Policy" },
   { to: "/agents", icon: Bot, label: "Agents" },
-  { to: "/trust", icon: Fingerprint, label: "Trust & connect" },
+  { to: "/connect", icon: Plug, label: "Connect an agent" },
+  { to: "/trust", icon: Fingerprint, label: "Trust" },
 ];
 
 const TITLES: Record<string, { title: string; sub: string }> = {
@@ -39,7 +43,8 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },
   "/policy": { title: "Policy", sub: "The guardrails the buyer owns, not the code." },
   "/agents": { title: "Agents", sub: "Who may buy, for which customer, and up to what limit." },
-  "/trust": { title: "Trust & connect", sub: "Verify what the gateway recorded, and plug an outside agent in." },
+  "/connect": { title: "Connect an agent", sub: "Pick the assistant or tool you work in and give it a key to this gateway." },
+  "/trust": { title: "Trust", sub: "Verify what the gateway recorded, without taking its word for it." },
 };
 
 export const RANGES = [
@@ -60,8 +65,11 @@ export default function Shell() {
   const [signInError, setSignInError] = useState<unknown>(null);
   const [rangeIndex, setRangeIndex] = useState(1);
   const [rangeOpen, setRangeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => onAuthChange(() => setSignedIn(hasToken())), []);
+  // A phone menu that stays open after navigating would cover the page the person just asked for.
+  useEffect(() => setMenuOpen(false), [pathname]);
 
   const signIn = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -92,61 +100,139 @@ export default function Shell() {
   const since = range.days ? new Date(Date.now() - range.days * 86400000).toISOString() : undefined;
   const waiting = approvals.data?.length ?? 0;
 
-  // One class per rail button so every icon sits on the same 40px grid, vertical rail or mobile bar.
-  const railItem =
-    "relative grid size-10 shrink-0 place-items-center rounded-2xl transition-colors";
-  const railIdle = `${railItem} text-white/55 hover:bg-white/10 hover:text-white`;
-
   return (
-    <div className="flex min-h-screen flex-col gap-4 p-4 md:flex-row">
-      {/* Floating navy rail; below md it becomes a bar that scrolls inside itself, never the page. */}
-      <nav className="flex shrink-0 items-center gap-1 overflow-x-auto rounded-[22px] bg-rail p-2 [scrollbar-width:none] md:sticky md:top-4 md:h-[calc(100vh-2rem)] md:w-[72px] md:flex-col md:overflow-x-hidden md:overflow-y-auto md:rounded-[26px] md:px-0 md:py-4">
-        <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail md:mb-1">
-          <Activity size={18} strokeWidth={2.4} />
-        </div>
-        <button onClick={() => navigate("/buyer")} title="New request" className={`${railIdle} md:mb-3`}>
-          <Plus size={20} />
-        </button>
-
-        {NAV.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === "/"}
-            title={label}
-            aria-label={label}
-            className={({ isActive }) => (isActive ? `${railItem} bg-white/20 text-white` : railIdle)}
-          >
-            <Icon size={18} />
-            {to === "/approvals" && waiting ? (
-              <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-warn ring-2 ring-rail" />
-            ) : null}
-          </NavLink>
-        ))}
-
-        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0 md:mt-auto md:flex-col">
-          <a
-            href="/docs"
-            target="_blank"
-            rel="noreferrer"
-            title="API reference"
-            className={railIdle}
-          >
-            <CircleHelp size={18} />
-          </a>
-          {signedIn ? (
-            <button onClick={() => setToken("")} title="Sign out" className={railIdle}>
-              <LogOut size={18} />
-            </button>
-          ) : null}
-          <div className="grid size-10 shrink-0 place-items-center rounded-full border border-white/25 md:mt-1">
-            <Avatar name="operator" size={28} />
+    <div className="flex min-h-screen flex-col md:flex-row md:gap-4 md:p-4">
+      {/* Desktop rail: 72px of icons that widens to 236px with names on hover or keyboard focus. The column itself
+          widens, so the page beside it moves over and narrows instead of being covered. The short delay on hover
+          keeps a pointer that only passes over the rail from shifting the page. */}
+      <div className="group/rail hidden w-[72px] shrink-0 transition-[width] duration-200 ease-out hover:w-[236px] hover:delay-150 focus-within:w-[236px] motion-reduce:transition-none md:block">
+        <nav
+          aria-label="Main"
+          className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4"
+        >
+          <div className="mb-1 flex h-10 items-center gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
+              <Activity size={18} strokeWidth={2.4} />
+            </span>
+            <RailLabel>
+              <span className="text-[14px] font-semibold text-white">Trusted Trade</span>
+            </RailLabel>
           </div>
-        </div>
-      </nav>
+          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3`}>
+            <Plus size={20} className="shrink-0" />
+            <RailLabel>New request</RailLabel>
+          </button>
 
-      <main className="min-w-0 flex-1 pb-10">
-        <div className="mb-5 flex items-center justify-end gap-2">
+          <div className="flex flex-col gap-1">
+            {NAV.map(({ to, icon: Icon, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) => `${RAIL_ROW} ${isActive ? "bg-white/[0.18] text-white" : RAIL_IDLE}`}
+              >
+                <span className="relative shrink-0">
+                  <Icon size={18} />
+                  {to === "/approvals" && waiting ? (
+                    <span className="absolute -right-1.5 -top-1.5 size-2 rounded-full bg-warn ring-2 ring-rail" />
+                  ) : null}
+                </span>
+                <RailLabel>{label}</RailLabel>
+                {to === "/approvals" && waiting ? (
+                  <RailLabel className="ml-auto rounded-full bg-warn px-1.5 text-[11px] font-semibold text-white">
+                    {waiting}
+                  </RailLabel>
+                ) : null}
+              </NavLink>
+            ))}
+          </div>
+
+          <div className="mt-auto flex flex-col gap-1">
+            <a href="/docs" target="_blank" rel="noreferrer" className={`${RAIL_ROW} ${RAIL_IDLE}`}>
+              <CircleHelp size={18} className="shrink-0" />
+              <RailLabel>API reference</RailLabel>
+            </a>
+            {signedIn ? (
+              <button onClick={() => setToken("")} className={`${RAIL_ROW} ${RAIL_IDLE}`}>
+                <LogOut size={18} className="shrink-0" />
+                <RailLabel>Sign out</RailLabel>
+              </button>
+            ) : null}
+            <div className="mt-1 flex h-10 items-center gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-full border border-white/25">
+                <Avatar name="operator" size={28} />
+              </span>
+              <RailLabel>
+                <span className="text-[13px] text-white">Operator</span>
+              </RailLabel>
+            </div>
+          </div>
+        </nav>
+      </div>
+
+      {/* Phone: one bar with the page name and a menu that lists every destination by name. */}
+      <div className="sticky top-0 z-30 md:hidden">
+        <div className="flex items-center gap-3 bg-rail px-4 py-3 text-white">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white text-rail">
+            <Activity size={16} strokeWidth={2.4} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{head.title}</span>
+          <button
+            onClick={() => navigate("/approvals")}
+            className="relative grid size-10 place-items-center rounded-xl text-white/80 hover:bg-white/10"
+            aria-label={`${waiting} orders waiting`}
+          >
+            <Bell size={18} />
+            {waiting ? (
+              <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[10px] font-semibold text-white">
+                {waiting}
+              </span>
+            ) : null}
+          </button>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            className="grid size-10 place-items-center rounded-xl text-white hover:bg-white/10"
+            aria-expanded={menuOpen}
+            aria-controls="phone-menu"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+          >
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
+        {menuOpen ? (
+          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100vh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,47,109,0.35)]">
+            <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+              <Plus size={18} /> New request
+            </button>
+            {NAV.map(({ to, icon: Icon, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) => `${PHONE_ROW} ${isActive ? "bg-white/[0.18] text-white" : "text-white/80 hover:bg-white/10"}`}
+              >
+                <Icon size={18} />
+                {label}
+                {to === "/approvals" && waiting ? (
+                  <span className="ml-auto rounded-full bg-warn px-2 text-[12px] font-semibold text-white">{waiting}</span>
+                ) : null}
+              </NavLink>
+            ))}
+            <div className="my-2 h-px bg-white/15" />
+            <a href="/docs" target="_blank" rel="noreferrer" className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+              <CircleHelp size={18} /> API reference
+            </a>
+            {signedIn ? (
+              <button onClick={() => setToken("")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+                <LogOut size={18} /> Sign out
+              </button>
+            ) : null}
+          </nav>
+        ) : null}
+      </div>
+
+      <main className="min-w-0 flex-1 px-4 pb-10 pt-4 md:px-0 md:pt-0">
+        <div className="mb-5 hidden items-center justify-end gap-2 md:flex">
           <span className="chip h-9 border border-line bg-surface px-3.5 text-ink-muted">
             <span className={`size-1.5 rounded-full ${health.data ? "bg-positive" : "bg-negative"}`} />
             {health.data ? `${health.data.catalog_rows.toLocaleString("en-GB")} products indexed` : "gateway offline"}
@@ -154,7 +240,7 @@ export default function Shell() {
           <button
             className="relative grid size-9 place-items-center rounded-full border border-line bg-surface text-ink-muted transition-colors hover:border-brand/30 hover:bg-brand-soft hover:text-brand"
             onClick={() => navigate("/approvals")}
-            title={`${waiting} orders waiting`}
+            aria-label={`${waiting} orders waiting`}
           >
             <Bell size={15} />
             {waiting ? (
@@ -163,6 +249,11 @@ export default function Shell() {
               </span>
             ) : null}
           </button>
+          {pathname !== "/connect" ? (
+            <button className="btn-dark h-9 !py-0" onClick={() => navigate("/connect")}>
+              <Plug size={15} /> Connect an agent
+            </button>
+          ) : null}
           <Avatar name="operator" size={36} />
         </div>
 
@@ -215,7 +306,7 @@ export default function Shell() {
                 </span>
                 <div className="min-w-0">
                   <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
-                  <p className="label">The token lives in memory only — a reload asks again.</p>
+                  <p className="label">The token lives in memory only, so a reload asks again.</p>
                 </div>
               </div>
               <label className="flex flex-col gap-1.5">
@@ -238,5 +329,21 @@ export default function Shell() {
         )}
       </main>
     </div>
+  );
+}
+
+// 40px rows: the icon keeps its place on the collapsed rail, the name slides in beside it.
+const RAIL_ROW = "flex h-10 w-full items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
+const RAIL_IDLE = "text-white/60 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
+const PHONE_ROW = "flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] font-medium";
+
+/** Hidden while the rail is collapsed but still in the accessibility tree, so the icon-only rail has names. */
+function RailLabel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span
+      className={`whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100 group-hover/rail:delay-150 group-focus-within/rail:opacity-100 motion-reduce:transition-none ${className}`}
+    >
+      {children}
+    </span>
   );
 }

@@ -12,6 +12,7 @@ import Policy from "./pages/Policy";
 import Agents from "./pages/Agents";
 import Trust from "./pages/Trust";
 import ProductDetail from "./pages/ProductDetail";
+import Connect from "./pages/Connect";
 import { MOCK } from "./api";
 import "./index.css";
 
@@ -37,6 +38,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/policy" element={<Policy />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/trust" element={<Trust />} />
+          <Route path="/connect" element={<Connect />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

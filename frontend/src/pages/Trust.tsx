@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Anchor, BadgeCheck, CircleAlert, Copy, KeyRound, Link2, Plug, ShieldCheck } from "lucide-react";
 import { api, type AuditVerification } from "../api";
 import { Card, Empty, ErrorNote, Spinner, useAsync, when } from "../ui";
@@ -190,14 +191,17 @@ export default function Trust() {
       </Card>
 
       <Card className="flex flex-col gap-4">
-        <div className="flex items-start gap-2">
+        <div className="flex flex-wrap items-start gap-x-2 gap-y-2">
           <Plug size={16} className="mt-0.5 shrink-0" />
-          <div>
+          <div className="min-w-0 flex-1">
             <h3 className="text-[14px] font-semibold">Connect an outside agent</h3>
             <p className="label">
               The same core is open three ways. Each agent uses its own key and is held to its own mandate.
             </p>
           </div>
+          <Link to="/connect" className="text-[13px] font-medium text-brand hover:underline">
+            Set up a client
+          </Link>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-3">
