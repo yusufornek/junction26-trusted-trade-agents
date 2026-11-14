@@ -38,9 +38,11 @@ def create_app(gateway=None, *, settings=None, keys=None):
     async def lifespan(app):
         service = gateway or Gateway(settings)
         app.state.gateway = service
+        service.recurring.start()
         try:
             yield
         finally:
+            service.recurring.close()
             if gateway is None:
                 service.close()
 
@@ -51,8 +53,12 @@ def create_app(gateway=None, *, settings=None, keys=None):
     app.state.keys = keys
     from .buyer import router as buyer_router
     from .evidence import router as evidence_router
+    from .recurring import router as recurring_router
+    from .proposals import router as proposals_router
     app.include_router(buyer_router)
     app.include_router(evidence_router)
+    app.include_router(recurring_router)
+    app.include_router(proposals_router)
     app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
 
     @app.middleware("http")

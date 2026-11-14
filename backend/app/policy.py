@@ -124,7 +124,7 @@ class Policy:
                 after = self._editable(self._load(self.path) if reset else request.policy)
                 if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                     after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
-                for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy"):
+                for section in ("agents", "customers", "organisations", "identities", "rate_limits", "autonomy", "proposal_quotas"):
                     if not reset and section not in request.policy.model_fields_set:
                         after[section] = before[section]
                 from .catalog import Catalog

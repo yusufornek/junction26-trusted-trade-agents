@@ -293,6 +293,10 @@ class Orders:
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
             quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record)
+            # Preserve the exact catalog evidence approved with this signed quote.
+            quote.context["product_evidence"] = {p.id: {
+                "brand": p.brand, "claims": sorted(p.claims), "allergens": p.allergen_status,
+                "allergen_declaration": p.has_allergen_declaration} for p in products.values()}
             quote.correlation_id = CORRELATION.get()
             quote.links = {"request_id": quote.need_ref, "quote_id": quote.id,
                            "trace_id": trace_id(), "event_id": str(uuid4()), "task_id": None}
@@ -365,6 +369,13 @@ class Orders:
             result = self.policy.evaluate_order(conn, quote.total, lines, self._violations(conn, quote),
                                                 agent_id=agent_id, customer_id=quote.customer_id,
                                                 policy=policy, warnings=quote.warnings)
+            # Only the signed, stored quote can carry recurring comparison evidence.
+            drift = (quote.context or {}).get("recurring_drift", [])
+            if drift:
+                from .models import RuleHit
+                result.hits.extend(RuleHit(rule="recurring_drift", detail=d) for d in drift)
+                if result.outcome == "CONFIRMED":
+                    result.outcome = "PENDING_APPROVAL"
             order = Order(mandate=record, id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
                           basket_ref=quote.basket_ref,
                           atomicity=getattr(self.valio, "atomicity", "all-or-none local simulation; no supplier order transmitted") if quote.basket_ref else None,
@@ -572,6 +583,10 @@ class Orders:
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
                                                         agent_id=order.agent_id, customer_id=quote.customer_id,
                                                         warnings=quote.warnings, policy=policy)
+                if (quote.context or {}).get("recurring_drift"):
+                    from .models import RuleHit
+                    evaluation.hits.extend(RuleHit(rule="recurring_drift", detail=d)
+                                           for d in quote.context["recurring_drift"])
                 if evaluation.outcome == "REJECTED":
                     if any(hit.rule == "unregistered_agent" for hit in evaluation.hits):
                         raise DomainError("AGENT_NOT_REGISTERED", "Approval requires a mandate for the placing agent", 403,

@@ -1093,3 +1093,74 @@ placement key are saved before sending; uncertain responses retry the exact same
 and a saved `order_id` resumes polling without placing again. If live stock offers no complete
 split plan, the demo explains that and places no order. The sandbox is isolated per run;
 cross-process restart state applies to an existing live gateway. No new backend setting is required.
+# Recurring orders and supplier proposals (specs 35–36)
+
+`POST /v1/recurring-orders` takes `approved_order_id` (a confirmed order),
+`cadence: {rrule, timezone, start_at, catch_up: "once"}` and
+`permitted_deviations: {price_pct, cumulative_price_pct, quantity_pct,
+cumulative_quantity_pct, brand_change, pack_change}`. Percent tolerances default
+to zero. The template is the original bound need or scaled recipe basket; its
+delivery lead time is retained. The original agent needs policy `recurring: true`
+or a signed mandate credentialSubject `recurring: true`. This permission does not
+relax normal order limits, standing constraints or autonomy rules.
+
+GET the collection and `/{id}/runs`; POST `/{id}/run-now` with an optional aware
+`occurrence_at` for demos. One occurrence key per template/local date is durable
+across retries and restarts. Every run performs a fresh lookup and quote, compares
+against both the previous run and the approved baseline, and enters the normal
+order policy. Drift adds `recurring_drift` rule hits before an order is signed or
+confirmed. Missing historical comparison facts require review. Catalog facts are
+preserved in signed quote context so a later catalog edit cannot rewrite the
+approved baseline. `POST /{id}/baseline {approved_order_id}` requires a scoped
+buyer_admin or buyer_approver and increments the baseline revision.
+
+REST and the MCP CLI run an in-process scheduler. Supported RRULEs use DAILY,
+WEEKLY (optionally BYDAY=MO,TU,...) or MONTHLY (optionally BYMONTHDAY), with an
+optional positive INTERVAL. Times follow the named IANA timezone across DST;
+after downtime only the latest missed occurrence executes, once. Revoked authority
+or suspension produces a skipped run and a `recurring.stopped` domain event.
+
+Buyer_admin uses `GET/PUT /v1/buyer/proposal-preferences` with optional
+`?customer_id=1` for multi-customer buyers. Empty categories/interests mean no
+opt-in. Preferences include `categories`, `interests` (matched against product
+names/claims), `channels: ["inbox", "webhook"]`, `cadence_limit_per_week`, IANA
+`timezone`, `quiet_periods: [{start: "22:00", end: "08:00", weekdays: [0,1,2,3,4]}]`,
+and `muted_campaigns`. Weekdays start at Monday=0; equal start/end means all day.
+Weeks start Monday in the buyer timezone. Policy `proposal_quotas` caps
+`per_supplier_per_week` (UTC weeks) and `per_customer_per_week`; supplier quota
+counts submitted campaigns, including campaigns held by customer filtering.
+
+A credential whose policy identity has `kind: supplier_agent` submits
+`POST /v1/proposals` with `campaign_id`, product IDs, rationale, `valid_until`,
+`target` (exactly one of `categories` or `customer_ids`) and one price evidence
+entry `{product_id, unit_price, currency: "EUR", fetched_at}` per product. An
+unexpired supplier-owned `quote_ref` may replace the price evidence. Rationale is
+untrusted content. Standing constraints and evidence rules filter each product
+before delivery. Quiet periods/cadence/quota holds and excluded products are
+recorded in buyer-scoped audit evidence. Equivalent unexpired campaigns from the
+same supplier merge by product/price/currency fingerprint; repeated campaign IDs
+also merge, with no additional delivery. Supplier responses and
+`GET /v1/proposals/campaigns/{id}` expose only aggregate delivery/action counts.
+
+Buyer agents and scoped buyer users read `GET /v1/proposals/inbox`; MCP offers
+`list_proposals`. POST `/{id}/accept {need, buyer_agent_id?}` re-enters normal
+lookup/quote/order checks, under the buyer agent's mandate, with fresh supplier
+price and stock. Buyer users must name an agent in their own organisation.
+Selection chooses the highest-ranked offered product meeting that need. Expired
+proposals are refused. A changed advertised price returns `REQUOTE_REQUIRED` with
+the new signed quote and old/new unit prices, without an order; a buyer can
+explicitly accept that quote through the standard order endpoint. Accept retries
+return the same order. POST `/{id}/decline` or `/{id}/mute` records the buyer action;
+mute adds the campaign name and equivalent-content fingerprint to buyer consent.
+
+`proposal.received` events are written atomically to the existing durable outbox
+with customer scope and consented channels. The spec 33 webhook service is absent
+from this checkout: its consumer can register through `gateway.outbox.register`
+and must require `"webhook"` in `event.payload.channels` before delivery. No HTTP
+webhook sender or subscription endpoint is claimed here.
+
+Demo: configure the supplier identity and buyer opt-in, then run
+`SUPPLIER_AGENT_KEY=... .venv/bin/python demo/run_sales_agent.py` from `backend/`.
+The default campaign advertises Valio Arki Eila 1 L at EUR 1.01 for customer 1;
+`--product`, `--unit-price`, `--customer` and `--base-url` override it. This sends
+content only; it grants no purchasing authority and creates no order.

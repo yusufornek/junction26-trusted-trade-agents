@@ -463,7 +463,8 @@ class Lookup:
         # A deferred read transaction gives reservations and spend one consistent snapshot.
         # Release it before planning; only persistence needs the SQLite writer lock.
         with self.db.connect() as conn:
-            conn.execute("BEGIN")
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             reservations = {p.id: reserved(conn, p.id) for p in candidates}
             autonomous_total = self.policy.autonomous_total(conn, agent_id)
         offers = [offer_for(p, need, price.get(p.id, {"error": True}), stock.get(p.id, {"error": True}),

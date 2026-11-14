@@ -39,6 +39,9 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "MANDATE_REVOKED": "mandate.revoked"}
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
+EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
+                     RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
+                     PROPOSAL_ACTION="proposal.action")
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
@@ -47,6 +50,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         return
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
+    if kind in {"proposal", "recurring"}:
+        aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
     if kind == "mandate":
@@ -57,6 +62,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
+    if kind in {"proposal", "recurring"}:
+        context = {"customer_id": data["customer_id"]}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}

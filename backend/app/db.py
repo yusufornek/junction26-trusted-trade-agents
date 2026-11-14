@@ -5,6 +5,22 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS recurring_orders (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS recurring_runs (
+ occurrence_key TEXT PRIMARY KEY, recurring_id TEXT NOT NULL, data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS proposal_preferences (customer_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS proposal_campaigns (
+ id TEXT PRIMARY KEY, supplier_id TEXT NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS proposals (
+ id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, customer_id TEXT NOT NULL, data TEXT NOT NULL,
+ UNIQUE(campaign_id,customer_id)
+);
+CREATE TABLE IF NOT EXISTS proposal_filter_log (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id TEXT NOT NULL, customer_id TEXT NOT NULL,
+ reason TEXT NOT NULL, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS buyer_suspensions (agent_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS evidence_snapshots (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, bundle BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_autonomy (
