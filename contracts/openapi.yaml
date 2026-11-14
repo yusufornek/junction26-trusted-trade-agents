@@ -4804,7 +4804,154 @@ paths:
   /v1/orders/{id}:
     get:
       summary: Get Order
+      description: 'Owned order state with durable order_revision, approval_reason,
+        expires_at and next_action. Pending: WAIT_FOR_APPROVAL with poll_after_seconds;
+        confirmed: null; rejected/cancelled: STOP; expired: LOOKUP_REQUIRED. Rejection
+        retains the approver comment. Polling never places another order.'
       operationId: get_order_v1_orders__id__get
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+  /v1/orders/{id}/receipt:
+    get:
+      summary: Get a decided order and its detached signed receipt
+      description: Same owned order resource and spec 10 receipt signature, verifiable
+        with receipt_payload and independently trusted gateway JWKS. Pending orders
+        return 409 NOT_DECIDED with WAIT_FOR_APPROVAL and a polling interval in data.
+        Receipt id is the order id; commitment is gateway-simulated.
+      operationId: get_order_receipt_v1_orders__id__receipt_get
       security:
       - BearerAuth: []
       parameters:
@@ -7369,6 +7516,12 @@ components:
           $ref: '#/components/schemas/CoveredQuantity'
           description: Requested quantity still missing by the deadline; zero for
             a complete plan.
+        shortage:
+          anyOf:
+          - $ref: '#/components/schemas/Shortage'
+          - type: 'null'
+          description: Requested and best eligible single-product on-time quantity;
+            present on split and partial plans.
         warnings:
           items:
             $ref: '#/components/schemas/Warning'
@@ -8236,6 +8389,14 @@ components:
           description: Decision evidence revision; starts at 1 and increases when
             approval refresh changes the facts requiring review.
           default: 1
+        order_revision:
+          type: integer
+          minimum: 1.0
+          title: Order Revision
+          description: Durable order revision; increases on every status or decision-evidence
+            change, including approval, rejection, expiry and cancellation. Polls
+            and idempotent retries do not increase it.
+          default: 1
         policy:
           $ref: '#/components/schemas/PolicyResult'
         live_calls:
@@ -8278,8 +8439,17 @@ components:
             enum:
             - WAIT_FOR_APPROVAL
             - STOP
+            - LOOKUP_REQUIRED
           - type: 'null'
           title: Next Action
+          readOnly: true
+        approval_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Approval Reason
+          description: Summarise the recorded rule hits without inventing evidence
+            of compliance.
           readOnly: true
         poll_after_seconds:
           anyOf:
@@ -8303,6 +8473,7 @@ components:
       - policy
       - live_calls
       - next_action
+      - approval_reason
       - poll_after_seconds
       title: Order
     OrderRequest:
@@ -9194,6 +9365,24 @@ components:
       - rule
       - detail
       title: RuleHit
+    Shortage:
+      properties:
+        requested:
+          $ref: '#/components/schemas/CoveredQuantity'
+        best_single_coverage:
+          $ref: '#/components/schemas/CoveredQuantity'
+        reason:
+          type: string
+          title: Reason
+          description: Plain-language explanation of why this plan combines or partially
+            fulfils the need.
+      additionalProperties: false
+      type: object
+      required:
+      - requested
+      - best_single_coverage
+      - reason
+      title: Shortage
     ShortlistPolicy:
       properties:
         catalog_pool:

@@ -97,7 +97,8 @@ def scenario_gateway(name, *, directory=None):
         root = Path(temporary)
         defaults = yaml.load((BACKEND / "policy.yaml").read_text(), Loader=PolicyLoader)
         defaults["customers"] = scenario.get("customers", {})
-        defaults["agents"]["sandbox-agent"] = {"customer_ids": ["hospital", "recipe"],
+        defaults["approval"].update(scenario.get("approval", {}))
+        defaults["agents"]["sandbox-agent"] = {"customer_ids": list(dict.fromkeys(["hospital", "recipe", *defaults["customers"]])),
             "autonomy": "autonomous_within_limits", "max_auto_daily_total_eur": 100000}
         defaults["organisations"] = {"hospital": {"customer_ids": ["hospital"]}}
         defaults["identities"] = {"hospital-approver": {"kind": "buyer_user", "role": "buyer_approver", "organisation_id": "hospital"}}

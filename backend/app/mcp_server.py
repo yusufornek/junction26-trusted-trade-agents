@@ -164,9 +164,13 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
+    @server.tool(description="Read this agent's current order state, order_revision, evidence_revision, approval_reason (one sentence from recorded rule hits), expires_at and fixed-price lines. Pending: next_action=WAIT_FOR_APPROVAL and poll_after_seconds; confirmed: null; rejected/cancelled: STOP (rejection retains the approver comment); expired: LOOKUP_REQUIRED. Revisions increase on status/evidence changes, never on polls or retries. This does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
         return gateway.orders.get_order(order_id, agent_id)
+
+    @server.tool(description="Get this agent's decided order resource with the spec 10 detached signed receipt. Receipt id is the order id; verify receipt_payload using independently trusted gateway JWKS. Pending orders return 409 NOT_DECIDED with next_action=WAIT_FOR_APPROVAL and data.poll_after_seconds. All terminal statuses retain their distinct outcome, including rejection comment; commitment is gateway-simulated. Other agents' orders return ORDER_NOT_FOUND.")
+    def get_order_receipt(order_id: str) -> Order:
+        return gateway.orders.get_order_receipt(order_id, agent_id)
 
     @server.tool(description="Get this agent's portable transaction evidence manifest and authenticated artifact links, or download the ZIP at bundle_url. Includes signed quote/receipt/checkpoint, hash-only cross-customer audit links, UBL 2.1, historical JWKS, anchor metadata when present, and VERIFY.md. Verify with scripts/verify_evidence.py purchase.zip --trusted-jwks independently-trusted.json; bundled keys are not a trust root. No RPC means anchor_status=not_checked. Supplier acceptance is simulated; no supplier order was sent. Other agents' orders return ORDER_NOT_FOUND.")
     def get_order_evidence(order_id: str) -> EvidenceManifest:

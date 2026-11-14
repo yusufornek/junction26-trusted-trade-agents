@@ -180,6 +180,7 @@ class Orders:
                 order = Order.model_validate_json(row["data"])
                 if order.expires_at <= now:
                     order.status = "EXPIRED"
+                    order.order_revision += 1
                     self._sign_receipt(order, self._quote(conn, order.quote_id), "system")
                     self._save_order(conn, order)
                     conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
@@ -459,6 +460,15 @@ class Orders:
                                trace_ids=list(dict.fromkeys(r["trace_id"] for r in events)))
             return order
 
+    def get_order_receipt(self, order_id, agent_id=None):
+        # Use the same owned order resource as spec 10's offline receipt verifier.
+        order = Orders.get_order(self, order_id, agent_id)
+        if order.status == "PENDING_APPROVAL":
+            raise DomainError("NOT_DECIDED", "The order is waiting for human approval", 409,
+                              data={"order_id": order.id, "order_revision": order.order_revision,
+                                    "poll_after_seconds": order.poll_after_seconds})
+        return order
+
     def get_order_ubl(self, order_id, document="order", agent_id=None):
         from .ubl import export
         self.expire()
@@ -579,6 +589,7 @@ class Orders:
                     raise DomainError("BASKET_STOCK_UNAVAILABLE", "All basket lines must be available before approval", 409)
                 if changes:
                     order.evidence_revision += 1
+            order.order_revision += 1
             if not changes:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
@@ -633,6 +644,7 @@ class Orders:
             if any(c <= audit.utcnow() for c in cutoffs):
                 raise DomainError("CUTOFF_PASSED", "Cancellation cutoff has passed")
             order.status = "CANCELLED"
+            order.order_revision += 1
             order.cancelled_by = inputs.get("stated_name") or (actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor)
             order.cancel_reason = reason
             self._sign_receipt(order, self._quote(conn, order.quote_id),

@@ -108,7 +108,7 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
-Tools: `search_products`, `find_offers`, `find_basket_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`, `get_order_ubl`, `get_order_evidence`.
+Tools: `search_products`, `find_offers`, `find_basket_offers`, `create_quote`, `place_order`, `get_order_status`, `get_order_receipt`, `cancel_order`, `get_order_ubl`, `get_order_evidence`.
 `cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
 reservations, preserves fixed prices, and records the actor and reason without upstream calls.
@@ -1048,3 +1048,48 @@ keys, policy, budgets and reservations. Contexts are labelled `sandbox` and obse
 provenance. They need no network or secrets and never touch `backend/var/`. Each prints a report path under
 `$TMPDIR`. The hospital demo includes buyer approval; the recipe demo decomposes lasagne on the agent side
 and orders for 200. This local scenario harness does not expose the workspace/admin reset API of spec 26.
+
+## Exception journey (spec 30)
+
+`GET /v1/orders/{id}` and MCP `get_order_status` expose a durable `order_revision`,
+`approval_reason` (one sentence from the recorded rule hits), `expires_at` and recovery guidance.
+`PENDING_APPROVAL` means `next_action: WAIT_FOR_APPROVAL` and `poll_after_seconds: 5`;
+poll after that interval using the same order id. `CONFIRMED` has null next action;
+`REJECTED` keeps the approver's comment and means `STOP`; `EXPIRED` means `LOOKUP_REQUIRED`;
+`CANCELLED` means `STOP` and retains the cancellation reason. Each status or decision-evidence
+change increments `order_revision`; polling and idempotent replays leave it unchanged.
+`evidence_revision` still identifies the evidence a human must review (spec 17).
+
+`GET /v1/orders/{id}/receipt` and MCP `get_order_receipt` return the decided order resource,
+including its spec 10 detached signed `receipt`; the receipt id is the order id. Verify it with
+`receipt_payload` and independently trusted gateway JWKS. While pending they return
+`409 NOT_DECIDED`, `next_action: WAIT_FOR_APPROVAL`, and `data.poll_after_seconds`.
+Both enforce the same ownership as order status. The purchase remains `gateway-simulated`.
+Split and partial lookup plans include `shortage {requested, best_single_coverage, reason}`;
+both quantities have `{value, unit}`, measured against eligible on-time whole-pack stock.
+
+From `backend/`, print an offline MCP demo transcript:
+
+```sh
+.venv/bin/python demo/run_exception_journey.py
+```
+
+The `split_stock` scenario has two lactose-free 5 L products, each with 200 L available:
+400 L costs 1,708.00 EUR against a 1,500.00 EUR autonomous per-order limit. A separately
+labelled scripted human-side reviewer approves after the suggested polling interval.
+The client then prints the outcome, signed receipt id and evidence manifest. State and all
+sandbox data use temporary files outside the repository; `backend/var/` is never touched.
+
+Against a running MCP gateway backed by the live mock (an actual human must approve in the inbox):
+
+```sh
+# AGENT_SECRET holds this server's agent credential; optionally add --mandate /path/to/vc.jwt.
+.venv/bin/python demo/run_exception_journey.py --live --customer 1 \
+  --mcp-url http://127.0.0.1:8001/mcp --state "$TMPDIR/exception-live.json"
+```
+
+Keep the state file and rerun the same command after interruption. The quote command and
+placement key are saved before sending; uncertain responses retry the exact same command,
+and a saved `order_id` resumes polling without placing again. If live stock offers no complete
+split plan, the demo explains that and places no order. The sandbox is isolated per run;
+cross-process restart state applies to an existing live gateway. No new backend setting is required.

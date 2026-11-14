@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -256,12 +257,20 @@ class PolicyResult(Model):
     hits: list[RuleHit]
 
 
+class Shortage(Model):
+    requested: CoveredQuantity
+    best_single_coverage: CoveredQuantity
+    reason: str = Field(description="Plain-language explanation of why this plan combines or partially fulfils the need.")
+
+
 class FulfilmentPlan(Model):
     kind: Literal["single", "split", "partial"]
     lines: list[PlanLine] = Field(min_length=1, max_length=4)
     total: float = Field(ge=0, description="Sum of fixed net EUR line totals at lookup time.")
     coverage: CoveredQuantity = Field(description="Sum of line covers in the need's unit; whole packs may over-cover.")
     uncovered: CoveredQuantity = Field(description="Requested quantity still missing by the deadline; zero for a complete plan.")
+    shortage: Shortage | None = Field(default=None, exclude_if=lambda v: v is None,
+                                     description="Requested and best eligible single-product on-time quantity; present on split and partial plans.")
     warnings: list[Warning] = Field(default_factory=list)
     policy_preview: PolicyResult = Field(description="Side-effect-free current policy evaluation for the caller, including mandate and daily limits. Stock and policy may change before placement; the order result is authoritative.")
 
@@ -470,6 +479,7 @@ class Order(Model):
     lines: list[OfferCard]
     warnings: list[Warning] = Field(default_factory=list, description="Order-level risks retained from the quoted fulfilment plan.")
     evidence_revision: int = Field(default=1, ge=1, description="Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.")
+    order_revision: int = Field(default=1, ge=1, description="Durable order revision; increases on every status or decision-evidence change, including approval, rejection, expiry and cancellation. Polls and idempotent retries do not increase it.")
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
@@ -480,10 +490,21 @@ class Order(Model):
 
     @computed_field
     @property
-    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP"] | None:
+    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP", "LOOKUP_REQUIRED"] | None:
         if self.status == "PENDING_APPROVAL":
             return "WAIT_FOR_APPROVAL"
-        return "STOP" if self.status in {"REJECTED", "EXPIRED", "CANCELLED"} else None
+        if self.status == "EXPIRED":
+            return "LOOKUP_REQUIRED"
+        return "STOP" if self.status in {"REJECTED", "CANCELLED"} else None
+
+    @computed_field
+    @property
+    def approval_reason(self) -> str | None:
+        """Summarise the recorded rule hits without inventing evidence of compliance."""
+        details = list(dict.fromkeys(
+            re.sub(r"[.!?]\s+", "; ", " ".join(hit.detail.split()).rstrip(".!?")).replace(" < ", " is below ")
+            for hit in self.policy.hits if hit.detail.strip()))
+        return "; ".join(details) + "." if details else None
 
     @computed_field
     @property
@@ -494,7 +515,7 @@ class Order(Model):
     @classmethod
     def stored_guidance(cls, value):
         if isinstance(value, dict):
-            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds"}}
+            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds", "approval_reason"}}
         return value
 
 

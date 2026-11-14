@@ -38,7 +38,7 @@ def test_ac_1_all_domain_codes_have_explicit_mapping():
                     # Dynamic calls may only delegate an existing error/ownership code.
                     assert isinstance(code, (ast.Name, ast.Attribute))
     assert codes <= RECOVERY.keys(), codes - RECOVERY.keys()
-    assert set(RECOVERY.values()) <= {(False, action) for action in ("FIX_REQUEST", "STOP", "CONTACT_ADMIN", "REFRESH_QUOTE", "REVIEW_UPDATED_EVIDENCE", "LOOKUP_REQUIRED")} | {(True, "RETRY_SAME_COMMAND")}
+    assert set(RECOVERY.values()) <= {(False, action) for action in ("FIX_REQUEST", "STOP", "CONTACT_ADMIN", "REFRESH_QUOTE", "REVIEW_UPDATED_EVIDENCE", "LOOKUP_REQUIRED", "WAIT_FOR_APPROVAL")} | {(True, "RETRY_SAME_COMMAND")}
 
 
 def test_ac_2_expired_quote_problem_matches_mcp(gateway, need, upstream):

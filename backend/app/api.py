@@ -269,9 +269,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def orders(request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.list_orders(agent_id=principal.owner)
 
-    @app.get("/v1/orders/{id}", response_model=Order)
+    @app.get("/v1/orders/{id}", response_model=Order,
+             description="Owned order state with durable order_revision, approval_reason, expires_at and next_action. Pending: WAIT_FOR_APPROVAL with poll_after_seconds; confirmed: null; rejected/cancelled: STOP; expired: LOOKUP_REQUIRED. Rejection retains the approver comment. Polling never places another order.")
     def get_order(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_order(id, principal.owner)
+
+    @app.get("/v1/orders/{id}/receipt", response_model=Order,
+             summary="Get a decided order and its detached signed receipt",
+             description="Same owned order resource and spec 10 receipt signature, verifiable with receipt_payload and independently trusted gateway JWKS. Pending orders return 409 NOT_DECIDED with WAIT_FOR_APPROVAL and a polling interval in data. Receipt id is the order id; commitment is gateway-simulated.")
+    def get_order_receipt(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).orders.get_order_receipt(id, principal.owner)
 
     @app.get("/v1/orders/{id}/ubl", response_class=Response,
              summary="Export UBL 2.1 Order or OrderResponse; agent owns order, operator sees all",

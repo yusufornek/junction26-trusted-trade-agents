@@ -1,8 +1,9 @@
 """Bounded fulfilment proposals using already-priced offers, without upstream calls or writes."""
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
-from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Warning
+from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Shortage, Warning
 from .quantities import pack_quantity, sales_step
+from .canonical import decimal_string
 
 
 def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
@@ -24,6 +25,7 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                              else o.units_needed * o.availability.coverage)) / step).to_integral_value(rounding=ROUND_FLOOR))
               for o, step in zip(eligible, steps)]
     prices = [Decimal(str(o.unit_price)) * step for o, step in zip(eligible, steps)]
+    best_single = min(target, max((size * limit for size, limit in zip(sizes, limits)), default=Decimal(0)))
 
     def needed_lots(i, requested):
         return int(pack_quantity(eligible[i].size_per_sales_unit, requested=requested, step=steps[i]) / steps[i])
@@ -61,6 +63,14 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                               for i, units in allocation],
             total=total, coverage=CoveredQuantity(value=float(coverage), unit=need.quantity.unit),
             uncovered=CoveredQuantity(value=float(uncovered), unit=need.quantity.unit),
+            shortage=Shortage(
+                requested=CoveredQuantity(value=float(target), unit=need.quantity.unit),
+                best_single_coverage=CoveredQuantity(value=float(best_single), unit=need.quantity.unit),
+                reason=(f"No single eligible product covers the requested {decimal_string(target)} {need.quantity.unit} by {need.deliver_by}; "
+                        f"the best single product covers {decimal_string(best_single)} {need.quantity.unit}." if best_single < target else
+                        f"This plan combines the selected products; the best eligible single product covers "
+                        f"{decimal_string(best_single)} of the requested {decimal_string(target)} {need.quantity.unit}."),
+            ) if kind in {"split", "partial"} else None,
             warnings=warnings, policy_preview=preview)
 
     singles = []

@@ -40,7 +40,7 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")
-        for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl"):
+        for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl", "get_order_receipt"):
             install(self, self.orders, name, "read")
         install(self, self, "find_offers", "lookup")
         install(self, self.baskets, "find_basket_offers", "lookup")
