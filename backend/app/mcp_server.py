@@ -106,7 +106,8 @@ class GatewayMCPServer(MCPServer):
 
     async def call_tool(self, name, arguments, context=None):
         from .agent_surface import call_tool
-        return await call_tool(self, name, arguments, context)
+        from .connection_contract_surface import mcp_boundary
+        return await mcp_boundary(self, name, arguments, context, call_tool)
 
     async def _call_tool(self, name, arguments, context=None):
         from .runtime import TRANSPORT, CLOCK, ENVIRONMENT

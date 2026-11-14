@@ -161,6 +161,10 @@ class Gateway:
         return audit.read(self.db, order_id, quote_id)
 
     def close(self):
+        if hasattr(self, "connection_contract_driving"):
+            for sandbox in self.connection_contract_driving.sandboxes.values():
+                sandbox.close()
+            self.connection_contract_driving.sandboxes.clear()
         self.webhooks.client.close()
         self.recurring.close()
         self.anchoring.close()

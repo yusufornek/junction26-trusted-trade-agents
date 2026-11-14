@@ -51,7 +51,7 @@ def quote_integrity(quote):
     if "links" in evidence:
         # Original link identifiers stay signed; read-time forward navigation is mutable.
         evidence["links"] = {k: v for k, v in evidence["links"].items()
-                             if k not in {"quote_ids", "order_ids", "event_ids", "audit_checkpoints", "trace_ids", "task_ids"}}
+                             if k not in {"quote_ids", "order_ids", "event_ids", "audit_checkpoints", "trace_ids", "task_ids", "connection_contract"}}
     return immutable(evidence)
 
 

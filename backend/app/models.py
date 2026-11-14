@@ -479,6 +479,7 @@ class BasketPlan(Model):
 
 
 class BasketLookupResult(Model):
+    connection_contract: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Effective governance policy used for this basket lookup.")
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     basket_lookup_id: str
@@ -776,10 +777,10 @@ class ErrorResponse(Model):
     status: int
     detail: str
     instance: str
-    recovery_version: Literal[1] = 1
+    recovery_version: Literal[1, 2] = 1
     retryable: bool
     next_action: Literal["RETRY_SAME_COMMAND", "REFRESH_QUOTE", "LOOKUP_REQUIRED", "WAIT_FOR_APPROVAL",
-                         "REVIEW_UPDATED_EVIDENCE", "FIX_REQUEST", "CONTACT_ADMIN", "STOP"]
+                         "REVIEW_UPDATED_EVIDENCE", "FIX_REQUEST", "CONTACT_ADMIN", "STOP", "REFRESH_CONTRACT"]
     retry_after_seconds: int | None = None
     resource_ref: str | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str
@@ -877,6 +878,7 @@ ClientKind = Literal["claude_desktop", "claude_code", "cursor", "vscode", "chatg
 
 
 class ConnectionRequest(Model):
+    contract_version: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Version from /v1/connect/trading-profile acknowledged by this client.")
     agent_id: InputText = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
     client: ClientKind = "rest"
     customer_ids: InputTexts = Field(min_length=1)

@@ -4,6 +4,7 @@ from pydantic import Field
 
 
 class AgentContext(Model):
+    connection_contract: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     guardrail_profile: dict | None = Field(default=None, exclude_if=lambda v: v is None,
         description="This tenant's business profile and initial guardrail values with per-field preset source; absent on legacy demo tenants.")
     fixture_clock: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -71,7 +72,14 @@ def agent_context(service, principal, mandate=None):
     operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "get_order_evidence", "cancel_order"]
     if row and customers:
         operations += ["find_offers", "create_quote", "place_order"]
+    from .connection_contract_driving import driving
+    connection_contract = driving(service).status(principal)
+    if principal.connection_id and "order" not in connection_contract["enabled_operations"]:
+        operations = [op for op in operations if op != "place_order"]
+    if principal.connection_id and "quote" not in connection_contract["enabled_operations"]:
+        operations = [op for op in operations if op != "create_quote"]
     return AgentContext(guardrail_profile=guardrail_profile, fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+        connection_contract=connection_contract,
         principal=principal.public(), customer_ids=customers, mandate=summary,
         effective_limits={"per_order_eur": per_order, "rolling_24h_eur": daily},
         remaining_budget={"currency": "EUR", "window": "rolling_24h", "spent": spent, "remaining": max(0, daily - spent)},
