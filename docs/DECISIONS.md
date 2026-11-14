@@ -227,3 +227,44 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   acceptance criterion; the full suite runs once before a push. Further scenarios come from an Astra sector research
   round and an Astra unexpected-situations round, mapped to capabilities by Fable.
 - Why: scenario-specific code does not generalise to what judges try; heavy test fan-out was slowing delivery.
+
+## 2026-11-14 — Build order follows the brief; good-better-best tiers (spec 59)
+- Decision: after re-ranking every feature against the brief, the Codex queue runs one job at a time in this order:
+  full-suite fixes on the live branch, REST pause/resume for recurring orders, audit narrative (57), good-better-best
+  tiers (59, new), constraint engine (49), commitment ceiling (50), document reconciliation (52), then 48, 51, 53–56, 58.
+- Why: the brief's insights ask for a human-readable audit trail and good-better-best substitution ranking; these score
+  directly, while the other capability specs are beyond the brief.
+
+## 2026-11-14 — Focus: agent connection (specs 60, 61)
+- Decision: the product is an AI gateway, not a dashboard. Agent connection comes first: full MCP feature set (tool
+  parity with annotations and output schemas, resources with subscriptions, prompts, elicitation), rich A2A and MCP
+  cards, one-click client setup, connection health (60), and notifications to connected agents and their humans with
+  consent at connect time over MCP, A2A push and webhooks (61). Queue: full-suite fixes → REST recurring pause → 60 → 61
+  → 57 → 59 → 49 → 50 → 52 → rest.
+- Why: the organisers framed the challenge as the interface agents use; the gateway's value is what a connected agent
+  can do and be told, not console screens.
+
+## 2026-11-14 — Connection-layer capabilities (specs 62–64) and build order
+- Decision: from Astra's round 2 (25 bad situations, 15 sparks at the agent connection layer) mapped by Fable: new specs
+  62 connection trust lifecycle, 63 connection contract and driving test, 64 handoff and delegated authority; additions
+  to 55 (human presence, question binding), 56 (human attention budget), 60 (signed cards, issuer on results, private
+  discovery) and 61 (destination safety, consent binding, signed audience, storm control, stale events, ownership).
+  Build order: 60 → 63 → 61 → 62 → 47 → 64 → 57 → 59 → 55 → 56 → 49 → 50 → 52 → 48 → 51 → 53 → 54 → 58.
+- Tool names stay unprefixed (live ChatGPT and Claude connectors cache tool lists); results carry `_meta.issuer`.
+- 62 R-5 changes spec 42: an existing agent no longer keeps earned autonomy on a new connection until its owner confirms
+  continuity; seeded demo agents are confirmed.
+- Why: the organisers frame the product as an AI gateway; the strongest demo line is connect → driving test → order →
+  approval notification → MCP-to-A2A handoff → pause closes the stream → offline evidence verification.
+
+## 2026-11-14 23:16 — Only AI-gateway and MCP work for now
+- Decision: the queue builds only the agent-connection specs: 60 (agent surface), 63 (contract and driving test),
+  61 (notifications), 62 (connection trust lifecycle), 47 (intents, already built; merged as the base for 64) and 64
+  (handoff and delegation). Specs 48–59 stay written and on hold.
+- Why: Gökalp's focus — the product is the AI gateway; everything else waits.
+
+## 2026-11-15 00:35 — Specs 48–59 removed
+- Decision: specs 48–59 (untrusted input, constraint engine, commitment ceiling, resource ledger, document
+  reconciliation, neutral ranking/RFQ, supplier fact integrity, decision authority, agent conduct guard, audit narrative,
+  make-or-buy, good-better-best) are deleted from docs/specs; the build covers the AI-gateway specs 60–64 and 47.
+  References to them in 60–64 were rewritten to built specs.
+- Why: Gökalp — keep the context clean and judge everything against what we actually build.
