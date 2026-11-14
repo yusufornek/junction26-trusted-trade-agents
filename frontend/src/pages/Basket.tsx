@@ -1,22 +1,42 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Plus, X } from "lucide-react";
-import { api, type Order, type Quantity, type Quote, type RuleHit, type Warning } from "../api";
-import { getBasket, priceBasket, quoteBasket, type BasketLookup, type Ingredient } from "../basket";
+import { api, type OfferCard, type Order, type Quantity, type Quote, type RuleHit, type Warning } from "../api";
+import { getBasket, priceBasket, quoteBasket, type BasketLookup, type Ingredient, type LateLine, type TradeOff } from "../basket";
 import { Card, Countdown, ErrorNote, Spinner, StatusChip, WarningChips, dateOnly, eur, num, pct, ruleLabel } from "../ui";
 
 // The console signs in as the operator of this one customer, as on the single-product page.
 const CUSTOMER = "1";
 
 // Search words are set for the example because the catalog names its products differently ("potato", not "Potatoes").
+// `function` is what the chef's agent says each ingredient does; the gateway offers alternatives only within it.
+// The cream names the kitchen's usual product (464223), which on live data misses its cut-off, so the example shows a
+// substitute with its trade-off. Potatoes and butter are partly and fully in stock.
 const EXAMPLE: Ingredient[] = [
-  { name: "Salmon fillet", search_terms: ["salmon", "fillet"], quantity: { value: 1.5, unit: "KG" } },
-  { name: "Potatoes", search_terms: ["potato"], quantity: { value: 2, unit: "KG" } },
-  { name: "Cooking cream", search_terms: ["cooking", "cream"], quantity: { value: 0.5, unit: "L" } },
-  { name: "Butter", search_terms: ["butter"], quantity: { value: 100, unit: "G" } },
+  { name: "Salmon fillet", search_terms: ["salmon", "fillet"], quantity: { value: 1.5, unit: "KG" },
+    function: { product_type: "salmon fillet", intended_use: "soup", acceptable_units: ["KG"] } },
+  { name: "Potatoes", search_terms: ["potato"], quantity: { value: 2, unit: "KG" }, on_hand: { value: 6, unit: "KG" },
+    function: { product_type: "potato", intended_use: "soup", acceptable_units: ["KG"] } },
+  { name: "Cooking cream", search_terms: ["cooking", "cream"], quantity: { value: 0.5, unit: "L" },
+    function: { product_type: "cooking cream", intended_use: "soup", acceptable_units: ["L"] },
+    substitute_for: { product_id: "464223" }, substitutions_allowed: true },
+  { name: "Butter", search_terms: ["butter"], quantity: { value: 100, unit: "G" }, on_hand: { value: 2000, unit: "G" } },
   { name: "Leek", search_terms: ["leek"], quantity: { value: 300, unit: "G" } },
   { name: "Dill", search_terms: ["dill"], quantity: { value: 50, unit: "G" } },
 ];
+
+// Same GS1 names as the product page, for the allergens a substitute adds or drops.
+const ALLERGENS: Record<string, string> = {
+  AC: "crustaceans", AE: "eggs", AF: "fish", AM: "milk", AN: "tree nuts", AP: "peanuts", AS: "sesame",
+  AU: "sulphites", AW: "cereals with gluten", AY: "soy", BC: "celery", BM: "mustard", ML: "lactose", NL: "lupin",
+  UM: "molluscs",
+};
+// shortcut: only the sales units seen in the basket data; others show lower-cased.
+const SALES_UNITS: Record<string, string> = { ST: "piece", KI: "case", BAG: "bag", KG: "kg", L: "litre" };
+const LATE_REASONS: Record<string, string> = {
+  "cut-off missed; next supplier date unknown": "the order cut-off has passed",
+  "insufficient stock by deadline": "not enough stock by that date",
+};
 
 const OUTCOME: Record<string, { label: string; style: string }> = {
   CONFIRMED: { label: "Agent may confirm alone", style: "bg-positive-soft text-positive" },
@@ -35,13 +55,17 @@ const unit = (u: string | null) => (u ?? "").toLowerCase();
 const qty = (q: Quantity) => `${num(q.value, 2)} ${unit(q.unit)}`;
 // Several lines can carry the same warning; one chip per kind is enough (and WarningChips keys by code).
 const distinct = (warnings: Warning[] = []) => [...new Map(warnings.map((w) => [w.code, w])).values()];
+const lateText = (late: LateLine) =>
+  late.earliest_possible_date ? `earliest ${dateOnly(late.earliest_possible_date)}` : "no date the supplier can confirm";
 
 export default function Basket() {
   const [recipe, setRecipe] = useState("Salmon soup");
   const [writtenFor, setWrittenFor] = useState(10);
   const [portions, setPortions] = useState(80);
-  const [deliverBy, setDeliverBy] = useState(() => inDays(4));
+  // Two days out: on live data nothing arrives tomorrow, so the day after shows on-time lines beside a late one.
+  const [deliverBy, setDeliverBy] = useState(() => inDays(2));
   const [rows, setRows] = useState<Ingredient[]>(EXAMPLE);
+  const [focus, setFocus] = useState("Salmon fillet");
   const [basket, setBasket] = useState<BasketLookup | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
@@ -51,8 +75,12 @@ export default function Basket() {
   // The quote and the order render below the basket; without this a phone shows no sign that the button worked.
   const quoteRef = useRef<HTMLDivElement>(null);
   const orderRef = useRef<HTMLDivElement>(null);
-  useEffect(() => quoteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), [quote]);
-  useEffect(() => orderRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), [order]);
+  useEffect(() => {
+    quoteRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [quote]);
+  useEffect(() => {
+    orderRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [order]);
 
   const guard = async (stage: string, fn: () => Promise<void>) => {
     setBusy(stage);
@@ -77,6 +105,8 @@ export default function Basket() {
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const usable = rows.filter((r) => r.name.trim() && r.quantity.value > 0);
   const ready = recipe.trim() && writtenFor > 0 && portions > 0 && deliverBy && usable.length > 0;
+  // A renamed or removed ingredient drops out of the choice instead of being sent stale.
+  const focusName = usable.some((r) => r.name.trim() === focus) ? focus : "";
 
   const price = () =>
     guard("price", async () => {
@@ -90,7 +120,13 @@ export default function Basket() {
           version: 1,
           recipe_name: recipe.trim(),
           servings: writtenFor,
-          ingredients: usable.map((r) => ({ ...r, name: r.name.trim() })),
+          focus_ingredient: focusName || null,
+          // Stock is entered in the ingredient's own unit.
+          ingredients: usable.map((r) => ({
+            ...r,
+            name: r.name.trim(),
+            on_hand: r.on_hand?.value ? { value: r.on_hand.value, unit: r.quantity.unit } : null,
+          })),
         },
       });
       setBasket(priced);
@@ -107,6 +143,10 @@ export default function Basket() {
 
   const plan = basket?.basket;
   const names = new Map((plan?.lines ?? []).map((l) => [l.product_id, l.name]));
+  // Every candidate the gateway weighed, for naming in-time alternatives and the product a substitute replaces.
+  const offers = new Map((basket?.ingredients ?? []).flatMap((i) => i.offers).map((o) => [o.product_id, o]));
+  const focused = basket?.scaled_manifest.focus_ingredient?.toLowerCase();
+  const fromStock = (plan?.coverage_by_ingredient ?? []).filter((c) => !c.product_id && c.to_buy?.value === 0);
   const outcome = OUTCOME[plan?.policy_preview.outcome ?? ""] ?? OUTCOME.PENDING_APPROVAL;
   const calls = basket ? basket.live_calls.price + basket.live_calls.availability : 0;
 
@@ -141,7 +181,10 @@ export default function Basket() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="label">Ingredients{writtenFor > 0 ? ` for ${num(writtenFor)} portions` : ""}</span>
+          <span className="label">
+            Ingredients{writtenFor > 0 ? ` for ${num(writtenFor)} portions` : ""}. "Already have" is what the kitchen
+            holds in total, not per portion; the gateway buys only the rest.
+          </span>
           {rows.map((r, i) => (
             // On a phone the name takes the first row; amount, unit and remove share the second.
             <div key={i} className="flex flex-wrap items-center gap-2">
@@ -150,8 +193,11 @@ export default function Basket() {
                 aria-label={`Ingredient ${i + 1}`}
                 placeholder="Ingredient"
                 value={r.name}
-                // The example's search words describe the example's ingredient, so they go when the name changes.
-                onChange={(e) => setRow(i, { name: e.target.value, search_terms: null })}
+                // The example's search words, function and usual product describe the example's ingredient, so they go
+                // when the name changes.
+                onChange={(e) =>
+                  setRow(i, { name: e.target.value, search_terms: null, function: null, substitute_for: null, substitutions_allowed: false })
+                }
               />
               <input
                 className="field w-24"
@@ -174,6 +220,18 @@ export default function Basket() {
                   </option>
                 ))}
               </select>
+              <label className="flex items-center gap-1.5">
+                <span className="label">Already have</span>
+                <input
+                  className="field w-20"
+                  type="number"
+                  min={0}
+                  step="any"
+                  aria-label={`Amount of ${r.name || "ingredient " + (i + 1)} already in the kitchen, in ${unit(r.quantity.unit)}`}
+                  value={r.on_hand?.value || ""}
+                  onChange={(e) => setRow(i, { on_hand: { value: Number(e.target.value), unit: r.quantity.unit } })}
+                />
+              </label>
               <button
                 className="btn-ghost !px-2.5"
                 aria-label={`Remove ${r.name || "ingredient " + (i + 1)}`}
@@ -190,6 +248,21 @@ export default function Basket() {
             <Plus size={14} /> Add ingredient
           </button>
         </div>
+
+        <label className="flex flex-col gap-1.5 sm:max-w-sm">
+          <span className="label">The menu is built around</span>
+          <select className="field" value={focusName} onChange={(e) => setFocus(e.target.value)}>
+            <option value="">No particular ingredient</option>
+            {usable.map((r, i) => (
+              <option key={i} value={r.name.trim()}>
+                {r.name.trim()}
+              </option>
+            ))}
+          </select>
+          <span className="text-[12px] text-ink-muted">
+            The gateway covers it first and never swaps it for another product without your approval.
+          </span>
+        </label>
 
         <div className="flex flex-wrap items-center gap-3">
           <button className="btn-dark" onClick={price} disabled={busy === "price" || !ready}>
@@ -218,12 +291,26 @@ export default function Basket() {
             <div className="num text-[24px] font-semibold">{eur(plan.total)}</div>
           </div>
 
+          {fromStock.length ? (
+            <ul className="flex flex-col gap-0.5 rounded-[var(--radius-tile)] bg-positive-soft p-3 text-[13px] text-positive">
+              {fromStock.map((c) => (
+                <li key={c.ingredient_index}>
+                  <strong>{c.name}: nothing to buy.</strong> Needs {c.needed ? qty(c.needed) : qty(c.requested)}
+                  {c.on_hand ? `, ${qty(c.on_hand)} already in the kitchen` : ""}.
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
           <ul className="flex flex-col gap-2">
             {plan.lines.map((l) => {
               // Ingredients met by the same product share one line, so the pack rounding happens once.
               const uses = plan.coverage_by_ingredient.filter((c) => c.product_id === l.product_id);
               const short = uses.find((c) => c.covered < 1);
               const packs = l.units_needed ?? 0;
+              const stocked = uses.filter((c) => c.on_hand?.value && c.needed && c.to_buy);
+              const isFocus = uses.some((c) => c.name.toLowerCase() === focused);
+              const usual = l.substitution ? offers.get(l.substitution.for) : undefined;
               return (
                 <li key={l.product_id} className="flex flex-col gap-2 rounded-[var(--radius-tile)] bg-page p-3 text-[13px]">
                   <div className="flex items-start justify-between gap-3">
@@ -245,6 +332,32 @@ export default function Basket() {
                     {l.overbuy && l.overbuy.amount > 0 ? ` · ${qty({ value: l.overbuy.amount, unit: l.overbuy.unit })} more than the recipe needs` : ""}
                     {short ? <span className="text-warn"> · only {pct(short.covered)} can arrive in time</span> : null}
                   </div>
+                  {stocked.map((c) => (
+                    <div key={c.ingredient_index} className="text-[12px] text-ink-muted">
+                      {c.name}: needs {qty(c.needed!)}, {qty(c.on_hand!)} already in the kitchen, buys {qty(c.to_buy!)}
+                    </div>
+                  ))}
+                  {isFocus ? (
+                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-muted">
+                      <span className="chip bg-brand-soft text-brand">The menu is built around this</span>
+                      Never swapped for another product without your approval.
+                    </div>
+                  ) : null}
+                  {l.arrives_in_time === false && l.cannot_source_in_time ? (
+                    <Late late={l.cannot_source_in_time} offers={offers} />
+                  ) : null}
+                  {l.substitution ? (
+                    <div className="flex flex-col gap-1.5 rounded-[var(--radius-tile)] border border-line p-2.5 text-[12px]">
+                      <div>
+                        <strong>Replaces your usual {usual?.name ?? `product ${l.substitution.for}`}</strong>
+                        {usual?.arrives_in_time === false && usual.cannot_source_in_time
+                          ? `, which arrives too late: ${lateText(usual.cannot_source_in_time)}`
+                          : ""}
+                        . A substitute always needs a person's approval.
+                      </div>
+                      {l.trade_off ? <TradeOffView t={l.trade_off} /> : null}
+                    </div>
+                  ) : null}
                   <WarningChips warnings={l.warnings} />
                 </li>
               );
@@ -359,6 +472,74 @@ export default function Basket() {
           </p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** A line that cannot arrive by the date, with the products that can and what each would change. */
+function Late({ late, offers }: { late: LateLine; offers: Map<string, OfferCard> }) {
+  const reason = LATE_REASONS[late.reason] ?? late.reason;
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--radius-tile)] bg-warn-soft p-2.5 text-[12px] text-warn">
+      <div>
+        <strong>Arrives too late: {lateText(late)}</strong>
+        {reason ? ` (${reason})` : ""}.
+      </div>
+      {late.in_time_alternatives.length ? (
+        late.in_time_alternatives.map((a) => (
+          <div key={a.product_id} className="flex flex-col gap-1 rounded-[var(--radius-tile)] bg-page p-2.5 text-ink">
+            <div>
+              <span className="font-medium">Arrives in time instead: </span>
+              <Link to={`/products/${a.product_id}`} className="hover:underline">
+                {offers.get(a.product_id)?.name ?? `product ${a.product_id}`}
+              </Link>
+              <span className="text-ink-muted"> · needs your approval</span>
+            </div>
+            <TradeOffView t={a.trade_off} />
+          </div>
+        ))
+      ) : (
+        <div>No other product that does the same job can arrive in time.</div>
+      )}
+    </div>
+  );
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const allergens = (codes: string[]) => codes.map((c) => ALLERGENS[c] ?? c).join(", ");
+const claims = (codes: string[]) => codes.map((c) => ruleLabel(c).toLowerCase()).join(", ");
+const salesUnit = (u: string) => SALES_UNITS[u] ?? u.toLowerCase();
+
+/** A substitute's trade-off in one short paragraph: price, pack, allergens and claims, delivery, then the gateway's reason. */
+function TradeOffView({ t }: { t: TradeOff }) {
+  const d = t.price_difference_per_required_quantity;
+  const { pack_change: pack, unit_change: units, delivery_date_difference: date } = t;
+  const parts = [
+    d == null
+      ? "price difference unknown"
+      : Math.abs(d) < 0.005
+        ? `same price for ${qty(t.required_quantity)}`
+        : `${eur(Math.abs(d), t.currency)} ${d > 0 ? "more" : "less"} for ${qty(t.required_quantity)}`,
+    pack.from != null && pack.to != null && pack.from !== pack.to
+      ? `pack ${num(pack.from, 2)} ${unit(t.required_quantity.unit)} → ${num(pack.to, 2)} ${unit(t.required_quantity.unit)}`
+      : "",
+    units.from && units.to && units.from !== units.to ? `sold per ${salesUnit(units.to)}, not per ${salesUnit(units.from)}` : "",
+    t.allergen_differences.added.length ? `also contains ${allergens(t.allergen_differences.added)}` : "",
+    t.allergen_differences.removed.length ? `no longer contains ${allergens(t.allergen_differences.removed)}` : "",
+    t.claim_differences.added.length ? `adds ${claims(t.claim_differences.added)}` : "",
+    t.claim_differences.removed.length ? `drops ${claims(t.claim_differences.removed)}` : "",
+    date.days == null
+      ? date.to
+        ? `arrives ${dateOnly(date.to)}`
+        : "delivery date unknown"
+      : date.days === 0
+        ? "same delivery day"
+        : `arrives ${Math.abs(date.days)} day${Math.abs(date.days) === 1 ? "" : "s"} ${date.days > 0 ? "later" : "earlier"}`,
+  ].filter(Boolean);
+  return (
+    <div className="flex flex-col gap-0.5 text-[12px]">
+      <div>{cap(parts.join(" · "))}</div>
+      <div className="text-ink-muted">{t.explanation}</div>
     </div>
   );
 }

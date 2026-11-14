@@ -126,8 +126,8 @@ export default function Signup() {
           </p>
         ))}
         <p className="text-[13px] text-ink-muted">
-          Signing in to this console with that e-mail comes in the next version. Until then the Valio team sees the new organisation
-          on its Team page.
+          Sign in with that e-mail and password to manage approvals, limits and the team. The Valio team also sees the new
+          organisation on its Team page.
         </p>
         <Link to="/" className="btn-ghost self-start">
           Back to sign-in

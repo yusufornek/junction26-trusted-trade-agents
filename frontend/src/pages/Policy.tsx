@@ -15,14 +15,49 @@ const doc = (p: PolicyResource): PolicyDocument => ({
 
 const pretty = (code: string) => code.replaceAll("_", " ").toLowerCase();
 
+// Spec 46 R-6 fields; api.ts does not type them yet, and older fixtures omit them.
+type Nutrient = "max_salt_g" | "max_sugar_g" | "max_saturated_fat_g" | "min_protein_g";
+type Customer = NonNullable<PolicyResource["customers"]>[string] &
+  Partial<Record<Nutrient, number | null>> & {
+    clinical_review?: string | null;
+    substitution_profile?: {
+      allowed_brands?: string[] | null;
+      max_price_increase_pct: number;
+      pack_size_range?: { min?: number | null; max?: number | null };
+      requires_approval: boolean;
+    } | null;
+  };
+// Customers are sent only once a limit is edited: the section is replaced as a whole on save.
+type Draft = PolicyDocument & { customers?: Record<string, Customer> };
+
+const NUTRIENTS: [Nutrient, string][] = [
+  ["max_salt_g", "salt"],
+  ["max_sugar_g", "sugar"],
+  ["max_saturated_fat_g", "saturated fat"],
+  ["min_protein_g", "protein"],
+];
+
+const substitutionWords = (s: NonNullable<Customer["substitution_profile"]>) => {
+  const pack = s.pack_size_range;
+  return [
+    `at most ${s.max_price_increase_pct}% dearer`,
+    pack?.min != null || pack?.max != null ? `pack size ${pack.min ?? "any"} to ${pack.max ?? "any"}` : null,
+    s.allowed_brands?.length ? `only ${s.allowed_brands.join(", ")}` : null,
+    s.requires_approval ? "always signed off by a person" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+};
+
 export default function Policy() {
   const { data, error, loading, reload } = useAsync(() => api.policy(), []);
-  const [draft, setDraft] = useState<PolicyDocument | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [author, setAuthor] = useState(() => signedInEmail() || "Ada");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
+  const [newCustomer, setNewCustomer] = useState("");
 
   useEffect(() => {
     if (data) setDraft(doc(data));
@@ -31,7 +66,9 @@ export default function Policy() {
   if (error) return <ErrorNote error={error} />;
   if (loading || !data || !draft) return <Spinner />;
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(doc(data));
+  const customers = (data.customers ?? {}) as Record<string, Customer>;
+  const dirty =
+    JSON.stringify(draft) !== JSON.stringify(draft.customers ? { ...doc(data), customers } : doc(data));
   const codes = data.known_warning_codes;
   const ignored = draft.approval.ignored_warnings ?? [];
 
@@ -57,6 +94,20 @@ export default function Policy() {
 
   const setAgent = (id: string, patch: Partial<AgentMandate>) =>
     setDraft({ ...draft, agents: { ...draft.agents, [id]: { ...draft.agents![id], ...patch } } });
+
+  // Customers in the draft that the saved policy does not list yet (added below) get a card too.
+  const customerIds = [...new Set([...Object.keys(customers), ...Object.keys(draft.customers ?? {})])];
+  const addCustomer = () => {
+    const id = newCustomer.trim();
+    if (!id || customerIds.includes(id)) return;
+    const all = draft.customers ?? customers;
+    setDraft({ ...draft, customers: { ...all, [id]: { required_claims: [], exclude_allergens: [], note: "" } as unknown as Customer } });
+    setNewCustomer("");
+  };
+  const setLimit = (id: string, key: Nutrient, value: string) => {
+    const all = draft.customers ?? customers;
+    setDraft({ ...draft, customers: { ...all, [id]: { ...all[id], [key]: value === "" ? null : Number(value) } } });
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -316,34 +367,83 @@ export default function Policy() {
             <div>
               <h3 className="text-[14px] font-semibold">Standing customer constraints</h3>
               <p className="label">
-                Applied to every request for that customer, even when the agent forgets to ask. Edited in policy.yaml.
+                Applied to every request for that customer, even when the agent forgets to ask. Nutrient limits are
+                set here, claims and allergens in policy.yaml.
               </p>
             </div>
           </div>
-          {!data.customers || !Object.keys(data.customers).length ? (
+          {!customerIds.length ? (
             <Empty>No standing constraints — each request carries its own.</Empty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
-              {Object.entries(data.customers).map(([id, c]) => (
-                <div key={id} className="flex flex-col gap-2 rounded-[var(--radius-tile)] border border-line p-4">
-                  <div className="text-[14px] font-medium">Customer {id}</div>
-                  {c.note ? <div className="text-[12px] text-ink-muted">{c.note}</div> : null}
-                  <div className="flex flex-wrap gap-1.5">
-                    {(c.required_claims ?? []).map((x) => (
-                      <span key={x} className="chip bg-positive-soft text-positive">
-                        must be {pretty(x)}
-                      </span>
-                    ))}
-                    {(c.exclude_allergens ?? []).map((x) => (
-                      <span key={x} className="chip bg-negative-soft text-negative">
-                        excludes {x}
-                      </span>
-                    ))}
+              {customerIds.map((id) => {
+                const c = draft.customers?.[id] ?? customers[id];
+                return (
+                  <div key={id} className="flex flex-col gap-2 rounded-[var(--radius-tile)] border border-line p-4">
+                    <div className="text-[14px] font-medium">Customer {id}</div>
+                    {c.note ? <div className="text-[12px] text-ink-muted">{c.note}</div> : null}
+                    <div className="flex flex-wrap gap-1.5">
+                      {(c.required_claims ?? []).map((x) => (
+                        <span key={x} className="chip bg-positive-soft text-positive">
+                          must be {pretty(x)}
+                        </span>
+                      ))}
+                      {(c.exclude_allergens ?? []).map((x) => (
+                        <span key={x} className="chip bg-negative-soft text-negative">
+                          excludes {x}
+                        </span>
+                      ))}
+                      {c.clinical_review === "required" ? (
+                        <span className="chip bg-warn-soft text-warn">clinical review before approval</span>
+                      ) : null}
+                    </div>
+                    {c.substitution_profile ? (
+                      <p className="text-[12px] text-ink-muted">Substitutes: {substitutionWords(c.substitution_profile)}.</p>
+                    ) : null}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="label">Nutrient limits per 100 g or 100 ml (empty means no limit)</span>
+                      {NUTRIENTS.map(([key, name]) => (
+                        <label key={key} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+                          {key.startsWith("min_") ? "At least" : "At most"}
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            inputMode="decimal"
+                            className="field w-20"
+                            placeholder="none"
+                            value={c[key] ?? ""}
+                            onChange={(e) => setLimit(id, key, e.target.value)}
+                          />
+                          g {name} per 100 g
+                        </label>
+                      ))}
+                      {NUTRIENTS.some(([key]) => c[key] != null) ? (
+                        <p className="text-[12px] text-ink-muted">
+                          Products without nutrition facts are left out for this customer: missing data is not proof.
+                        </p>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+          <form
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              addCustomer();
+            }}
+          >
+            <label className="flex flex-col gap-1.5">
+              <span className="label">Add limits for another customer number</span>
+              <input className="field w-40" value={newCustomer} onChange={(e) => setNewCustomer(e.target.value)} placeholder="e.g. 2" />
+            </label>
+            <button className="btn-ghost" disabled={!newCustomer.trim() || customerIds.includes(newCustomer.trim())}>
+              Add customer
+            </button>
+          </form>
         </Card>
       </div>
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
   Bell,
+  Radar,
   Gauge,
   GitPullRequestArrow,
   Users,
@@ -34,9 +35,9 @@ const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
 /** What each role can open: organisation people get 403 on the operator's stats, policy and connection endpoints, so
  *  those pages are not offered to them. Valio staff and the operator token see everything. */
 const ROLE_PAGES: Record<string, string[]> = {
-  tenant_admin: ["/approvals", "/orders", "/repeat", "/governance", "/changes", "/team", "/audit", "/trust"],
-  approver: ["/approvals", "/orders", "/repeat", "/governance", "/audit", "/trust"],
-  viewer: ["/orders", "/repeat", "/audit", "/trust"],
+  tenant_admin: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/changes", "/team", "/audit", "/trust"],
+  approver: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/audit", "/trust"],
+  viewer: ["/orders", "/repeat", "/watch", "/audit", "/trust"],
   member: ["/orders", "/repeat", "/audit", "/trust"],
 };
 
@@ -45,6 +46,7 @@ const NAV = [
   { to: "/buyer", icon: Search, label: "Buyer flow" },
   { to: "/basket", icon: ChefHat, label: "Recipe basket" },
   { to: "/repeat", icon: Repeat, label: "Repeat buying" },
+  { to: "/watch", icon: Radar, label: "Supply watch" },
   { to: "/approvals", icon: Inbox, label: "Approvals" },
   { to: "/orders", icon: Package, label: "Orders" },
   { to: "/audit", icon: ScrollText, label: "Audit trail" },
@@ -64,6 +66,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
   "/signup": { title: "Create an organisation account", sub: "Tell us what kind of kitchen you run. The gateway sets safe starting limits from it." },
   "/consent": { title: "Connect an assistant", sub: "An assistant asks to buy through this gateway. You decide as which agent, and for which customers." },
+  "/watch": { title: "Supply watch", sub: "What will run out before it is due, what to use instead, and new products worth a look." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },

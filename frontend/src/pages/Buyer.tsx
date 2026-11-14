@@ -584,15 +584,37 @@ function LookupSummary({ lookup }: { lookup: LookupResult }) {
   );
 }
 
+const NUTRIENT_WORDS: Record<string, string> = {
+  max_salt_g: "at most {} g salt",
+  max_sugar_g: "at most {} g sugar",
+  max_saturated_fat_g: "at most {} g saturated fat",
+  min_protein_g: "at least {} g protein",
+};
+const NO_FACTS = "missing nutrition data";
+
 /** Where each hard constraint came from — the request, or a standing rule in the customer's policy. */
 function Constraints({ lookup }: { lookup: LookupResult }) {
+  // Spec 46 R-6 fields, not in api.ts yet: nutrient limits always come from the customer's standing policy.
+  const extra = lookup as LookupResult & {
+    effective_constraints?: { nutrient_limits?: Record<string, number> };
+    excluded_products?: { product_id: string; reasons: string[] }[];
+  };
   const ec = lookup.effective_constraints;
   const items = [
     ...(ec?.required_claims ?? []).map((c) => ({ ...c, kind: "required" })),
     ...(ec?.exclude_allergens ?? []).map((c) => ({ ...c, kind: "excluded" })),
   ];
-  if (!items.length) return null;
+  const limits = Object.entries(extra.effective_constraints?.nutrient_limits ?? {});
+  if (!items.length && !limits.length) return null;
   const removed = lookup.exclusion_counts ?? {};
+  // Gateway keys read "nutrient_limits.<rule> (customer_policy; <reason>)"; one key per distinct reason.
+  const ruleCounts = (rule: string, missing: boolean) =>
+    Object.entries(removed)
+      .filter(([k]) => k.startsWith(`nutrient_limits.${rule} `) && k.includes(NO_FACTS) === missing)
+      .reduce((sum, [, n]) => sum + n, 0);
+  const noFacts =
+    extra.excluded_products?.filter((p) => p.reasons.some((r) => r.includes(NO_FACTS))).length ||
+    Math.max(0, ...limits.map(([rule]) => ruleCounts(rule, true)));
   return (
     <Card className="flex flex-wrap items-center gap-2 !py-3">
       <span className="label mr-1">Hard constraints applied</span>
@@ -607,6 +629,22 @@ function Constraints({ lookup }: { lookup: LookupResult }) {
           {c.source === "customer_policy" ? <span className="opacity-60">· standing</span> : null}
         </span>
       ))}
+      {limits.map(([rule, limit]) => {
+        const over = ruleCounts(rule, false);
+        return (
+          <span key={rule} className="chip bg-brand text-white" title="Standing nutrient limit from the customer's policy">
+            {(NUTRIENT_WORDS[rule] ?? `${ruleLabel(rule)} {}`).replace("{}", String(limit))} per 100 g
+            {over ? <span className="opacity-60">−{num(over)}</span> : null}
+            <span className="opacity-60">· standing</span>
+          </span>
+        );
+      })}
+      {noFacts ? (
+        <span className="basis-full text-[12px] text-ink-muted">
+          {num(noFacts)} {noFacts === 1 ? "product was" : "products were"} left out because the catalog has no nutrition
+          facts to check the limit against.
+        </span>
+      ) : null}
     </Card>
   );
 }

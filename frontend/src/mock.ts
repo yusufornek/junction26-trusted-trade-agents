@@ -26,6 +26,7 @@ import { mockBasket } from "./basket";
 import { mockGovernance } from "./governance";
 import { mockChanges } from "./changes";
 import { mockTeam } from "./team";
+import { mockWatch } from "./watch";
 
 const NOW = Date.now();
 const ago = (min: number) => new Date(NOW - min * 60000).toISOString();
@@ -690,7 +691,7 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     return order ? all.filter((e) => e.order_id === order) : all;
   }
   // Pages added later keep their fixtures beside their own API module.
-  for (const handle of [mockRepeat, mockBasket, mockGovernance, mockChanges, mockTeam]) {
+  for (const handle of [mockRepeat, mockBasket, mockGovernance, mockChanges, mockTeam, mockWatch]) {
     const result = handle(method, p, body);
     if (result !== undefined) return result;
   }
