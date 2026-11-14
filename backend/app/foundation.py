@@ -81,6 +81,13 @@ EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGES
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
 EVENT_ACTIONS.update(UPSTREAM_RATE_LIMITED="platform.upstream_rate_limited", AUDIT_ANCHORED="platform.audit_anchored", SUPPLIER_HEALTH="platform.supplier_health")
 EVENT_ACTIONS.update(TENANT_PROFILE_CREATED="tenant.profile_created", TENANT_PROFILE_UPDATED="tenant.profile_updated")
+EVENT_ACTIONS.update(GOVERNANCE_ALERT="governance.alert", POLICY_CHANGED="governance.policy_changed",
+    AGENT_CREATED="governance.agent_registered",
+    GUARDRAILS_CHANGED="governance.guardrails_changed", POLICY_CHANGE_REQUESTED="governance.change_requested",
+    POLICY_REQUEST_DECIDED="governance.request_decided", POLICY_ROLLED_BACK="governance.rolled_back",
+    GOVERNANCE_AGENT_PAUSED="governance.agent_paused", GOVERNANCE_AGENT_RESUMED="governance.agent_resumed",
+    GOVERNANCE_TENANT_PAUSED="governance.tenant_paused", GOVERNANCE_TENANT_RESUMED="governance.tenant_resumed",
+    AGENT_TRANSFERRED="governance.agent_transferred")
 EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
@@ -108,6 +115,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         return
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
+    if kind == "governance":
+        aggregate_id = data.get("alert_id") or data.get("agent_id") or data.get("tenant_id")
     if kind == "mandate":
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":

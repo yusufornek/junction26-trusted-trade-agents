@@ -14,7 +14,25 @@ from datetime import timedelta
 
 
 @pytest.fixture
-def buyer_setup(gateway):
+def buyer_setup(gateway, monkeypatch):
+    # Align synthetic registrations before first use. Withdrawing customer scope
+    # must not migrate an established agent or its history to another tenant.
+    original_update = gateway.policy.update
+    def update(request, *args, **kwargs):
+        result = original_update(request, *args, **kwargs)
+        with gateway.db.connect(write=True) as conn:
+            for aid, mandate in result.agents.items():
+                tenants = {r[0] for customer in mandate.customer_ids for r in conn.execute(
+                    "SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer,))}
+                used = conn.execute("SELECT 1 FROM lookups WHERE json_extract(data,'$.agent_id')=? "
+                    "UNION ALL SELECT 1 FROM quotes WHERE json_extract(data,'$.agent_id')=? "
+                    "UNION ALL SELECT 1 FROM orders WHERE json_extract(data,'$.agent_id')=? LIMIT 1",
+                    (aid, aid, aid)).fetchone()
+                if len(tenants) == 1 and not used:
+                    tid = next(iter(tenants))
+                    conn.execute("UPDATE tenant_agents SET tenant_id=?,owner_user_id=(SELECT id FROM users WHERE tenant_id=? AND role='tenant_admin' ORDER BY created_at,id LIMIT 1) WHERE agent_id=?", (tid, tid, aid))
+        return result
+    monkeypatch.setattr(gateway.policy, "update", update)
     body = gateway.policy._editable(gateway.policy.get())
     body["organisations"] = {"H": {"customer_ids": ["1"]}, "B": {"customer_ids": ["2"]}}
     body["identities"] = {

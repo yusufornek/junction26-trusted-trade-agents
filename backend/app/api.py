@@ -90,6 +90,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
             http = server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
             setattr(app.state, "mcp_"+audience+"_server", server)
             setattr(app.state, "mcp_"+audience+"_http", http)
+            if audience == "tenant":
+                app.state.tenant_mcp_server = server
+                app.state.tenant_mcp_http = http
             audience_apps.append(http)
         worker = asyncio.create_task(deliver_notifications())
         service.recurring.start()
@@ -109,7 +112,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                   description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. supplier_id defaults to valio (gateway-simulated); nordfood is synthetic and supplier-acknowledged after submit. Sandbox deployments use isolated credentials, storage and fixture time; every response carries X-Environment.",
 
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
-                             for code in (401, 403, 404, 409, 410, 422, 429, 500, 502, 503)})
+                             for code in (401, 403, 404, 409, 410, 422, 423, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
     from .oauth import install as install_oauth
@@ -122,6 +125,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.include_router(connect_router)
     from .tenant_api import router as tenant_router, install_aliases
     app.include_router(tenant_router)
+    from .governance_api import router as governance_router
+    app.include_router(governance_router)
     from .connections import router as connections_router
     app.include_router(connections_router)
     from .webhooks import router as webhook_router
@@ -161,6 +166,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         principal_token = PRINCIPAL.set(None)
         try:
             public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
+                "/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
             response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
             if public:
@@ -290,7 +296,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                      principal: Principal = Depends(resolve_principal)):
         return svc(request).autonomy.track_record(agent_id, principal, window_days)
 
-    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult | DecisionPreview,
+    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult | DecisionPreview | dict,
               description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key binds this target and payload, rechecks current target scope, and replays the first result without changing authority again; changed target or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows the enclosing command commit. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
                         principal: Principal = Depends(resolve_principal),
@@ -298,6 +304,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         service = svc(request)
         with service.db.connect() as conn:
             service.autonomy._target(conn, agent_id, principal, change=True)
+        if principal.kind == "tenant_user":
+            from .governance_api import invoke
+            return invoke(service, principal, "change_policy", {"agent_id": agent_id, "policy": {"autonomy_level": body.level}, "reason": body.reason}, body.confirmation_token)
         return confirm_rest(service, principal, "autonomy", agent_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
             lambda: service.autonomy.change(agent_id, body, principal, command_key=idempotency_key), force="/operator/" in request.url.path)
 

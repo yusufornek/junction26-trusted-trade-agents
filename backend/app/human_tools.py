@@ -52,8 +52,15 @@ class ConnectionRotation(ConnectionTarget):
     overlap_hours: float = 0
 
 
+class GovernanceCommand(Empty):
+    operation: str
+    arguments: dict = Field(default_factory=dict)
+    confirmation_token: str | None = None
+
+
 # name -> (input model, resource, permission, description, operator only)
 TOOLS = {
+    "agent_governance": (GovernanceCommand, "governance", "read", "Tenant agent governance: register, effective policy, versions, simulate, change requests, pause, ownership, alerts and signed reports. Mutations require single-use human confirmation.", False),
     "list_orders": (Empty, "orders", "read", "Read orders visible to the consenting human; tenant scoped or all tenants for Valio staff.", False),
     "get_order_evidence": (OrderTarget, "evidence", "read", "Read an order's signed evidence, quote and receipt.", False),
     "list_approvals": (Empty, "approvals", "read", "Read the pending approval inbox with order and quote evidence.", False),
@@ -61,13 +68,13 @@ TOOLS = {
     "reject_order": (Decision, "approvals", "write", "Reject for the consenting human after multi round-trip confirmation; records the human user id.", False),
     "cancel_order": (Decision, "orders", "write", "Cancel for the consenting human after confirmation, subject to the same REST cut-off and tenant checks.", False),
     "get_spend": (Empty, "spend", "read", "Read spending against the tenant's budgets.", False),
-    "list_agents": (Empty, "agents", "read", "List agents of the tenant (tenant administrator only).", False),
-    "list_connections": (Empty, "connections", "read", "List tenant connections without secrets (administrator only).", False),
-    "create_agent": (AgentCreate, "agents", "write", "Create an agent in the consenting administrator's tenant; new agents start with approval.", False),
-    "update_agent": (AgentUpdate, "agents", "write", "Rename, disable or re-enable an agent of the tenant (administrator only).", False),
-    "create_connection": (ConnectionRequest, "connections", "write", "Create a connection for this tenant; key returned once, store privately (administrator only).", False),
-    "rotate_connection": (ConnectionRotation, "connections", "write", "Rotate a connection key with at most 24 hours overlap (administrator only).", False),
-    "revoke_connection": (ConnectionTarget, "connections", "write", "Revoke a tenant connection immediately (administrator only).", False),
+    "list_agents": (Empty, "agents", "read", "List owned agents; tenant administrators see every agent of their tenant.", False),
+    "list_connections": (Empty, "connections", "read", "List visible tenant connections without secrets; members manage their own agents.", False),
+    "create_agent": (AgentCreate, "agents", "write", "Create an agent owned by the consenting member or administrator; new agents start with approval.", False),
+    "update_agent": (AgentUpdate, "agents", "write", "Rename, disable or re-enable an owned agent; administrators manage every agent of their tenant.", False),
+    "create_connection": (ConnectionRequest, "connections", "write", "Create a connection for an owned agent, or any tenant agent as administrator; key returned once, store privately.", False),
+    "rotate_connection": (ConnectionRotation, "connections", "write", "Rotate a visible connection key with at most 24 hours overlap.", False),
+    "revoke_connection": (ConnectionTarget, "connections", "write", "Revoke a visible tenant connection immediately.", False),
     "get_suggestions": (Empty, "suggestions", "read", "Read tenant purchase-memory replenishment suggestions.", False),
     "get_policy": (Empty, "policy", "read", "Read tenant guardrails or platform policy for Valio staff.", False),
     "set_policy": (PolicyChange, "policy", "write", "Change policy for the consenting administrator, after confirmation. Tenant changes can only tighten platform ceilings.", False),
@@ -81,7 +88,7 @@ TOOLS = {
 
 
 def available(audience):
-    tenant_only = {"list_agents", "create_agent", "update_agent", "get_spend", "get_suggestions"}
+    tenant_only = {"agent_governance", "list_agents", "create_agent", "update_agent", "get_spend", "get_suggestions"}
     return {name: spec for name, spec in TOOLS.items() if
             (audience == "operator" and name not in tenant_only) or (audience == "tenant" and not spec[4])}
 
@@ -102,6 +109,9 @@ def execute(service, p, audience, name, arguments):
     check_scope(p, resource, permission, action)
     service.limiter.consume(p.id, "read" if permission == "read" else "mutation")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gateway=service)), url=SimpleNamespace(path="/v1/"+audience+"/"+resource))
+    if name == "agent_governance":
+        from .governance_api import invoke
+        return invoke(service, p, body.operation, body.arguments, body.confirmation_token)
     if name == "list_orders":
         return service.orders.list_orders()
     if name == "get_order_evidence":
@@ -183,6 +193,9 @@ def execute(service, p, audience, name, arguments):
 
 def register_tools(server, audience):
     for name, (model, _, _, description, _) in available(audience).items():
+        if name == "agent_governance":
+            # The tenant adapter registers its typed MCP confirmation handler.
+            continue
         # Register concrete annotated callables so SDK schemas are the source of
         # truth. Inputs are flattened just like the buyer tools.
         namespace = {"invoke": lambda args, n=name: execute(server.gateway, PRINCIPAL.get(), audience, n, args),

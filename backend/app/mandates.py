@@ -86,6 +86,10 @@ class Mandates:
         check_suspension(self.db, agent_id)
 
         policy = policy or self.policy.get()
+        if hasattr(self.policy, "governance"):
+            if p is None or p.kind == "agent":
+                self.policy.governance.check_active(agent_id, conn)
+            policy = self.policy.governance.project(agent_id, customer_id, policy, conn=conn)
         self.policy.check_supplier(agent_id, supplier_id, policy)
         if bound:
             original = self.stored(conn, *bound)
@@ -198,8 +202,30 @@ class Mandates:
         from .buyer import check_suspension
         check_suspension(self.db, agent_id)
 
+        def governance_search(conn, permitted=None, customer_id=None):
+            if not hasattr(self.policy, "governance"):
+                return catalog.search(query, required_claims, exclude_allergens, limit, categories=permitted)[0]
+            g = self.policy.governance
+            effective = g.check_operation(conn, agent_id, "lookup", customer_id)
+            values = g.values(effective)
+            products = catalog.search(query, sorted(set(required_claims or []) | set(values["required_claims"])),
+                sorted(set(exclude_allergens or []) | set(values["excluded_allergens"])), limit,
+                categories=g.categories(effective, permitted))[0]
+            g.snapshot(conn, effective)
+            return products
+
         if token is None:
-            return catalog.search(query, required_claims, exclude_allergens, limit)[0]
+            try:
+                with self.db.connect(write=True) as conn:
+                    products = governance_search(conn)
+                    audit.append(conn, f"agent:{agent_id}", "LOOKUP_SEARCH", "Searched the local catalog under effective governance.",
+                        data={"products": [p.id for p in products], "live_calls": {"price": 0, "availability": 0}})
+                    return products
+            except DomainError as error:
+                with self.db.connect(write=True) as conn:
+                    audit.append(conn, f"agent:{agent_id}", "LOOKUP_SEARCH_FAILED", error.message,
+                        data={"error": error.code, **error.data, "live_calls": {"price": 0, "availability": 0}})
+                raise
         actor = f"agent:{agent_id}"
         try:
             claims = decode(token)[1]
@@ -210,7 +236,7 @@ class Mandates:
             with self.db.connect(write=True) as conn:
                 _, record, _ = self.authorize(conn, token, agent_id, customer_id, supplier_id=supplier_id)
                 categories = claims["vc"]["credentialSubject"].get("categories")
-                products = catalog.search(query, required_claims, exclude_allergens, limit, categories=categories)[0]
+                products = governance_search(conn, categories, customer_id)
                 self.verify(conn, token, agent_id, customer_id, products=[p.id for p in products], supplier_id=supplier_id)
                 self.used(conn, token)
                 audit.append(conn, actor, "LOOKUP_SEARCH", "Searched the local catalog under buyer authority.",

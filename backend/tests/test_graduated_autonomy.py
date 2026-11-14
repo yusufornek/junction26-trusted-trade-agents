@@ -190,6 +190,7 @@ def test_ac_3_window_record_counts_outcomes_changes_and_approval_time(gateway, n
 
 def test_ac_4_readiness_requires_every_threshold_and_cooldown(gateway, need, upstream, monkeypatch):
     approval_first(gateway)
+    assert gateway.governance.resolve(AGENT).fields["autonomy_level"].value == "approval_required"
     clock = [audit.utcnow()]
     monkeypatch.setattr(audit, "utcnow", lambda: clock[0])
     update(gateway, autonomy={"default": "approval_required", "promotion": {

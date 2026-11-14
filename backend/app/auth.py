@@ -136,6 +136,14 @@ def admit_credential(service, keys, source, secret):
     if not known:
         check_source(service, source)
     principal = resolve_credential(keys, secret, service)
+    if principal.kind == "agent" and hasattr(service, "governance"):
+        try:
+            service.governance.check_active(principal.agent_id)
+        except DomainError as error:
+            service.governance.note_refusal(principal.agent_id, error)
+            raise
+        if principal.connection_id:
+            service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
     if not known:
         service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
@@ -165,6 +173,8 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
         require_audience(principal, audience, "/tool-pack/"+audience)
     else:
         service.accounts.guard(principal, request.url.path, request.method)
+    if principal.kind == "agent":
+        service.governance.check_active(principal.agent_id)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)

@@ -37,7 +37,12 @@ from .signing import unb64
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
                     "platform.upstream_rate_limited", "platform.audit_anchored", "platform.supplier_health",
-                    "tenant.profile_created", "tenant.profile_updated"]
+                    "tenant.profile_created", "tenant.profile_updated",
+                    "governance.alert", "governance.policy_changed", "governance.guardrails_changed",
+                    "governance.agent_registered",
+                    "governance.change_requested", "governance.request_decided", "governance.rolled_back",
+                    "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
+                    "governance.tenant_resumed", "governance.agent_transferred"]
 EVENT_TYPES = set(EventType.__args__)
 
 
@@ -116,6 +121,7 @@ class Webhooks:
     def __init__(self, gateway):
         self.gateway, self.db = gateway, gateway.db
         self.lock = threading.Lock()
+        self.dispatch_state = threading.local()
         self.client = httpx.Client(timeout=5, follow_redirects=False, trust_env=False)
         self.resolver = socket.getaddrinfo
         self.jitter = random.random
@@ -217,6 +223,8 @@ class Webhooks:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Subscription customers exceed principal scope", 403)
         if audience == "approver":
             require_reviewer(principal)
+        if audience == "tenant" and not (principal.kind == "tenant_user" and principal.role == "tenant_admin"):
+            raise DomainError("TENANT_ADMIN_REQUIRED", "Tenant webhooks require a tenant administrator", 403)
 
     def _get(self, subscription_id, principal, conn):
         row = conn.execute("SELECT * FROM webhook_subscriptions WHERE id=?", (subscription_id,)).fetchone()
@@ -319,9 +327,13 @@ class Webhooks:
     def dispatch(self, limit=100):
         from .foundation import PRINCIPAL
         token = PRINCIPAL.set(None)
-        if not self.lock.acquire(blocking=False):
+        # Commit callbacks may reenter on this thread; concurrent commits must
+        # wait for a fresh sweep rather than leave their new events behind.
+        if getattr(self.dispatch_state, "active", False):
             PRINCIPAL.reset(token)
             return
+        self.lock.acquire()
+        self.dispatch_state.active = True
         try:
             # Publish changes in observed supplier reachability without adding
             # probes or polling the supplier. Only interested operator consumers
@@ -361,19 +373,27 @@ class Webhooks:
                 matches = (sub["audience"] == "operator" or event["customer_id"] in sub["customer_ids"]) and self.event_type(event) in sub["event_types"]
                 if sub.get("task_id"):
                     matches = event["customer_id"] in sub["customer_ids"] and self.gateway.a2a.event_matches(event, sub["task_id"])
+                connection_valid = True
                 if sub.get("connection_id"):
                     with self.db.connect() as conn:
                         connection = conn.execute("SELECT revoked_at,expires_at FROM connections WHERE connection_id=?", (sub["connection_id"],)).fetchone()
-                    matches = matches and connection is not None and not connection[0] and (not connection[1] or connection[1] > audit.utcnow().isoformat())
+                    connection_valid = connection is not None and not connection[0] and (not connection[1] or connection[1] > audit.utcnow().isoformat())
+                    matches = matches and connection_valid
                 if sub["audience"] in {"tenant", "operator"}:
                     try:
-                        user = self.gateway.accounts.user(sub["user_id"], active=True)
+                        user = self.gateway.accounts.user(sub.get("user_id") or sub["owner"], active=True)
                         if sub["audience"] == "operator":
                             matches = matches and user["role"] == "platform_admin"
                         else:
-                            matches = matches and not (self.event_type(event) or "").startswith("platform.") and event["tenant_id"] == user["tenant_id"] == sub["tenant_id"]
+                            # Tenant governance events can have no customer_id.
+                            matches = connection_valid and bool(
+                                user["role"] == "tenant_admin" and user["tenant_id"] == sub["tenant_id"] == event["tenant_id"]
+                                and self.event_type(event) in sub["event_types"]
+                                and not (self.event_type(event) or "").startswith("platform."))
                     except DomainError:
                         matches = False
+                elif (self.event_type(event) or "").startswith("governance."):
+                    matches = False
                 elif not sub.get("operator"):
                     policy = self.gateway.policy.get()
                     identity = policy.identities.get(sub["owner"])
@@ -414,6 +434,7 @@ class Webhooks:
                     conn.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt_at=? WHERE event_id=? AND consumer=?",
                                  (status, (audit.utcnow() + timedelta(seconds=delay)).isoformat(), row["event_id"], row["consumer"]))
         finally:
+            self.dispatch_state.active = False
             self.lock.release()
             PRINCIPAL.reset(token)
 

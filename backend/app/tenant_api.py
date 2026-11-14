@@ -55,6 +55,7 @@ def _confirm_rest(service, p, operation, target, payload, token, apply, *, force
                 from .guardrail_profiles import authorize_approval, require_constraints
                 authorize_approval(conn, p, order)
                 require_constraints(conn, order.customer_id)
+                service.governance.authorize_approval(conn, order, p)
         revision = order.evidence_revision if order else None
         if token is None:
             secret = token_urlsafe(32)
@@ -94,33 +95,32 @@ class AgentChange(BaseModel):
 
 
 def target_agent(service, agent_id, p):
-    service.accounts.manage(p)
     with service.db.connect() as conn:
-        row = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (agent_id,)).fetchone()
-    if not row or not p.operator and row["tenant_id"] != p.tenant_id:
-        raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
-    return row
+        return service.governance.target(conn, agent_id, p)
 
 
 @router.get("/v1/tenant/agents", response_model=list[dict])
-def agents(request: Request, p: Principal = Depends(resolve_principal)):
-    a = accounts(request)
-    a.manage(p)
-    with a.db.connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM tenant_agents WHERE tenant_id=? ORDER BY agent_id", (p.tenant_id,))]
+def agents(request: Request, owner_user_id: str | None = None, status: str | None = None, p: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.governance.register(p, owner_user_id, status)
 
 
 @router.post("/v1/tenant/agents", status_code=201, response_model=dict)
 def create_agent(body: AgentCreate, request: Request, p: Principal = Depends(resolve_principal)):
     a = accounts(request)
-    a.manage(p)
+    request.app.state.gateway.governance.member(p)
     with a.db.connect(write=True) as conn:
         if conn.execute("SELECT 1 FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone():
             raise DomainError("AGENT_EXISTS", "Agent identifier is already registered", 409)
-        conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, p.tenant_id, body.name))
-        from .guardrail_profiles import register_owner
-        register_owner(conn, body.agent_id, p.tenant_id, p.user_id)
-        audit.append(conn, p.user_id or p.id, "AGENT_CREATED", "Created a tenant agent.", data={"agent_id": body.agent_id, "tenant_id": p.tenant_id})
+        conn.execute("INSERT INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)", (body.agent_id, p.tenant_id, body.name))
+        request.app.state.gateway.governance.own_new_agent(conn, body.agent_id, p.tenant_id, p)
+        governance = request.app.state.gateway.governance
+        created = governance.target(conn, body.agent_id, p)
+        before = governance.layer(conn, "agent", body.agent_id, request.app.state.gateway.policy.get(tenant_overlay=False), created)
+        governance._write_version(conn, "agent", body.agent_id, p.tenant_id, before,
+            {**before["data"], "autonomy_level": "approval_required"}, p, "New agents start with human approval",
+            agent_id=body.agent_id, emit_audit=False)
+        owner = conn.execute("SELECT owner_user_id FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone()[0]
+        audit.append(conn, p.user_id or p.id, "AGENT_CREATED", "Created a tenant agent.", data={"agent_id": body.agent_id, "tenant_id": p.tenant_id, "owner_user_id": owner, "status": "active"})
     return {"agent_id": body.agent_id, "tenant_id": p.tenant_id, "name": body.name, "autonomy": "approval_required"}
 
 
@@ -269,8 +269,13 @@ def set_policy(body: Overlay, request: Request, p: Principal = Depends(resolve_p
     payload = body.model_dump(exclude={"confirmation_token"})
     def apply():
         with service.db.connect(write=True) as conn:
+            before = service.governance.layer(conn, "tenant", p.tenant_id, service.policy.get(tenant_overlay=False))
             conn.execute("INSERT INTO tenant_policy_overlays(id,data,tenant_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (p.tenant_id, json.dumps(payload), p.tenant_id))
-            audit.append(conn, p.user_id or p.id, "TENANT_POLICY_UPDATED", "Updated tenant policy overlay.", data={"tenant_id": p.tenant_id, "changes": payload})
+            proposed = dict(before["data"])
+            for key, field in (("max_auto_total_eur", "per_order_ceiling_eur"), ("max_auto_daily_total_eur", "daily_budget_eur")):
+                proposed[field] = body.approval.get(key)
+            version = service.governance._write_version(conn, "tenant", p.tenant_id, p.tenant_id, before, proposed, p, "Tenant policy overlay update", emit_audit=False)
+            audit.append(conn, p.user_id or p.id, "TENANT_POLICY_UPDATED", "Updated tenant policy overlay.", data={"tenant_id": p.tenant_id, "changes": payload, "version_id": version["id"]})
         return tenant_policy(service, p)
     return confirm_rest(service, p, "policy", p.tenant_id, payload, body.confirmation_token, apply, force=True)
 

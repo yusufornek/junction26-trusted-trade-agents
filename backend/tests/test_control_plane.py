@@ -91,7 +91,8 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
             event = [e for e in gateway.audit() if e.action == "POLICY_UPDATED"][-1]
             assert event.actor == "human:operator"
             assert len(event.data["trace_id"]) == 32
-            assert {k: v for k, v in event.data.items() if k not in {"correlation_id", "trace_id"}} == {"diff": {"approval.max_auto_total_eur": {"before": 1500, "after": 10}},
+            assert event.data["version_id"].startswith("pol_")
+            assert {k: v for k, v in event.data.items() if k not in {"correlation_id", "trace_id", "version_id"}} == {"diff": {"approval.max_auto_total_eur": {"before": 1500, "after": 10}},
                                   "comment": "Lower budget", "reset": False, "stated_name": "Ada"}
             assert gateway.policy.runtime_path == gateway.settings.db_path.parent / "policy.yaml"
             assert gateway.policy.runtime_path.is_file()

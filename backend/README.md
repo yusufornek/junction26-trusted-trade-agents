@@ -1882,8 +1882,8 @@ authority. The amount gate also applies to platform staff on profiled tenants.
 Merge hooks for spec 44: load_preset returns the initial tenant-layer values;
 read_profile reads that snapshot; register_owner records ownership on creation;
 conflicted_users prefers the spec 44 tenant_agents.owner_user_id column when present.
-record_policy_loosening(conn, agent_id, user_id, tenant_id) must be called within the
-spec 44 successful change-approval transaction. Current autonomy grants already
+record_policy_loosening(conn, agent_id, user_id, tenant_id) is called within the
+spec 44 successful change-approval transaction so its reviewer is subject to four-eyes. Current autonomy grants already
 record the authenticated user ID. The governance layer should update the active
 tenant snapshot when its guardrail values change; it owns policy change control,
 version resolution and budget/substitute enforcement. This profile lane directly
@@ -1907,3 +1907,34 @@ Offline acceptance checks from backend/: .venv/bin/python -m pytest -q
 tests/test_spec45_guardrail_profiles_anomalies.py. AC-1–4 and AC-10 are in that file;
 AC-5–9 remain the anomaly lane's acceptance checks. Finish contract updates with
 .venv/bin/python scripts/export_openapi.py; it does not start a gateway or touch var/.
+### Agent governance (spec 44)
+
+`app/governance.py` resolves platform → tenant guardrails → owned-agent policy, with the most restrictive
+value per field and immutable source versions/authors. Procurement consumes that resolution via the existing
+mandate and policy evaluator; new lookups, quotes and orders include `policy_version_id` and retain their
+immutable effective snapshot. Existing signed quote evidence remains readable. Members manage their own agents;
+admins review loosening requests (never their own), transfer ownership, set guardrails and stop the tenant.
+
+REST: `/v1/tenant/agents` (register/filter), `/{id}/policy/effective`, `/{id}/policy` (GET/PATCH/PUT),
+`/{id}/policy/simulate`, `/{id}/policy/versions`, `/{id}/policy/versions/{version}/rollback`,
+`/{id}/activity`, `/{id}/pause`, `/{id}/resume`, `/{id}/transfer`; `/v1/tenant/policy/change-requests`
+and `/{request}/approve|reject`; `/v1/tenant/guardrails` and its versions/rollback;
+`/v1/tenant/agents/pause|resume`, `/v1/tenant/alerts`, `/v1/tenant/governance/report?from=&to=&signed=true`.
+Platform policy is `/v1/operator/governance/policy`; platform tenant stop is
+`/v1/operator/tenants/{id}/pause|resume`. All governance mutations require the spec 43 five-minute, single-use
+human confirmation handshake. Report signatures use the spec 10 detached JWS signer and public JWKS.
+
+MCP: `/mcp/tenant` advertises `agent_governance(operation, arguments)` with the same core operations and
+2026-07-28 `input_required` confirmation. A2A: `/a2a/tenant` (`SendMessage` data part with `operation`,
+`arguments`, optional `confirmation_token`), discovered through `/a2a/tenant/agent-card.json`.
+Tenant webhook subscriptions use `/v1/tenant/webhook-subscriptions`, `audience=tenant`, and
+`governance.alert` / `governance.*` policy/status event types, delivered through the existing durable outbox
+and Standard Webhooks signer. Live user role, tenant and active status are rechecked before delivery.
+
+Policy allowlists and bounds accept null for unrestricted and empty allowlists for no permission. Ordering hours
+are UTC hours 0..23, delivery windows are UTC date offsets, and governance budgets count UTC calendar day/month
+spend including approved purchases. Calendar budgets default to unrestricted; the existing autonomous rolling-24-hour limit also applies. Simulations replay
+stored last-30-day quote/order evidence without upstream calls or writes. A paused buyer gets
+`423 AGENT_PAUSED` (`CONTACT_ADMIN`); `422 OUTSIDE_GUARDRAIL` includes the governing field/limit/source/version/author.
+
+Offline acceptance: `.venv/bin/python -m pytest -q tests/test_spec44_agent_governance.py`.

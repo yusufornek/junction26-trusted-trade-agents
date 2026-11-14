@@ -35,6 +35,7 @@ def agent_context(service, principal, mandate=None):
             rate_limits=service.limiter.snapshot(principal.id), supported_operations=ROLES.get(principal.role, []),
             standing_constraints={})
     policy = service.policy.get()
+    policy = service.governance.project(principal.id, None, policy)
     customers = list(principal.customer_ids)
     if mandate:
         # The credential's customer is verified before it is exposed as scope.

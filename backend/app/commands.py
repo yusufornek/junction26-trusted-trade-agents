@@ -112,6 +112,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     elif route == "connections.create":
         from .connections import require_connection_admin
         require_connection_admin(principal or arguments["principal"])
+        gateway.connections.get(saved["value"]["connection_id"], principal or arguments["principal"])
     elif route == "policy.update":
         if principal is not None:
             require_operator(principal)
@@ -187,6 +188,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
                 from .guardrail_profiles import authorize_approval, require_constraints
                 authorize_approval(conn, principal, order)
                 require_constraints(conn, order.customer_id)
+                gateway.governance.authorize_approval(conn, order, principal)
                 # Rejecting needs no purchasing authority; approving still does.
                 gateway.mandates.authorize(conn, None, order.agent_id, order.customer_id,
                     products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
@@ -323,6 +325,7 @@ def install(gateway, target, name, category):
                 if category != "read" and (principal is None or principal.kind == "agent"):
                     from .buyer import check_suspension
                     check_suspension(gateway.db, identity)
+                    gateway.governance.check_active(identity)
                 if key is not None:
                     if not key.strip():
                         raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)

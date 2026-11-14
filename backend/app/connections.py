@@ -25,8 +25,8 @@ def public_connection(row):
 
 
 def require_connection_admin(principal):
-    if not principal.operator and not (principal.kind == "tenant_user" and principal.role == "tenant_admin"):
-        raise DomainError("TENANT_ADMIN_REQUIRED", "A tenant administrator or platform administrator is required", 403)
+    if not principal.operator and not (principal.kind == "tenant_user" and principal.role in {"tenant_admin", "member", "approver"}):
+        raise DomainError("TENANT_ADMIN_REQUIRED", "A member, tenant administrator or platform administrator is required", 403)
     return principal
 
 
@@ -95,8 +95,11 @@ class Connections:
             known = set(self.gateway.accounts.customers(tid))
             if agent and body.audience != "operator" and (agent["tenant_id"] != tid or agent["disabled_at"]):
                 raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
+            if agent and not principal.operator and principal.role != "tenant_admin":
+                self.gateway.governance.target(conn, body.agent_id, principal)
             if not agent and body.audience != "operator":
-                conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, tid, body.agent_id))
+                conn.execute("INSERT INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)", (body.agent_id, tid, body.agent_id))
+                self.gateway.governance.own_new_agent(conn, body.agent_id, tid, principal)
             if body.audience == "buyer":
                 from .guardrail_profiles import register_owner
                 register_owner(conn, body.agent_id, tid, principal.user_id)
@@ -118,6 +121,10 @@ class Connections:
                 policy.agents[body.agent_id] = mandate
                 self.gateway.policy._replace(yaml.safe_dump(
                     policy.model_dump(mode="json", exclude={"known_warning_codes", "tenant_anomaly_settings"}), sort_keys=False))
+            if not agent and body.audience != "operator":
+                owner = conn.execute("SELECT owner_user_id FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone()[0]
+                audit.append(conn, principal.user_id or principal.id, "AGENT_CREATED", "Created an owned connection agent.",
+                    data={"agent_id": body.agent_id, "tenant_id": tid, "owner_user_id": owner, "status": "active"})
             connection_id, now = "con_" + token_hex(4), audit.utcnow()
             env = "sbx" if self.gateway.settings.environment == "sandbox" else "live"
             prefix = f"vtg_{env}_{connection_id}_"
@@ -139,6 +146,9 @@ class Connections:
                     customer_ids=tuple(body.customer_ids))
                 self.gateway.webhooks.create(SubscriptionCreate(url=body.webhook_url, customer_ids=body.customer_ids,
                     audience=body.audience, event_types=body.event_types or ["order.approval_required", "order.confirmed", "order.rejected"]), subscriber)
+            if not conn.execute("SELECT 1 FROM connections WHERE agent_id=? AND client=? AND connection_id<>?", (body.agent_id, body.client, connection_id)).fetchone():
+                self.gateway.governance.alert(conn, body.agent_id, "connection.new_client", {"connection_id": connection_id, "client": body.client},
+                                              dedup=f"client:{body.agent_id}:{body.client}")
             audit.append(conn, "human:operator" if principal.user_id == "legacy-operator" else "human:" + (principal.user_id or principal.id), "CONNECTION_CREATED", "Issued an agent connection.",
                 data={"connection_id": connection_id, "agent_id": body.agent_id,
                       "client": body.client, "tenant_id": tid, "key_prefix": secret[:8]})
@@ -165,7 +175,8 @@ class Connections:
         with self.gateway.db.connect() as conn:
             return [public_connection(row) for row in conn.execute(
                 "SELECT * FROM connections WHERE (? IS NULL OR tenant_id=?) ORDER BY created_at DESC, rowid DESC",
-                (None if principal.operator else principal.tenant_id, principal.tenant_id))]
+                (None if principal.operator else principal.tenant_id, principal.tenant_id))
+                if principal.operator or principal.role == "tenant_admin" or conn.execute("SELECT 1 FROM tenant_agents WHERE agent_id=? AND owner_user_id=?", (row["agent_id"], principal.user_id)).fetchone()]
 
     def revoke(self, connection_id, principal):
         require_connection_admin(principal)
@@ -217,6 +228,9 @@ class Connections:
                                (connection_id, None if principal.operator else principal.tenant_id, principal.tenant_id)).fetchone()
         if row is None:
             raise DomainError("CONNECTION_NOT_FOUND", "Connection was not found", 404)
+        if not principal.operator and principal.role != "tenant_admin":
+            with self.gateway.db.connect() as conn:
+                self.gateway.governance.target(conn, row["agent_id"], principal)
         return public_connection(row)
 
     def rotate(self, connection_id, principal, overlap_hours=0):

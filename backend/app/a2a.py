@@ -827,6 +827,10 @@ async def agent_card(gateway=None, base_url="http://localhost:8000", audience="b
         del card.capabilities.extensions[:]
         for name, (model, _, _, description, _) in available(audience).items():
             card.skills.add(id=name, name=name.replace("_", " "), description=description, tags=[audience], input_modes=["application/json"], output_modes=["application/json"])
+        if audience == "tenant":
+            from .governance_api import Operation
+            for operation in Operation.__args__:
+                card.skills.add(id=operation, name=operation.replace("_", " "), description="Tenant governance operation; mutations require human confirmation.", tags=["tenant", "governance"])
         card.capabilities.extensions.add(uri="urn:trusted-trade:human-command:v1", description="Data part: version=1, command=skill id, arguments=object. Decisions return a five-minute single-use confirmation_token; retry with it.",
             params={"schemas": {name: model.model_json_schema() for name, (model, *_) in available(audience).items()}})
     return card
@@ -861,6 +865,9 @@ def install_routes(app):
                 return MessageToDict(await agent_card(request.app.state.gateway, str(request.base_url).rstrip("/"), selected))
             return get
         app.add_api_route("/a2a/"+audience+"/.well-known/agent-card.json", card_endpoint(audience), methods=["GET"], response_model=dict, tags=["a2a"])
+        if audience == "tenant":
+            for alias in ("/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json"):
+                app.add_api_route(alias, card_endpoint(audience), methods=["GET"], response_model=dict, tags=["a2a"])
         add_a2a_routes_to_fastapi(app, jsonrpc_routes=create_jsonrpc_routes(Handler(audience), rpc_url="/a2a/"+audience, context_builder=ContextBuilder()))
     for route in app.routes:
         if getattr(route, "path", None) in {"/a2a", "/a2a/tenant", "/a2a/operator"}:
@@ -875,6 +882,13 @@ def human_send(gateway, principal, audience, params):
     from .commands import json_value
     from .tenant_api import DecisionPreview
     parts = [MessageToDict(part)["data"] for part in params.message.parts if part.WhichOneof("content") == "data"]
+    if len(parts) == 1 and audience == "tenant" and "operation" in parts[0]:
+        from .governance_api import invoke
+        command = command_data(parts[0])
+        value = invoke(gateway, principal, command.get("operation"), command.get("arguments", {}), command.get("confirmation_token"))
+        result = json_value(value)
+        return t.Message(message_id=uuid4().hex, role=t.Role.ROLE_AGENT,
+                         parts=[data_part(result if isinstance(result, dict) else {"items": result})])
     if len(parts) != 1 or parts[0].get("version") != 1:
         raise DomainError("VALIDATION_ERROR", "Supply one version=1 command data part", 422)
     command = parts[0]

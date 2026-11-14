@@ -174,6 +174,7 @@ def test_ac_6_effective_per_order_limit_reports_source(gateway, need, upstream):
     assert global_order.status == "PENDING_APPROVAL"
     assert "1500.00" in global_order.policy.hits[0].detail
     assert "global policy" in global_order.policy.hits[0].detail
+    assert gateway.governance.resolve(AGENT).fields["per_order_ceiling_eur"].source_layer == "platform"
 
 
 def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need, upstream):
