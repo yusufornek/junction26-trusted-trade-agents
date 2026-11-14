@@ -58,3 +58,13 @@ jobs:
           done
           echo "Gateway did not become healthy at $SITE_URL" >&2
           exit 1
+
+      - name: Smoke check public pages
+        # These pages read files from the image: a folder missing from a Dockerfile answers 500 here
+        # while /health stays green.
+        run: |
+          for path in /developers /developers/tools.json /llms.txt; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$SITE_URL$path")
+            echo "$path $code"
+            [ "$code" = 200 ] || { echo "::error::$SITE_URL$path answered $code"; exit 1; }
+          done
