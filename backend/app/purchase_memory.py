@@ -206,7 +206,12 @@ class PurchaseMemory:
                 allowed = tuple(c for c in principal.customer_ids if grant and c in grant.customer_ids)
                 if not grant:
                     raise DomainError("AGENT_NOT_REGISTERED", "Purchase memory requires a current mandate", 403)
-                if principal.customer_ids and not allowed:
+                # Authority follows the current policy: a grant that no longer covers any customer of the
+                # agent's organisation is a withdrawal, not an empty result.
+                org = self.g.policy.get().organisations.get(principal.organisation_id)
+                org_customers = set(org.customer_ids) if org else set()
+                withdrawn = bool(org_customers) and not org_customers & set(grant.customer_ids)
+                if not allowed and (principal.customer_ids or withdrawn):
                     raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Current agent authority excludes these customers", 403)
                 principal = replace(principal, customer_ids=allowed)
         return principal
