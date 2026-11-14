@@ -24,6 +24,19 @@ const DEFAULT_NEED: NeedSpec = {
   max_candidates: 10,
 };
 
+/** The gateway searches the catalog by the search terms when there are any, not by the intent. The example's terms
+ *  and claim describe its milk, so they go when the intent changes, or every request keeps finding lactose-free
+ *  milk; values the buyer typed stay. */
+function withIntent(need: NeedSpec, intent: string): NeedSpec {
+  const isExample = (value: string[], example: string[]) => value.join() === example.join();
+  return {
+    ...need,
+    intent,
+    search_terms: isExample(need.search_terms, DEFAULT_NEED.search_terms) ? [] : need.search_terms,
+    required_claims: isExample(need.required_claims, DEFAULT_NEED.required_claims) ? [] : need.required_claims,
+  };
+}
+
 const RANK_STYLE: Record<string, string> = {
   best: "bg-positive-soft text-positive",
   better: "bg-chip text-ink",
@@ -155,7 +168,7 @@ export default function Buyer() {
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.3fr)]">
           <label className="flex flex-col gap-1.5 lg:col-span-3">
             <span className="label">Intent</span>
-            <input className="field" value={need.intent} onChange={(e) => setNeed({ ...need, intent: e.target.value })} />
+            <input className="field" value={need.intent} onChange={(e) => setNeed(withIntent(need, e.target.value))} />
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -185,7 +198,12 @@ export default function Buyer() {
 
           <label className="flex flex-col gap-1.5">
             <span className="label">Search terms</span>
-            <input className="field" value={need.search_terms.join(", ")} onChange={(e) => setNeed({ ...need, search_terms: list(e.target.value) })} />
+            <input
+              className="field"
+              placeholder="Words from the intent"
+              value={need.search_terms.join(", ")}
+              onChange={(e) => setNeed({ ...need, search_terms: list(e.target.value) })}
+            />
           </label>
 
           <label className="flex flex-col gap-1.5">
@@ -476,9 +494,13 @@ function LookupSummary({ lookup }: { lookup: LookupResult }) {
       <span>
         <strong className="num text-ink">{lookup.decision_calls}</strong> fit checks
       </span>
-      {lookup.retrieval?.mode ? (
-        <span className="chip bg-chip text-ink-muted" title={`terms: ${(lookup.retrieval.terms_used ?? []).join(", ")}`}>
-          search: {lookup.retrieval.mode.replaceAll("_", " ")}
+      {/* What the catalog was searched for decides which products can appear at all, so it is shown, not hidden. */}
+      {lookup.retrieval?.mode === "intent" ? (
+        <span>Searched with the intent's words</span>
+      ) : lookup.retrieval?.terms_used?.length ? (
+        <span>
+          Searched for <strong className="text-ink">{lookup.retrieval.terms_used.join(", ")}</strong>
+          {lookup.retrieval.mode === "intent_broadened" ? " (broadened from the intent)" : null}
         </span>
       ) : null}
       {lookup.warnings?.length ? <WarningChips warnings={lookup.warnings} /> : null}

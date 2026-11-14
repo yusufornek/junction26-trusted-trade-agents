@@ -509,7 +509,11 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     };
   if (p === "/.well-known/jwks.json")
     return { keys: [{ kid: "gateway-1", kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" }] };
-  if (p === "/v1/offers" && method === "POST") return { ...LOOKUP, need: { ...LOOKUP.need, ...body } };
+  if (p === "/v1/offers" && method === "POST")
+    // The gateway's rule: search terms when there are any, otherwise words from the intent (broadened here).
+    return { ...LOOKUP, need: { ...LOOKUP.need, ...body }, retrieval: body.search_terms?.length
+      ? { mode: "terms", terms_used: body.search_terms }
+      : { mode: "intent_broadened", terms_used: String(body.intent ?? "").toLowerCase().match(/[a-z]{4,}/g) ?? [] } };
   if ((m = p.match(/^\/v1\/lookups\/([^/]+)$/))) return { ...LOOKUP, lookup_id: m[1] };
   if ((m = p.match(/^\/v1\/products\/([^/]+)$/))) return product(m[1]);
   if (p === "/v1/stats") return stats();
