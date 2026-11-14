@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { Avatar } from "../charts";
 import { Card, Empty, ErrorNote, LiveDot, Spinner, useAsync, when } from "../ui";
 
 export default function Audit() {
@@ -32,11 +33,7 @@ export default function Audit() {
                 className="flex w-full items-center gap-3 py-3 text-left"
                 onClick={() => setOpen(open === e.id ? null : e.id)}
               >
-                <span
-                  className={`size-2 shrink-0 rounded-full ${
-                    e.actor.startsWith("human") ? "bg-positive" : "bg-ink-soft"
-                  }`}
-                />
+                <Avatar name={e.actor} size={26} />
                 <span className="w-44 shrink-0 text-[13px] font-medium">
                   {e.action.replaceAll("_", " ").toLowerCase()}
                 </span>

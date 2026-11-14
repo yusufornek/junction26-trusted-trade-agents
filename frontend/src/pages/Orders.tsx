@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type OrderStatus } from "../api";
+import { Avatar } from "../charts";
 import { Card, Empty, ErrorNote, Spinner, StatusChip, eur, useAsync, when } from "../ui";
 
 const FILTERS: (OrderStatus | "ALL")[] = ["ALL", "PENDING_APPROVAL", "CONFIRMED", "REJECTED", "EXPIRED"];
@@ -56,7 +57,12 @@ export default function Orders() {
                       {o.lines[0]?.name ?? o.id}
                     </Link>
                   </td>
-                  <td className="px-5 py-3 text-ink-muted">{o.agent_id}</td>
+                  <td className="px-5 py-3 text-ink-muted">
+                    <span className="flex items-center gap-2">
+                      <Avatar name={o.agent_id} size={24} />
+                      {o.agent_id}
+                    </span>
+                  </td>
                   <td className="px-5 py-3 text-ink-muted">{when(o.created_at)}</td>
                   <td className="num px-5 py-3 text-right font-medium">{eur(o.total, o.currency)}</td>
                 </tr>
