@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "recipe_name": "Lasagne",
+  "servings": 100,
+  "ingredients": [
+    {"name": "Lasagne pasta", "search_terms": ["pasta"], "quantity": {"value": 1.1, "unit": "KG"}, "substitutions_allowed": true},
+    {"name": "Tomato sauce", "search_terms": ["tomato"], "quantity": {"value": 2.1, "unit": "KG"}, "substitutions_allowed": true},
+    {"name": "Plant mince", "search_terms": ["mince"], "quantity": {"value": 3.1, "unit": "KG"}, "substitutions_allowed": true},
+    {"name": "Oat drink", "search_terms": ["oat"], "quantity": {"value": 4.1, "unit": "L"}, "substitutions_allowed": true},
+    {"name": "Olive oil", "search_terms": ["oil"], "quantity": {"value": 0.6, "unit": "L"}, "substitutions_allowed": false}
+  ],
+  "yield_note": "Synthetic fixture quantities; the buyer agent supplies the recipe decomposition."
+}

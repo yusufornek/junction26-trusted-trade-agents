@@ -28,7 +28,7 @@ def procurement_context(policy, customer_id, request_ref, constraints, mandate=N
     return {"customer_id": customer_id, "supplier_id": "valio-aimo", "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
-            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": "live"}
+            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": getattr(policy, "environment", "live")}
 
 
 EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "QUOTE_ACCEPTED": "quote.accepted",

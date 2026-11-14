@@ -40,6 +40,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
     tokenize='unicode61 remove_diacritics 2'
 );
 CREATE TABLE IF NOT EXISTS lookups (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS basket_lookups (id TEXT PRIMARY KEY REFERENCES lookups(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS catalog_metadata (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS lookup_offers (lookup_id TEXT PRIMARY KEY REFERENCES lookups(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS quotes (
@@ -97,7 +98,8 @@ class Database:
             for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",
                                "size_suspect": "INTEGER", "volume_suspect": "INTEGER", "weight_suspect": "INTEGER",
                                "sales_volume_l": "REAL", "gtin": "TEXT", "unit_gtins": "TEXT",
-                               "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT"}.items():
+                               "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT",
+                               "density_kg_per_l": "REAL"}.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")
             from .audit import migrate

@@ -108,7 +108,7 @@ missing Valio configuration produces visible unavailable evidence and prevents q
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
 arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
-Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`, `get_order_ubl`.
+Tools: `search_products`, `find_offers`, `find_basket_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`, `get_order_ubl`, `get_order_evidence`.
 `cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
 reservations, preserves fixed prices, and records the actor and reason without upstream calls.
@@ -136,7 +136,8 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    `quantity_sales_units` set to `units_needed`. Multiple explicit lines are supported. The gateway
    stores lookups and retrieves fit/constraints itself; clients cannot inject a trusted fit score.
    Alternatively, omit `lines` and send `plan_ref: {"lookup_id": "...", "plan_index": 0}`;
-   `need_ref` then defaults to that lookup. Exactly one of `lines` or `plan_ref` is required.
+   `need_ref` then defaults to that lookup. Recipe baskets use `basket_ref: {"basket_lookup_id": "..."}`.
+   Exactly one of `lines`, `plan_ref` or `basket_ref` is required.
    Customer and delivery date must match the lookup. Invalid plan indices return 422.
    Explicit lines without `need_ref` return `422 NEED_REF_REQUIRED`; every new quote binds a stored need.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
@@ -987,3 +988,63 @@ mechanism. This suggests review; demotion is the same endpoint with `level: appr
 Spec 28's buyer view and spec 33's signed webhook delivery are not installed here. This implementation
 uses the existing spec 19/22 principals, organisation scopes, audit chain and event/outbox; it does
 not claim outbound webhook delivery. The approval endpoints expose buyer/operator signing now.
+
+### Hospital substitutions (spec 31)
+
+`POST /v1/offers` / MCP `find_offers` accepts optional
+`function: {product_type, intended_use, preparation?, acceptable_units: ["L"]}` and
+`substitute_for: {product_id}`. Candidates must share the catalog product category and pass functional
+fit screening; the fit question includes intended use and preparation. An available preferred product is best
+and has no substitution proposal. If it is short, alternatives rank by category, claims superset, pack size
+and comparable unit-price difference. Each alternative has `substitution: {for, differences, allergen_evidence}`.
+Contains, may-contain, undeclared, contradictory and missing allergen evidence never pass an exclusion.
+The wording is **compliant with the recorded procurement constraints**, not a clinical safety guarantee.
+
+A customer's optional `substitution_profile` contains `allowed_brands`, `max_price_increase_pct`,
+`pack_size_range: {min, max}` (in the need's L/KG per sales unit), and `requires_approval`.
+Out-of-profile or unverifiable price changes require approval. `clinical_review: required` on the customer
+is carried by quote/order and forces sign-off by a **buyer_approver scoped to that buyer**. Operator-only and
+buyer-admin-only clinical approvals are refused with `BUYER_APPROVER_REQUIRED`. Hard allergen rules remain
+binding even for the buyer approver. `policy.yaml` contains a hospital policy example.
+
+### Recipe baskets (spec 32)
+
+`POST /v1/basket-lookups` / MCP `find_basket_offers(request)` takes `customer_id`, `deliver_by`,
+`manifest` and optional target `servings`. The version 1 manifest contains `recipe_name`, base `servings`,
+`ingredients: [{name, quantity: {value, unit}, search_terms?, required_claims?, exclude_allergens?,
+substitutions_allowed, density_kg_per_l?}]`, and optional `yield_note`. The agent supplies the recipe
+and its decomposition; the gateway scales supplied quantities, searches the catalog and applies standing
+constraints to every ingredient. `substitutions_allowed: false` confines retrieval to the supplied terms;
+true permits the ordinary deterministic intent broadening when no explicit terms were supplied.
+It does not relax hard constraints.
+
+All candidate SKUs are deduplicated before **one price batch and one availability batch**. Per-ingredient
+results hold ranked offers, `chosen_line` (the shared product ID), purchasable sales quantity, overbuy and
+coverage. The basket holds `lines`, `total`, `coverage_by_ingredient`, `uncovered`, and `policy_preview`.
+Quantities for a shared SKU are summed before whole-pack rounding. `scaled_manifest` shows target quantities.
+G and ML normalize to KG and L. Mass/volume conversion requires explicit ingredient `density_kg_per_l` or
+catalog `synkkaData.densityKgPerL` evidence (kg/L); otherwise the ingredient is uncovered with
+`unit cannot be converted`. No density is guessed. Ingredient indices distinguish duplicate names.
+
+Retrieve saved baskets with `GET /v1/basket-lookups/{lookup_id}`. Quote with
+`POST /v1/quotes {customer_id, deliver_by, basket_ref: {basket_lookup_id}}` (also supported by MCP
+`create_quote`). `lines`, `plan_ref`, and `basket_ref` are mutually exclusive. Basket ownership, customer/date,
+mandates and per-SKU ingredient constraints are rechecked. A partial basket carries protected
+`PARTIAL_BASKET` into the quote and order and needs approval. Empty baskets cannot be quoted.
+One quote produces one order; SQLite commits all known-stock reservations together. If any basket line has
+insufficient stock, no basket lines are reserved and approval cannot confirm until all are available.
+The order's `atomicity` states **all-or-none local simulation**; no supplier order is transmitted.
+
+Offline demos (run from `backend/`):
+
+```sh
+.venv/bin/python demo/run_hospital_substitution.py
+.venv/bin/python demo/run_recipe_order.py
+```
+
+These use versioned `sandbox/scenarios/hospital_stockout.yaml` and `full_stock.yaml` through
+`FixtureSupplierAdapter`, the same policy/evidence/approval/order services, and separate temporary databases,
+keys, policy, budgets and reservations. Contexts are labelled `sandbox` and observations have fixture
+provenance. They need no network or secrets and never touch `backend/var/`. Each prints a report path under
+`$TMPDIR`. The hospital demo includes buyer approval; the recipe demo decomposes lasagne on the agent side
+and orders for 200. This local scenario harness does not expose the workspace/admin reset API of spec 26.

@@ -1,0 +1,18 @@
+version: 1
+customers:
+  hospital:
+    exclude_allergens: [AM, AE]
+    clinical_review: required
+    substitution_profile:
+      allowed_brands: [Usual, Approved]
+      max_price_increase_pct: 20.0
+      pack_size_range: {min: 0.5, max: 2.0}
+      requires_approval: true
+products:
+  - {id: usual-oat, name: 'Usual oat drink 1 l UHT cooking', category: '10400', brand: Usual, size: 1, unit: L, price: 2.0, stock: 0, claims: [FREE_FROM_LACTOSE], allergens: {AM: FREE_FROM, AE: FREE_FROM}}
+  - {id: approved-oat, name: 'Approved oat drink 1 l UHT cooking', category: '10400', brand: Approved, size: 1, unit: L, price: 2.1, stock: 10000, claims: [FREE_FROM_LACTOSE], allergens: {AM: FREE_FROM}}
+  - {id: may-contain, name: 'Cheap oat drink 1 l cooking', category: '10400', size: 1, unit: L, price: 0.5, stock: 10000, allergens: {AM: MAY_CONTAIN}}
+  - {id: lactose-free-milk, name: 'Lactose free oat style milk 1 l', category: '10400', size: 1, unit: L, price: 0.6, stock: 10000, claims: [FREE_FROM_LACTOSE], allergens: {AM: CONTAINS, ML: FREE_FROM}}
+  - {id: missing-evidence, name: 'Oat drink 1 l cooking', category: '10400', size: 1, unit: L, price: 0.4, stock: 10000, declaration: false}
+  - {id: wrong-type, name: 'Oat dessert 1 l', category: '99999', size: 1, unit: L, price: 0.1, stock: 10000}
+  - {id: wrong-use, name: 'Oat drink 1 l sweetened coffee only', category: '10400', size: 1, unit: L, price: 0.7, stock: 10000, fit: 0.2}

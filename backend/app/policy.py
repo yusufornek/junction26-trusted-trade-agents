@@ -206,6 +206,10 @@ class Policy:
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
         ignored_codes = set(policy.approval.ignored_warnings)
         hits, rejected, approval = [], False, False
+        customer = policy.customers.get(customer_id)
+        if customer and customer.clinical_review == "required":
+            hits.append(RuleHit(rule="CLINICAL_REVIEW", detail="Clinical review by a buyer approver is required."))
+            approval = True
         if mandate is not None and (mandate.autonomy or policy.autonomy.default) == "approval_required":
             hits.append(RuleHit(rule="autonomy_level", detail="This agent's orders need sign-off until autonomy is granted."))
             approval = True

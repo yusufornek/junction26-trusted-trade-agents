@@ -160,6 +160,7 @@ def extract(raw, reliability, carbon):
         variable_unit=bool(synkka.get("variableUnit") or raw.get("variableUnit")), deposits=raw.get("deposits") or [],
         base_net_weight_kg=weight_kg or None, delivery_reliability=reliability.get(str(raw["id"])),
         co2_kg_per_kg=carbon.get(str(raw["id"])),
+        density_kg_per_l=number(synkka.get("densityKgPerL")) if number(synkka.get("densityKgPerL")) and number(synkka.get("densityKgPerL")) > 0 else None,
     )
 
 
@@ -184,7 +185,8 @@ def build(db, source=ROOT / "data/product_data.json.gz", reliability_path=ROOT /
                 continue
             product = extract(raw, reliability, carbon)
             values = product.model_dump()
-            for field, value in values.items():
+            for field in Product.model_fields:
+                value = values.get(field)
                 filled = value is not None and value != "" and value != [] and value != {} and value is not False
                 coverage[field]["filled" if filled else "empty"] += 1
             vocabulary["required_claims"].update(product.claims)

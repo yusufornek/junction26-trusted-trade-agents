@@ -1,0 +1,197 @@
+"""Spec 32 acceptance criteria, including transport parity and atomic reservation failure."""
+import asyncio
+from copy import deepcopy
+from datetime import timedelta
+import json
+from pathlib import Path
+import sqlite3
+
+from fastapi.testclient import TestClient
+import pytest
+
+from app import audit
+from app.api import create_app
+from app.auth import Credentials
+from app.db import DomainError
+from app.mcp_server import create_server
+from app.models import BasketLookupRequest, CustomerConstraints, PolicyUpdateRequest, QuoteRequest
+from app.sandbox import scenario_gateway
+
+MANIFEST = json.loads((Path(__file__).parent / "fixtures/lasagne_manifest.json").read_text())
+
+
+@pytest.fixture
+def recipe():
+    with scenario_gateway("full_stock") as gateway:
+        policy = gateway.policy.get()
+        policy.customers = {"recipe": CustomerConstraints(exclude_allergens=["AM"])}
+        policy.approval.max_auto_total_eur = 200
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture buyer"))
+        yield gateway
+
+
+def request(manifest=None, servings=None):
+    return BasketLookupRequest(customer_id="recipe", deliver_by=audit.utcnow().date() + timedelta(days=3),
+                               manifest=manifest or deepcopy(MANIFEST), servings=servings)
+
+
+def find(g, manifest=None, servings=None):
+    return g.baskets.find_basket_offers(request(manifest, servings), "agent:sandbox-agent")
+
+
+def quote(g, result):
+    return g.orders.create_quote(QuoteRequest(customer_id="recipe", deliver_by=result.deliver_by,
+        basket_ref={"basket_lookup_id": result.basket_lookup_id}), "sandbox-agent")
+
+
+def test_AC_1_five_ingredients_one_basket_two_supplier_calls_and_transport_parity(recipe):
+    keys = Credentials("operator-test", "sandbox-agent:recipe-test")
+    with TestClient(create_app(recipe, keys=keys), headers={"Authorization": "Bearer recipe-test"}) as client:
+        response = client.post("/v1/basket-lookups", json=request().model_dump(mode="json"))
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["basket"]["lines"]) == 5
+        assert all(c["covered"] == 1 for c in body["basket"]["coverage_by_ingredient"])
+        assert body["basket"]["uncovered"] == []
+        assert body["live_calls"] == {"price": 1, "availability": 1}
+        assert len(recipe.valio.calls) == 2
+        for endpoint, ids in recipe.valio.calls:
+            assert len(ids) == len(set(ids)) == 5
+        saved = client.get("/v1/basket-lookups/" + body["basket_lookup_id"])
+        assert saved.status_code == 200 and saved.json() == body
+    async def mcp():
+        server = create_server(recipe, "sandbox-agent")
+        result = await server.call_tool("find_basket_offers", {"request": request().model_dump(mode="json")})
+        assert not result.is_error
+        q = await server.call_tool("create_quote", {"customer_id": "recipe", "deliver_by": str(request().deliver_by),
+            "basket_ref": {"basket_lookup_id": body["basket_lookup_id"]}})
+        assert not q.is_error
+    asyncio.run(mcp())
+
+
+def test_AC_2_servings_scale_rounding_overbuy_total_and_policy(recipe):
+    base = find(recipe)
+    doubled = find(recipe, servings=200)
+    assert doubled.scaled_manifest.servings == 200
+    assert doubled.scaled_manifest.ingredients[0].quantity.value == 2.2
+    assert base.basket.total < doubled.basket.total
+    assert base.basket.lines[0].units_needed < doubled.basket.lines[0].units_needed
+    assert base.basket.lines[0].overbuy.amount != doubled.basket.lines[0].overbuy.amount
+    assert base.basket.policy_preview.outcome == "CONFIRMED"
+    assert doubled.basket.policy_preview.outcome == "PENDING_APPROVAL"
+
+
+def test_AC_3_shared_sku_sums_quantities_before_pack_rounding(recipe):
+    manifest = deepcopy(MANIFEST)
+    manifest["ingredients"] = [dict(name="Sauce oat", quantity={"value": .4, "unit": "L"},
+        search_terms=["oat"], substitutions_allowed=True), dict(name="Topping oat", quantity={"value": .4, "unit": "L"},
+        search_terms=["oat"], substitutions_allowed=False)]
+    result = find(recipe, manifest)
+    assert len(result.basket.lines) == 1
+    assert result.basket.lines[0].units_needed == 1
+    assert result.basket.lines[0].overbuy.amount == pytest.approx(.2)
+    assert [r.chosen_line for r in result.ingredients] == ["oat", "oat"]
+    assert all(c.covered == 1 for c in result.basket.coverage_by_ingredient)
+
+
+def test_AC_4_no_compliant_product_is_uncovered_partial_basket_needs_approval(recipe):
+    manifest = deepcopy(MANIFEST)
+    manifest["ingredients"][0]["search_terms"] = ["unobtainable"]
+    result = find(recipe, manifest)
+    assert result.basket.uncovered[0].ingredient_index == 0
+    assert result.basket.uncovered[0].reason == "no compliant product"
+    assert result.basket.policy_preview.outcome == "PENDING_APPROVAL"
+    order = recipe.orders.place_order(quote(recipe, result).id, "partial-basket", "sandbox-agent")
+    assert order.status == "PENDING_APPROVAL"
+    assert any(w.code == "PARTIAL_BASKET" for w in order.warnings)
+
+
+def test_AC_5_standing_allergen_exclusion_applies_to_every_ingredient(recipe):
+    manifest = deepcopy(MANIFEST)
+    for ingredient in manifest["ingredients"]:
+        ingredient["search_terms"] = ["oat"]
+        ingredient["quantity"] = {"value": 1.0, "unit": "L"}
+    result = find(recipe, manifest)
+    assert len(result.basket.lines) == 1
+    for ingredient in result.ingredients:
+        assert [o.product_id for o in ingredient.offers] == ["oat"]
+        assert any("AM" in k and "customer_policy" in k and "contains" in k for k in ingredient.exclusion_counts)
+
+
+def test_AC_6_basket_quote_order_reserves_all_lines_or_none(recipe):
+    result = find(recipe)
+    q = quote(recipe, result)
+    confirmed = recipe.orders.place_order(q.id, "all-lines", "sandbox-agent")
+    assert confirmed.status == "CONFIRMED" and "all-or-none" in confirmed.atomicity
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (confirmed.id,)).fetchone()[0] == 5
+    second = quote(recipe, find(recipe))
+    recipe.valio.rows["tomato"]["stock"] = 0
+    pending = recipe.orders.place_order(second.id, "no-lines", "sandbox-agent")
+    assert pending.status == "PENDING_APPROVAL"
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (pending.id,)).fetchone()[0] == 0
+    with pytest.raises(DomainError, match="All basket lines"):
+        recipe.orders.approve(pending.id, "Buyer")
+    recipe.valio.rows["tomato"]["stock"] = 10000
+    third = quote(recipe, find(recipe))
+    with recipe.db.connect(write=True) as conn:
+        conn.execute("CREATE TRIGGER fail_basket BEFORE INSERT ON reservations WHEN NEW.product_id='tomato' "
+                     "BEGIN SELECT RAISE(ABORT,'controlled reservation failure'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        recipe.orders.place_order(third.id, "rollback-lines", "sandbox-agent")
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM orders WHERE quote_id=?", (third.id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM reservations").fetchone()[0] == 5
+    assert recipe.orders.get_quote(third.id).status == "OPEN"
+
+
+def test_AC_7_grams_to_litres_without_density_is_uncovered(recipe):
+    manifest = deepcopy(MANIFEST)
+    manifest["ingredients"] = [dict(name="Oat drink", search_terms=["oat"],
+        quantity={"value": 1500, "unit": "G"}, substitutions_allowed=True)]
+    result = find(recipe, manifest)
+    assert result.basket.lines == []
+    assert result.basket.uncovered[0].reason == "unit cannot be converted"
+    manifest["ingredients"][0]["density_kg_per_l"] = 1.5
+    proven = find(recipe, manifest)
+    assert proven.basket.uncovered == []
+    assert proven.basket.lines[0].units_needed == 1
+    assert proven.line_needs["oat"].quantity.unit == "L"
+
+
+def test_basket_bound_constraints_cannot_be_bypassed_at_order(recipe):
+    result = find(recipe)
+    q = quote(recipe, result)
+    with recipe.db.connect(write=True) as conn:
+        product = recipe.catalog.get("oat")
+        product.allergen_status = {"AM": ["contains"]}
+        conn.execute("UPDATE products SET data=? WHERE id='oat'", (product.model_dump_json(),))
+    assert recipe.orders.place_order(q.id, "changed-allergen", "sandbox-agent").status == "REJECTED"
+
+
+def test_catalog_density_evidence_allows_mass_volume_conversion(recipe):
+    with recipe.db.connect(write=True) as conn:
+        product = recipe.catalog.get("oat")
+        product.density_kg_per_l = 1.5
+        conn.execute("UPDATE products SET data=? WHERE id='oat'", (product.model_dump_json(),))
+    manifest = deepcopy(MANIFEST)
+    manifest["ingredients"] = [dict(name="Oat drink", search_terms=["oat"],
+        quantity={"value": 1500, "unit": "G"}, substitutions_allowed=True)]
+    result = find(recipe, manifest)
+    assert not result.basket.uncovered
+    assert result.basket.lines[0].units_needed == 1
+
+
+def test_pending_basket_stock_change_revises_evidence_and_releases_all_lines(recipe):
+    result = find(recipe, servings=200)
+    pending = recipe.orders.place_order(quote(recipe, result).id, "pending-change", "sandbox-agent")
+    assert pending.status == "PENDING_APPROVAL"
+    recipe.valio.rows["tomato"]["stock"] = 0
+    with pytest.raises(DomainError) as caught:
+        recipe.orders.approve(pending.id, "Buyer")
+    assert caught.value.code == "EVIDENCE_CHANGED"
+    refreshed = recipe.orders.get_order(pending.id)
+    assert refreshed.evidence_revision == 2
+    with recipe.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM reservations WHERE order_id=?", (pending.id,)).fetchone()[0] == 0

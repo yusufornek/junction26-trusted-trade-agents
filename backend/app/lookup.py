@@ -17,6 +17,9 @@ from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval
 from .valio import RequestCounter
 
 WARNING_TEXT = {
+    "CLINICAL_REVIEW": "Clinical review by a buyer approver is required.",
+    "SUBSTITUTION_PROFILE": "The substitute needs approval under the customer's substitution profile.",
+    "PARTIAL_BASKET": "Some recipe ingredients are uncovered; review the partial basket.",
     "PARTIAL_STOCK": "On-time available stock covers only part of the requested quantity.",
     "DATE_SHIFT": "The upstream API returned a delivery date after the requested deadline.",
     "CUTOFF_PASSED": "The order cut-off for this delivery has passed.",
@@ -309,8 +312,8 @@ def offer_for(product, need, price, stock, fit=None, *, sales_quantity=None, res
         delivery_reliability=product.delivery_reliability, co2_kg_per_kg=product.co2_kg_per_kg,
         labels=product.labels, matched_because=matched,
         fit=fit["probability"] if fit else None, fit_question=fit["question"] if fit else None,
-        provenance={"price": Provenance(source="valio:/api/price", fetched_at=fetched, valid_to=valid_to),
-                    "availability": Provenance(source="valio:/api/availability",
+        provenance={"price": Provenance(source=price.get("_source", "valio:/api/price"), fetched_at=fetched, valid_to=valid_to),
+                    "availability": Provenance(source=stock.get("_source", "valio:/api/availability"),
                                                fetched_at=timestamp(stock.get("_fetched_at")) or audit.utcnow(), valid_to=available.closing_time)},
     )
 
@@ -395,6 +398,10 @@ class Lookup:
         need, effective = self.policy.effective_need(need, policy)
         pool_size = max(need.max_candidates, policy.shortlist.catalog_pool)
         categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories") if mandate is not None else None
+        from .substitution import functional_categories
+        functional = functional_categories(self.catalog, need)
+        if functional is not None:
+            categories = sorted(functional if categories is None else functional.intersection(categories))
         removed_by, counts = {}, {}
         retrieval = Retrieval(mode="terms" if need.search_terms else "intent",
                               terms_used=list(need.search_terms) if need.search_terms else
@@ -413,9 +420,18 @@ class Lookup:
             global_warnings.append(Warning(code="RETRIEVAL_BROADENED", text=(
                 f"{WARNING_TEXT['RETRIEVAL_BROADENED']}: {', '.join(retrieval.terms_used) or '(none)'}.")))
         matched_count = counts.get("matched_count", len(pool))
+        from .substitution import include_preferred
+        pool = include_preferred(pool, need, self.catalog, categories)[:pool_size]
         # Fit gates the live shortlist; price/stock must be known before ranking suitable products.
         fits = self.decisions.ask(need, pool, counter)
         screened_count = counter.screened_count
+        if need.function:
+            # Functional substitution is offered only with both category and fit evidence.
+            failed = [p for p in pool if (fits or {}).get(p.id, {}).get("probability", -1) < policy.approval.min_fit_probability]
+            if failed:
+                removed_by["function (fit not proven)"] = len(failed)
+                excluded += len(failed)
+            pool = [p for p in pool if p not in failed]
         if matched_count > screened_count:
             global_warnings.append(Warning(code="POOL_TRUNCATED", text=(
                 f"{screened_count:,} of {matched_count:,} matching products screened; add search terms to narrow.")))
@@ -426,7 +442,13 @@ class Lookup:
             candidates = pool[:min(policy.shortlist.live_max, max(passing, need.max_candidates))]
         else:
             candidates = pool[:need.max_candidates]
+        if need.substitute_for:
+            preferred = next((p for p in pool if p.id == need.substitute_for.product_id), None)
+            if preferred and all(p.id != preferred.id for p in candidates):
+                candidates = [preferred, *candidates[:max(0, policy.shortlist.live_max - 1)]]
         ids = [p.id for p in candidates]
+        if need.substitute_for and need.substitute_for.product_id not in ids:
+            ids.append(need.substitute_for.product_id)
         price, stock = {}, {}
         for endpoint, target in (("price", price), ("availability", stock)):
             try:
@@ -448,6 +470,11 @@ class Lookup:
                             (fits or {}).get(p.id), reserved_amount=reservations[p.id], sources=effective) for p in candidates]
         rank(offers, policy.ranking_weights.model_dump(), policy.approval.min_fit_probability,
              catalog_stats=self.catalog.metadata("ranking"), reject_codes=policy.reject.on)
+        from .substitution import annotate, rank_substitutes
+        for offer in offers:
+            annotate(offer, need, self.catalog, policy, price)
+        if need.substitute_for:
+            offers = rank_substitutes(offers, need, self.catalog, price)
         from .plans import build_plans
         returned = offers[:need.max_candidates]
         plans = build_plans(need, offers, self.policy, policy, agent_id, self.catalog,

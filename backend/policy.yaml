@@ -32,6 +32,15 @@ customers: {}
 #     required_claims: [FREE_FROM_LACTOSE]
 #     exclude_allergens: [AE]
 #     note: "Hotel-chain standing procurement constraints."
+#   hospital:
+#     exclude_allergens: [AM, AE]
+#     clinical_review: required
+#     substitution_profile:
+#       allowed_brands: [Usual, Approved]
+#       max_price_increase_pct: 20.0
+#       pack_size_range: {min: 0.5, max: 2.0}
+#       requires_approval: true
+#     note: "Compliant with the recorded procurement constraints; buyer clinical review required."
 # Fit gates live pricing; rank all suitable candidates before returning max_candidates offers.
 shortlist: {catalog_pool: 40, live_max: 25}
 ranking_weights: {price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1}

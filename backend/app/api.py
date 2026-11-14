@@ -20,6 +20,7 @@ from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, E
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
 from .models import AgentTrackRecord, AutonomyChange, AutonomyChangeResult
+from .models import BasketLookupRequest, BasketLookupResult
 from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
@@ -210,6 +211,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
     @app.get("/v1/lookups/{lookup_id}", response_model=LookupResult, summary="Retrieve stored alternatives behind a quote's need_ref")
     def get_lookup(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).lookup.get(lookup_id, principal.owner)
+
+    @app.post("/v1/basket-lookups", response_model=BasketLookupResult,
+              summary="Scale an agent-supplied recipe and price one deduplicated basket in two supplier batches")
+    def basket_offers(body: BasketLookupRequest, request: Request, principal: Principal = Depends(resolve_principal),
+                      mandate=Depends(presented_mandate)):
+        return svc(request).baskets.find_basket_offers(body, actor=f"agent:{principal.agent_id}", mandate=mandate)
+
+    @app.get("/v1/basket-lookups/{lookup_id}", response_model=BasketLookupResult, summary="Read this agent's stored recipe basket")
+    def get_basket(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).baskets.get(lookup_id, principal.owner)
 
     @app.get("/v1/policy", response_model=PolicyResource, summary="Read effective procurement policy and known warning codes")
     def get_policy(request: Request, principal: Principal = Depends(require_operator)):
