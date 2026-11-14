@@ -10774,6 +10774,8 @@ components:
           - type: string
           - type: 'null'
           title: Mcp Url
+          description: Public origin plus /mcp when served. Without GATEWAY_PUBLIC_URL,
+            only loopback request origins are advertised; otherwise null (use REST).
         rest_base_url:
           type: string
           title: Rest Base Url

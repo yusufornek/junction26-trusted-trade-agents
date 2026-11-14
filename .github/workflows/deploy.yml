@@ -48,7 +48,7 @@ jobs:
       - name: Build and restart
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "admin@${{ secrets.DEPLOY_HOST }}" \
-            'cd app && docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build --remove-orphans && docker image prune -f'
+            'cd app && GATEWAY_PUBLIC_URL=${{ env.SITE_URL }} docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build --remove-orphans && docker image prune -f'
 
       - name: Health check
         run: |

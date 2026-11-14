@@ -150,21 +150,38 @@ KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.c
                           "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver", "connections.create"})
 
 
-def fingerprint(scope, route, arguments):
+def omit_policy_defaults(route, values):
+    if route == "policy.update":
+        # This field was added after command records existed. Omission and
+        # its default are the same payload; retain all other payload fields.
+        from .models import ApprovalPolicy
+        approval = values.get("request", {}).get("policy", {}).get("approval", {})
+        if approval.get("max_auto_daily_total_eur") == ApprovalPolicy.model_fields["max_auto_daily_total_eur"].default:
+            approval.pop("max_auto_daily_total_eur")
+    return values
+
+
+def fingerprint(scope, route, arguments, *, policy_defaults=False):
     # agent_id may identify a route target (autonomy), so it is never discarded.
     # Principal metadata and presented credentials are authority, not request payload.
     excluded = {"principal", "actor", "operator", "mandate", "idempotency_key"}
     if route == "connections.create":
         # The replay binds the submitted body, not the host alias or current transport setup.
         excluded.update({"origin", "mcp_served"})
-    payload = {"principal": scope, "route": route, "arguments": json_value({k: v for k, v in arguments.items()
-               if k not in excluded})}
+    values = json_value({k: v for k, v in arguments.items() if k not in excluded})
+    if not policy_defaults:
+        omit_policy_defaults(route, values)
+    payload = {"principal": scope, "route": route, "arguments": values}
     return sha256(canonical_json(payload)).hexdigest()
 
 
 def matches_command(previous, digest, name, route, arguments, saved):
     if previous["digest"] == digest:
         return True
+    if route == "policy.update" and previous["command"] == name:
+        # Also accept records issued while the new default was serialized.
+        if previous["digest"] == fingerprint(previous["principal"], route, arguments, policy_defaults=True):
+            return True
     if saved.get("fingerprint_version") is not None:
         return False
     # Earlier command envelopes remain replayable. Their other path parameters
@@ -173,7 +190,11 @@ def matches_command(previous, digest, name, route, arguments, saved):
               if k not in {"agent_id", "actor", "operator", "mandate", "idempotency_key"}})}
     # Lane B excluded the resolved principal from its earlier payload hashes.
     lane_legacy = {"command": name, "arguments": {k: v for k, v in legacy["arguments"].items() if k != "principal"}}
-    return (previous["digest"] in {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
+    candidates = {sha256(canonical_json(value)).hexdigest() for value in (legacy, lane_legacy)}
+    for value in (legacy, lane_legacy):
+        omit_policy_defaults(route, value["arguments"])
+        candidates.add(sha256(canonical_json(value)).hexdigest())
+    return (previous["digest"] in candidates
             and (route != "autonomy.change" or saved["value"].get("agent_id") == arguments["agent_id"]))
 
 

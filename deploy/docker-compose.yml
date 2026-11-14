@@ -8,6 +8,8 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       - .env
+    environment:
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
     volumes:
       - gateway_data:/data
     restart: unless-stopped

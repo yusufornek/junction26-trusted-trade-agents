@@ -68,7 +68,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         public = service.settings.public_url
         security = TransportSecuritySettings(allowed_hosts=["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "[::1]", "[::1]:*"] +
             ([urlsplit(public).netloc] if public else []),
-            allowed_origins=["http://localhost", "http://localhost:*", "http://127.0.0.1", "http://127.0.0.1:*", "http://[::1]", "http://[::1]:*"] + ([public] if public else []))
+            allowed_origins=[f"{scheme}://{host}{port}" for scheme in ("http", "https")
+                for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
         worker = asyncio.create_task(deliver_notifications())

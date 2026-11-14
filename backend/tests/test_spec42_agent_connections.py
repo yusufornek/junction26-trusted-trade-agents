@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import audit
@@ -12,6 +13,7 @@ from app.api import create_app
 from app.db import Database
 from app.models import PolicyUpdateRequest
 from conftest import OPERATOR_HEADERS, agent_headers, demo_catalog
+from test_verifiable_mandate import buyer as vc_issuer, issue as issue_mandate, AGENT
 
 
 def issue(http, agent="connected-agent", *, idem="issue-key", **changes):
@@ -56,7 +58,11 @@ def test_ac_1_create_once_digest_and_approval_first_mandate(gateway):
                               "client": "claude_code", "key_prefix": value["key_prefix"]}.items()
 
 
-def test_ac_2_existing_agent_keeps_mandate_autonomy_history_and_demo(gateway, need, upstream, tmp_path):
+@pytest.mark.parametrize("authority", ["policy", "signed"])
+def test_ac_2_existing_agent_keeps_mandate_autonomy_history_and_demo(gateway, need, upstream, tmp_path, vc_issuer, authority):
+    if authority == "signed":
+        check_signed_connection(gateway, need, upstream, vc_issuer)
+        return
     demo_catalog(gateway, tmp_path, upstream)
     before = gateway.policy.get().agents["hotel-chain-agent"].model_dump()
     history = [e.model_dump(mode="json") for e in gateway.audit()]
@@ -77,6 +83,72 @@ def test_ac_2_existing_agent_keeps_mandate_autonomy_history_and_demo(gateway, ne
                             json={"quote_id": quote.json()["id"]})
         assert order.status_code == 200, order.text
         assert (order.json()["total"], order.json()["status"], order.json()["agent_id"]) == (1010, "CONFIRMED", "hotel-chain-agent")
+
+
+def check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch=None, authority="signed"):
+    policy = gateway.policy._editable(gateway.policy.get())
+    policy["customers"]["2"] = {}
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
+    token = issue_mandate(vc_issuer, daily=700, order=100)
+    if authority == "policy_and_signed":
+        policy = gateway.policy._editable(gateway.policy.get())
+        policy["agents"][AGENT] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 300,
+            "max_auto_total_eur": 50, "autonomy": "approval_required"}
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
+    elif authority == "signed_with_grant":
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("INSERT INTO agent_autonomy VALUES(?,?)", (AGENT, "approval_required"))
+    with TestClient(create_app(gateway), base_url="http://localhost") as client:
+        headers = {**agent_headers(AGENT), "Agent-Mandate": token}
+        lookup = client.post("/v1/offers", headers=headers, json=need.model_dump(mode="json"))
+        assert lookup.status_code == 200, lookup.text
+        with gateway.db.connect() as conn:
+            effective, _, _ = gateway.mandates.authorize(conn, token, AGENT, "1")
+        before = effective.agents[AGENT].model_dump(mode="json")
+        policy = gateway.policy.get().model_dump(mode="json")
+        history = [e.model_dump(mode="json") for e in gateway.audit()]
+        response = issue(client, AGENT)
+        assert response.status_code == 201, response.text
+        value = response.json()
+        assert value["mandate"] == before
+        assert gateway.policy.get().model_dump(mode="json") == policy
+        assert all(e in [v.model_dump(mode="json") for v in gateway.audit()] for e in history)
+        # Another key, even with a different requested scope, must preserve authority.
+        assert issue(client, AGENT, idem="another", customer_ids=["2"]).json()["mandate"] == before
+        with gateway.db.connect() as conn:
+            after, _, _ = gateway.mandates.authorize(conn, token, AGENT, "1")
+        assert after.agents[AGENT].model_dump(mode="json") == before
+        quote = client.post("/v1/quotes", headers={**auth(value), "Agent-Mandate": token}, json={
+            "customer_id": "1", "deliver_by": str(need.deliver_by), "need_ref": lookup.json()["lookup_id"],
+            "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
+        assert quote.status_code == 200, quote.text
+        if monkeypatch:
+            future = audit.utcnow() + timedelta(days=2)
+            monkeypatch.setattr("app.mandates.audit.utcnow", lambda: future)
+            for headers in (auth(value), {**auth(value), "Agent-Mandate": token}):
+                denied = client.post("/v1/orders", headers={**headers, "Idempotency-Key": "expired"},
+                                     json={"quote_id": quote.json()["id"]})
+                assert (denied.status_code, denied.json()["code"]) == (403, "MANDATE_INVALID")
+            # Expired history still identifies an existing agent without granting fallback authority.
+            assert issue(client, AGENT, idem="expired-credential").status_code == 201
+        assert (AGENT in gateway.policy.get().agents) == (authority == "policy_and_signed")
+
+
+@pytest.mark.parametrize("authority", ["signed", "signed_with_grant", "policy_and_signed"])
+def test_review_signed_mandate_connection_preserves_authority(gateway, need, upstream, vc_issuer, monkeypatch, authority):
+    check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch, authority)
+
+
+def test_review_existing_connection_cannot_restore_removed_mandate(gateway):
+    with TestClient(create_app(gateway)) as client:
+        value = issue(client).json()
+        assert issue(client, idem="second-key").json()["mandate"] == value["mandate"]
+        policy = gateway.policy._editable(gateway.policy.get())
+        del policy["agents"]["connected-agent"]
+        gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Authority withdrawn"))
+        refused = issue(client, idem="after-withdrawal")
+        assert (refused.status_code, refused.json()["code"]) == (403, "AGENT_NOT_REGISTERED")
+        assert "connected-agent" not in gateway.policy.get().agents
 
 
 def test_ac_3_command_replay_redacts_key_and_conflicting_body_returns_409(gateway):
@@ -203,15 +275,26 @@ def test_ac_9_exact_mcp_path_ping_tools_and_two_dynamic_agent_principals(gateway
 
 
 def test_ac_10_public_origin_and_mcp_disabled_urls_and_contract(gateway):
-    with TestClient(create_app(gateway), base_url="http://localhost:8123") as client:
-        value = issue(client).json()
-        assert value["mcp_url"] == "http://localhost:8123/mcp"
-        assert value["rest_base_url"] == "http://localhost:8123/v1"
+    for origin in ("http://localhost:8123", "http://127.0.0.1", "https://[::1]:8123"):
+        with TestClient(create_app(gateway), base_url=origin) as client:
+            value = issue(client, idem=origin).json()
+            assert value["mcp_url"] == origin + "/mcp"
+            assert value["rest_base_url"] == origin + "/v1"
+            response = client.post(value["mcp_url"], headers={**auth(value), "Origin": origin,
+                "Accept": "application/json, text/event-stream"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            assert response.status_code == 200, response.text
+    with TestClient(create_app(gateway), base_url="https://gateway.example") as client:
+        value = issue(client, idem="external-origin").json()
+        assert value["mcp_url"] is None
+        assert value["rest_base_url"] == "https://gateway.example/v1"
     gateway.settings.public_url = "https://public.example"
     with TestClient(create_app(gateway), base_url="http://localhost") as client:
         value = issue(client, idem="public").json()
         assert value["mcp_url"] == "https://public.example/mcp"
         assert value["rest_base_url"] == "https://public.example/v1"
+        assert rpc(client, auth(value), params=None).status_code == 200
+        assert client.post(value["mcp_url"], headers={**auth(value), "Origin": "https://public.example",
+            "Accept": "application/json, text/event-stream"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 200
         schema = client.get("/openapi.json").json()
         assert schema["paths"]["/v1/connections"]["post"]["responses"]["201"]
         assert set(schema["components"]["schemas"]["Connection"]["properties"]["client"]["enum"]) == {
@@ -220,6 +303,15 @@ def test_ac_10_public_origin_and_mcp_disabled_urls_and_contract(gateway):
         value = issue(client, idem="rest-only").json()
         assert value["mcp_url"] is None and value["rest_base_url"] == "https://public.example/v1"
         assert rpc(client, auth(value)).status_code == 404
+
+
+def test_review_external_fallback_steers_to_rest(gateway):
+    with TestClient(create_app(gateway), base_url="https://gateway.example") as client:
+        value = issue(client).json()
+        assert value["mcp_url"] is None
+        assert value["rest_base_url"] == "https://gateway.example/v1"
+        assert client.get(value["rest_base_url"] + "/me", headers=auth(value)).status_code == 200
+        assert rpc(client, auth(value)).status_code == 421
 
 
 def test_ac_11_scan_audit_logs_replay_and_other_responses_for_secret(gateway, need, upstream, caplog):

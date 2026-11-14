@@ -17,6 +17,11 @@ ledger or audit. `GET /v1/connections` lists public `Connection` records newest 
 including revoked connections. `DELETE /v1/connections/{connection_id}` revokes a key
 immediately for REST and MCP; repeated deletion preserves the first revocation timestamp.
 Creation/revocation are audited by `human:operator`. Agent history and mandates remain.
+Previously used signed buyer mandates also identify existing agents: issuing another key
+returns their effective limits/autonomy without creating fallback policy authority.
+Expired or revoked VC history remains identity evidence only; requests still revalidate
+the VC. If a prior connection has lost its policy mandate and has no signed authority,
+issuance returns `403 AGENT_NOT_REGISTERED` until authority is explicitly restored.
 
 A new agent receives an `approval_required` mandate for the selected customers and
 `approval.max_auto_daily_total_eur` (default 5,000 EUR). Existing agents retain their
@@ -29,8 +34,11 @@ The gateway serves Streamable HTTP MCP at exactly `/mcp`, with its session manag
 the gateway lifespan and an authenticated principal for each request. Bearer keys are
 required even for ping and tool listing; tools audit as `agent:<agent_id>`. No agent is
 bound at gateway startup. `GATEWAY_PUBLIC_URL` supplies the public origin for `mcp_url`
-(`<origin>/mcp`) and `rest_base_url` (`<origin>/v1`); otherwise the request origin is used.
-`create_app(..., serve_mcp=False)` disables MCP and returns `mcp_url: null`.
+(`<origin>/mcp`) and `rest_base_url` (`<origin>/v1`). Without it, REST uses the request
+origin; MCP advertises only loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). External
+request hosts receive `mcp_url: null` and use REST until a public origin is configured.
+`create_app(..., serve_mcp=False)` disables MCP, returns `mcp_url: null`, and removes
+the MCP catalog entry and server-card route.
 Run one gateway process per database; do not start a second MCP process on its database.
 The `chatgpt` client value records a preference only: OAuth sign-in is not implemented
 by this connection API. Tests run offline against isolated databases and in-process MCP:
@@ -919,6 +927,9 @@ requires its existing `Idempotency-Key`; quote, cancel, approve and reject also 
 Buyer suspension, resumption and local mandate revocation use the same command boundary and header.
 MCP quote and cancel accept `idempotency_key`. Reuse a key only for the
 same principal, command route (including every target/path parameter) and payload.
+The added policy approval daily limit is omitted from command fingerprints at its default
+(5,000 EUR). Commands saved before that field existed, and commands saved with its
+default serialized, both replay; a changed non-default limit still conflicts.
 The shared replay guard rechecks current authorization before exposing any saved result: ownership,
 customer mandates, buyer organisation/role, trusted revocation issuer and operator permissions as applicable.
 Revoked/invalid credentials are rejected again at the transport boundary. Quote/order/approval guards
