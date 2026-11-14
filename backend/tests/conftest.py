@@ -113,6 +113,7 @@ def gateway(tmp_path, registered_agents, product_rows):
         defaults = Policy._load(policy_path).model_dump(mode="json", include=set(PolicyDocument.model_fields))
         for agent_id in registered_agents:
             defaults["agents"][agent_id] = {"customer_ids": ["1"], "max_auto_daily_total_eur": 5000,
+                                            "autonomy": "autonomous_within_limits",
                                             "note": "Explicit fixture mandate for existing lifecycle tests."}
         policy_path = tmp_path / "defaults.yaml"
         policy_path.write_text(yaml.safe_dump(defaults))

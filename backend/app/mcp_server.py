@@ -21,7 +21,11 @@ PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
-                "policy only tightens its per-order and daily limits. Quote/order bind and expose mandate metadata; "
+                "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
+                "(default when omitted) and autonomous_within_limits; the stricter buyer/policy level wins. "
+                "approval_required adds autonomy_level and routes otherwise acceptable orders to PENDING_APPROVAL. "
+                "GET /v1/agents/{id}/track-record gives advisory readiness; only an operator or the buyer_admin may "
+                "POST /v1/agents/{id}/autonomy with level and reason. Quote/order bind and expose mandate metadata; "
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
@@ -118,7 +122,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         "Quotes have Ed25519 detached JWS signatures: download public /.well-known/jwks.json, save the quote, "
         "then run scripts/verify_quote.py quote.json --jwks jwks.json --customer ID offline. "
         "RFC 8785 quote_payload preserves the spec 10/13 promise with decimal-string money/quantities, provenance and price_commitment=gateway-locked. The protected quote_version=2 header adds quote_integrity, a SHA-256 digest of canonical immutable fields (excluding signature/status/live_calls, numbers as decimal strings). Both earlier unversioned formats remain verifiable until expiry. "
-        "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS))
+        "Order receipts include commitment=gateway-simulated; get_order_ubl exports UBL 2.1 XML. " + WARNINGS + MANDATE_HELP))
     server.keys = gateway.settings.keys or Credentials()
     server.gateway = gateway
     server.agent_id = agent_id

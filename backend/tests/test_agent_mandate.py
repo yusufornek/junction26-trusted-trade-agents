@@ -33,6 +33,7 @@ def need(need):
 def set_mandate(gateway, *, daily=2500, per_order=None, agent=AGENT):
     body = gateway.policy.get().model_dump(mode="json")
     body["agents"][agent] = {"customer_ids": ["1"], "max_auto_total_eur": per_order,
+                              "autonomy": "autonomous_within_limits",
                               "max_auto_daily_total_eur": daily, "note": "Granted by Ada"}
     return gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
 

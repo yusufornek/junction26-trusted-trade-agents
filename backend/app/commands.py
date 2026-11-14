@@ -1,6 +1,7 @@
 """Shared command boundary used by current and future transports."""
 import inspect
 import json
+from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
 
@@ -12,6 +13,8 @@ from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TRACE, correlation_id
 
 
 def json_value(value):
+    if is_dataclass(value):
+        return json_value(asdict(value))
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, dict):

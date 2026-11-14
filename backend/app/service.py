@@ -26,6 +26,8 @@ class Gateway:
         self.mandates = Mandates(self.db, self.policy, self.catalog)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy, self.mandates)
         self.orders = Orders(self.db, self.catalog, self.valio, self.policy, self.signing, self.mandates)
+        from .autonomy import Autonomy
+        self.autonomy = Autonomy(self)
         from .foundation import Outbox
         from .limits import Limiter, SourceLimiter
         from .commands import install
@@ -39,6 +41,7 @@ class Gateway:
         install(self, self, "find_offers", "lookup")
         install(self, self.policy, "update", "mutation")
         install(self, self.mandates, "revoke", "mutation")
+        install(self, self.autonomy, "change", "mutation")
 
         def after_commit():
             self.anchoring.trigger()

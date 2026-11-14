@@ -110,7 +110,32 @@ class Orders:
                              order_id=inputs.get("order_id"), quote_id=inputs.get("quote_id"),
                              data={"inputs": inputs, "error": error.code, "live_calls": counter.live().model_dump(),
                                    **({"stated_name": inputs["stated_name"]} if "stated_name" in inputs else {}), **error.data})
+                if any(h.get("rule") == "hard_constraint_violation" for h in error.data.get("rule_hits", [])):
+                    if inputs.get("order_id"):
+                        order = self._order(conn, inputs["order_id"])
+                        self._suggest_review(conn, order, "hard_constraint_refusal")
             raise
+
+    def _suggest_review(self, conn, order, reason):
+        policy = self.policy.get()
+        row = policy.agents.get(order.agent_id)
+        level = (row.autonomy or policy.autonomy.default) if row else policy.autonomy.default
+        if order.mandate is not None:
+            if order.mandate.autonomy == "approval_required":
+                return
+            if row is None:
+                level = order.mandate.autonomy or policy.autonomy.default
+                grant = conn.execute("SELECT level FROM agent_autonomy WHERE agent_id=?", (order.agent_id,)).fetchone()
+                if grant and grant[0] == "approval_required":
+                    return
+        if level == "autonomous_within_limits":
+            from .foundation import emit
+            cause = conn.execute("SELECT id,ts FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+            # The refusal/rejection audit entry is the event's checkpoint. Keep one audit
+            # decision in the timeline while publishing a second event from the same cause.
+            emit(conn, "AUTONOMY_REVIEW_SUGGESTED", "system", cause["ts"], cause["id"],
+                 {"agent_id": order.agent_id, "customer_id": order.customer_id, "reason": reason},
+                 order.id, order.quote_id)
 
     @staticmethod
     def _quote(conn, quote_id):
@@ -336,6 +361,9 @@ class Orders:
                          "outcome": order.status, **mandate_evidence(record),
                          "rule_hits": [h.model_dump() for h in result.hits], "fit_scores": {o.product_id: o.fit for o in lines},
                          "live_calls": counter.live().model_dump()})
+            if order.status == "REJECTED":
+                self._suggest_review(conn, order, "hard_constraint_refusal" if any(
+                    h.rule == "hard_constraint_violation" for h in result.hits) else "policy_rejection")
             return order
 
     def _violations(self, conn, quote):
@@ -459,6 +487,10 @@ class Orders:
         changes = []
         with self.db.connect(write=True) as conn:
             order = self._order(conn, order_id)
+            from .autonomy import authorize_review
+            from .foundation import PRINCIPAL
+            principal = PRINCIPAL.get()
+            authorize_review(self.policy.get(), principal, order)
             if order.status != "PENDING_APPROVAL":
                 raise DomainError("INVALID_TRANSITION", "Only PENDING_APPROVAL orders can be approved or rejected")
             if approve and evidence_revision is not None and evidence_revision != order.evidence_revision:
@@ -502,13 +534,15 @@ class Orders:
             if not changes:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
+                order.approval_side = "buyer" if principal and principal.kind == "buyer_user" else "valio_operator"
                 self._sign_receipt(order, quote, "operator")
             self._save_order(conn, order)
             self._reserve(conn, order)
             if approve and order.mandate is not None:
                 self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
-                    "evidence_revision": order.evidence_revision, **mandate_evidence(order.mandate),
+                    "evidence_revision": order.evidence_revision, "approval_side": order.approval_side,
+                    **mandate_evidence(order.mandate),
                     "rule_hits": [h.model_dump() for h in order.policy.hits],
                     "fit_scores": {o.product_id: o.fit for o in order.lines},
                     "warnings": {o.product_id: [w.code for w in o.warnings] for o in order.lines},
@@ -522,6 +556,8 @@ class Orders:
                 audit.append(conn, actor or f"human:{approver}", "APPROVE" if approve else "REJECT",
                              f"Human {approver} {'approved' if approve else 'rejected'} the order.",
                              order_id=order.id, quote_id=quote.id, data=data)
+                if not approve:
+                    self._suggest_review(conn, order, "human_rejection")
         # Leave the writer transaction successfully so the pending revision and its audit survive the 409.
         if changes:
             raise DomainError("EVIDENCE_CHANGED", "Order evidence changed; review the refreshed order before approving.",

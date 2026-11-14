@@ -10,11 +10,15 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+AutonomyLevel = Literal["approval_required", "autonomous_within_limits"]
+
+
 class MandateRecord(Model):
     id: str
     issuer: str
     limits: dict[str, float]
     valid_until: datetime
+    autonomy: AutonomyLevel | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class Quantity(Model):
@@ -335,6 +339,7 @@ class Order(Model):
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
+    approval_side: Literal["buyer", "valio_operator"] | None = Field(default=None, description="Organisation side that signed the human decision; null before review or on legacy orders.")
     comment: str | None = None
     cancelled_by: str | None = Field(default=None, description="Human name or placing agent ID responsible for cancellation.")
     cancel_reason: str | None = Field(default=None, description="Reason supplied when the order was cancelled.")
@@ -548,6 +553,7 @@ class IdentityPolicy(Model):
 
 
 class AgentMandate(Model):
+    autonomy: AutonomyLevel | None = Field(default=None, description="Omission uses policy.autonomy.default; new agents require sign-off by default.")
     rate_limits: RateLimits | None = None
     customer_ids: list[str] = Field(min_length=1, description="Customers this agent may quote and order for.")
     max_auto_total_eur: float | None = Field(default=None, ge=0, description="Optional per-order ceiling; the lower of this and the global ceiling applies.")
@@ -587,11 +593,67 @@ class EffectiveConstraints(Model):
     exclude_allergens: list[ConstraintSource] = Field(default_factory=list)
 
 
+class AutonomyPromotion(Model):
+    min_approved_unchanged: int = Field(default=5, ge=0, strict=True)
+    max_rejection_share: float = Field(default=0.1, ge=0, le=1)
+    days_since_last_rejection_or_refusal: int = Field(default=7, ge=0, strict=True)
+
+
+class AutonomyPolicy(Model):
+    default: AutonomyLevel = "approval_required"
+    promotion: AutonomyPromotion = Field(default_factory=AutonomyPromotion)
+
+
+class AutonomyRecommendation(Model):
+    eligible: bool
+    reasons: list[str]
+
+
+class AgentTrackRecord(Model):
+    agent_id: str
+    window_days: int
+    window_start: datetime
+    window_end: datetime
+    orders_placed: int
+    approved_unchanged: int
+    rejected: int
+    expired: int
+    evidence_changes: int
+    cancellations: int
+    hard_constraint_refusals: int
+    average_approval_time_seconds: float | None
+    approved_unchanged_share: float
+    rejection_share: float
+    last_rejection_at: datetime | None
+    last_hard_constraint_refusal_at: datetime | None
+    autonomy_recommendation: AutonomyRecommendation
+
+
+class AutonomyChange(Model):
+    level: AutonomyLevel
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value):
+        if not value.strip():
+            raise ValueError("reason must not be blank")
+        return value.strip()
+
+
+class AutonomyChangeResult(Model):
+    agent_id: str
+    level: AutonomyLevel
+    reason: str
+    track_record: AgentTrackRecord
+
+
 PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE_UNCONFIRMED",
                       "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN"}
 
 
 class PolicyDocument(Model):
+    autonomy: AutonomyPolicy = Field(default_factory=AutonomyPolicy)
     organisations: dict[str, Organisation] = Field(default_factory=dict)
     identities: dict[str, IdentityPolicy] = Field(default_factory=dict)
     rate_limits: RateLimits = Field(default_factory=RateLimits)

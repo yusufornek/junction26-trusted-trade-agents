@@ -114,6 +114,12 @@ def require_operator(principal: Principal = Depends(resolve_principal)):
     return principal
 
 
+def require_reviewer(principal: Principal = Depends(resolve_principal)):
+    if not principal.operator and not (principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}):
+        raise DomainError("OPERATOR_REQUIRED", "A buyer approver or operator credential is required", 403)
+    return principal
+
+
 def check_owner(obj, agent_id, code):
     # Missing ownership on a legacy record never grants an agent access.
     if agent_id is not None and obj.agent_id != agent_id:

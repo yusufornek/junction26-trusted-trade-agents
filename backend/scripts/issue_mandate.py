@@ -26,6 +26,7 @@ def main(argv=None):
     parser.add_argument("--daily-limit", type=float)
     parser.add_argument("--days", type=float, default=1)
     parser.add_argument("--category", action="append")
+    parser.add_argument("--autonomy", choices=["approval_required", "autonomous_within_limits"], default="approval_required")
     parser.add_argument("--revoke", action="append", help="Mandate jti to revoke; repeat for several IDs")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -54,7 +55,7 @@ def main(argv=None):
         token = sign_jwt(key, claims, kid=kid, typ="JWT")
     else:
         subject = {"agent_id": args.agent, "customer_id": args.customer, "max_auto_total_eur": args.order_limit,
-                   "max_auto_daily_total_eur": args.daily_limit}
+                   "max_auto_daily_total_eur": args.daily_limit, "autonomy": args.autonomy}
         if args.category:
             subject["categories"] = args.category
         claims = {"iss": args.issuer, "sub": args.agent, "jti": str(uuid4()), "nbf": now,

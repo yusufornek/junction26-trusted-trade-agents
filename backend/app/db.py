@@ -5,6 +5,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_autonomy (
+ agent_id TEXT PRIMARY KEY, level TEXT NOT NULL CHECK(level IN ('approval_required','autonomous_within_limits'))
+);
 CREATE TABLE IF NOT EXISTS commands (
  principal TEXT NOT NULL, key TEXT NOT NULL, command TEXT NOT NULL, digest TEXT NOT NULL,
  result TEXT NOT NULL, PRIMARY KEY(principal,key)
