@@ -185,3 +185,29 @@ Scaling requires a separate design for shared limits, serialized writes and audi
 After a networked build, verify both healthchecks, public HTTP/HTTPS, SPA deep links, API authentication,
 streaming protocol routes implemented by this checkout, the full buyer/approval flow, and persistence
 after container recreation. Exercise reset and backup/restore on disposable demo state first.
+
+## Live demo server (14.11)
+
+**https://trustedtrade.vps.webdock.cloud** — Webdock KVM in Europe, 4 vCPU / 6 GB / 30 GB NVMe, Ubuntu 24.04,
+IPv4 `193.181.215.1`. Docker + Compose from Docker's apt repository, 2 GB swap, `ufw` allowing only 22/80/443.
+SSH is key-only (Webdock default); shell user `admin`, in the `docker` group so deploys need no sudo. Keys are
+assigned in the Webdock panel under *Shell Users*.
+
+- **Checkout:** `~/app` (synced, not a git clone — the server needs no GitHub access).
+- **Secrets:** `~/app/deploy/.env`, mode 600, never synced. `OPERATOR_TOKEN` and `AGENT_KEYS` were generated
+  on the server with `gen_keys.py`, so they differ from anyone's local `.env.local`. `ANCHOR_*` is empty
+  (Polygon anchoring off) until the wallet owner decides otherwise.
+- **Operator sign-in:** read the token in your own terminal, it is not printed anywhere else:
+  `ssh admin@193.181.215.1 "grep '^OPERATOR_TOKEN=' ~/app/deploy/.env | cut -d= -f2-"`
+- **Deploys:** every push to `main` runs `.github/workflows/deploy.yml`: rsync the checkout (excluding `.git`,
+  `.env*`, `deploy/.env`, build output and the raw catalog), `docker compose up -d --build --remove-orphans`,
+  then poll `/health` over HTTPS. A failed image build leaves the running containers in place; a failed health
+  check turns the run red. Newer pushes cancel an older deploy in progress. Run it by hand from the Actions tab
+  (`workflow_dispatch`) to redeploy without a commit.
+- **CI credentials:** a dedicated ed25519 deploy key (`github-actions-deploy@trusted-trade`, no agent/port
+  forwarding, no pty) in `admin`'s `authorized_keys`, and repo secrets `DEPLOY_SSH_KEY`, `DEPLOY_HOST`,
+  `DEPLOY_KNOWN_HOSTS` (host key pinned, fingerprint `SHA256:K3yf4A+b1SYV2j+YwsMM875YChC15iKrLEH/7v09Tgs`).
+  Re-adding keys in the Webdock panel can rewrite `authorized_keys`; if deploys start failing with
+  "Permission denied", put the deploy key back.
+- **Freeze before judging:** pushes deploy immediately. Before the demo, stop merging to `main` or disable the
+  workflow, so a late "live verification pending" commit cannot replace a working build on stage.

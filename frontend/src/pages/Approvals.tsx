@@ -49,7 +49,10 @@ export default function Approvals() {
             onChange={(e) => setComment(e.target.value)}
           />
         </label>
-        <LiveDot label={`${data?.length ?? 0} waiting`} />
+        {/* Same height as a field, so the chip sits on the inputs' centre line rather than their bottom edge. */}
+        <div className="flex h-9 items-center">
+          <LiveDot label={`${data?.length ?? 0} waiting`} />
+        </div>
       </Card>
 
       {actionError ? <ErrorNote error={actionError} /> : null}
@@ -79,7 +82,8 @@ export default function Approvals() {
                   </p>
                 </div>
               </div>
-              <div className="text-right">
+              {/* ml-auto keeps the amount on the right edge when it wraps under the title on a phone. */}
+              <div className="ml-auto text-right">
                 <div className="num text-[24px] font-semibold">{eur(order.total, order.currency)}</div>
                 <div className="label">
                   price locked · <Countdown to={order.expires_at} />
@@ -106,7 +110,7 @@ export default function Approvals() {
                     {num(l.quantity_sales_units ?? l.units_needed)} {l.sales_unit}
                   </span>
                   <span className="text-ink-muted">at {eur(l.unit_price, l.currency)} each</span>
-                  <span className="text-ink-soft">#{l.product_id}</span>
+                  <span className="text-ink-muted">#{l.product_id}</span>
                   <span className="ml-auto num font-medium">{eur(l.total, l.currency)}</span>
                   <div className="w-full">
                     <WarningChips warnings={l.warnings} />

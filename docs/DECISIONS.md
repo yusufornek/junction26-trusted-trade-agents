@@ -5,6 +5,16 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 - 2026-11-14 — **The gateway remembers purchase rhythms and suggests replenishment** (business teammate's
   proposal + Gökalp): per-customer purchase memory, detected cadence and quantity, suggestions the buyer's agent can
   prepare as a lookup or turn into a recurring order over MCP; suggestions never order by themselves (spec 41).
+- 2026-11-14 — **Console theme is Valio Aimo blue-and-white**, replacing the dark rail and near-black buttons —
+  the product is presented to Valio Aimo, whose identity is blue and white. Values come from valioaimo.fi's own
+  CSS: navy `#002f6d` (rail), Valio blue `#003388` (primary actions, charts, focus), Aimo brand `#005670`,
+  Aimo light `#d1dde3`, page `#f2f7f8`. Status colours keep their meaning and are never replaced by the brand:
+  green confirmed/covered, amber pending, coral rejected, grey cancelled/expired. Tokens live in
+  `frontend/src/index.css` only.
+- 2026-11-14 — **Frontend has a fixture mode for design review** (`npm run dev:mock`, port 5174): the whole
+  console renders from `frontend/src/mock.ts` without a gateway or operator token, with a visible "MOCK DATA"
+  badge. The flag is compiled out of production builds — reviewers (human or agent) can inspect every screen
+  in parallel without sharing the in-memory operator token or mutating the demo database.
 - 2026-11-14 — **Follow the organiser's mock-API answers** (spec 39): whole sales units everywhere; availability
   ≥ 999999 = unknown but orderable (informational `AVAILABILITY_UNCONFIRMED`); empty availability = `NOT_AVAILABLE`
   (reject); `closingTime` = order cut-off for its delivery date; Valio calls paced at ≤ 5/s and a 429 pauses

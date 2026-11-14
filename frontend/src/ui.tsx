@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { TriangleAlert } from "lucide-react";
 import { ApiError, type OrderStatus, type Warning } from "./api";
 
 export const eur = (n: number | null | undefined, currency = "EUR") =>
@@ -48,13 +49,14 @@ export function Metric({
   );
 }
 
+// Status colours carry meaning (green done, amber waiting on a human, coral refused, grey over); blue is only "in play".
 const STATUS_STYLE: Record<string, string> = {
   CONFIRMED: "bg-positive-soft text-positive",
   PENDING_APPROVAL: "bg-warn-soft text-warn",
   REJECTED: "bg-negative-soft text-negative",
   EXPIRED: "bg-chip text-ink-muted",
   CANCELLED: "bg-chip text-ink-muted",
-  OPEN: "bg-chip text-ink-muted",
+  OPEN: "bg-brand-soft text-brand",
   ACCEPTED: "bg-positive-soft text-positive",
 };
 
@@ -72,6 +74,7 @@ export function WarningChips({ warnings }: { warnings: Warning[] }) {
     <div className="flex flex-wrap gap-1.5">
       {warnings.map((w) => (
         <span key={w.code} className="chip bg-warn-soft text-warn" title={w.text}>
+          <TriangleAlert size={11} strokeWidth={2.25} aria-hidden />
           {w.code.replaceAll("_", " ").toLowerCase()}
         </span>
       ))}
@@ -80,13 +83,13 @@ export function WarningChips({ warnings }: { warnings: Warning[] }) {
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="py-12 text-center text-[13px] text-ink-soft">{children}</div>;
+  return <div className="py-12 text-center text-[13px] text-ink-muted">{children}</div>;
 }
 
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2 py-12 justify-center text-[13px] text-ink-soft">
-      <span className="size-3 rounded-full border-2 border-line border-t-ink animate-spin" />
+    <div className="flex items-center justify-center gap-2 py-12 text-[13px] text-ink-muted" role="status">
+      <span className="size-3.5 animate-spin rounded-full border-2 border-brand-soft border-t-brand" />
       {label}
     </div>
   );
@@ -166,8 +169,9 @@ export function Countdown({ to, className = "" }: { to: string; className?: stri
   const mins = Math.floor(left / 60000);
   const secs = Math.floor((left % 60000) / 1000);
   const urgent = left < 5 * 60000;
+  // Tabular digits: a ticking clock must not shift the row it sits in every second.
   return (
-    <span className={`${urgent ? "text-negative" : "text-ink-muted"} ${className}`}>
+    <span className={`tabular-nums ${urgent ? "text-negative" : "text-ink-muted"} ${className}`}>
       {mins}:{String(secs).padStart(2, "0")} left
     </span>
   );
