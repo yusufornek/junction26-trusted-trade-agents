@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from hashlib import sha256
 from secrets import compare_digest, token_hex, token_urlsafe
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, Request
 from typing import Annotated
@@ -11,6 +12,7 @@ from . import audit
 from .auth import Principal, require_operator
 from .db import DomainError
 from .models import AgentMandate, Connection, ConnectionRequest, NewConnection
+from .mandates import decode
 
 router = APIRouter(prefix="/v1/connections", tags=["connections"])
 
@@ -23,6 +25,34 @@ class Connections:
     def __init__(self, gateway):
         self.gateway = gateway
 
+    def _existing_mandate(self, conn, agent_id, policy):
+        """Project known authority without granting or persisting purchasing rights.
+
+        Successful VC history identifies an agent even after expiry/revocation.
+        Requests must still present a valid VC; this projection never authorizes them.
+        """
+        row = policy.agents.get(agent_id)
+        for stored in conn.execute("SELECT jwt FROM mandate_credentials ORDER BY last_used DESC"):
+            subject = decode(stored[0])[1]["vc"]["credentialSubject"]
+            if subject["agent_id"] != agent_id:
+                continue
+            grant = conn.execute("SELECT level FROM agent_autonomy WHERE agent_id=?", (agent_id,)).fetchone()
+            buyer_level = subject.get("autonomy", policy.autonomy.default)
+            operator_level = (row.autonomy or policy.autonomy.default) if row else (grant[0] if grant else buyer_level)
+            customers = [subject["customer_id"]]
+            if row and subject["customer_id"] not in row.customer_ids:
+                raise DomainError("CUSTOMER_NOT_IN_MANDATE", "The current policy excludes the signed mandate customer", 403)
+            return AgentMandate(customer_ids=customers,
+                autonomy="approval_required" if "approval_required" in (buyer_level, operator_level) else "autonomous_within_limits",
+                max_auto_total_eur=min(subject["max_auto_total_eur"], policy.approval.max_auto_total_eur,
+                    row.max_auto_total_eur if row and row.max_auto_total_eur is not None else float("inf")),
+                max_auto_daily_total_eur=min(subject["max_auto_daily_total_eur"],
+                    row.max_auto_daily_total_eur if row else float("inf")))
+        if row is None and conn.execute("SELECT 1 FROM connections WHERE agent_id=?", (agent_id,)).fetchone():
+            # Removing a policy mandate must not be undone by credential issuance.
+            raise DomainError("AGENT_NOT_REGISTERED", "The existing agent has no current mandate; restore authority explicitly", 403)
+        return row
+
     def create(self, body: ConnectionRequest, principal: Principal, origin: str, mcp_served: bool):
         require_operator(principal)
         with self.gateway.db.connect(write=True) as conn:
@@ -34,7 +64,7 @@ class Connections:
                 known.update(organisation.customer_ids)
             if any(customer not in known for customer in body.customer_ids):
                 raise DomainError("VALIDATION_ERROR", "customer_ids must contain known customer identifiers", 422)
-            mandate = policy.agents.get(body.agent_id)
+            mandate = self._existing_mandate(conn, body.agent_id, policy)
             if mandate is None:
                 mandate = AgentMandate(customer_ids=body.customer_ids, autonomy="approval_required",
                     max_auto_daily_total_eur=policy.approval.max_auto_daily_total_eur)
@@ -54,7 +84,9 @@ class Connections:
                       "client": body.client, "key_prefix": secret[:8]})
             return NewConnection(connection_id=connection_id, agent_id=body.agent_id, client=body.client,
                 key_prefix=secret[:8], created_at=now, key=secret,
-                mcp_url=origin + "/mcp" if mcp_served else None, rest_base_url=origin + "/v1",
+                mcp_url=origin + "/mcp" if mcp_served and (self.gateway.settings.public_url or
+                    urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}) else None,
+                rest_base_url=origin + "/v1",
                 mandate=mandate.model_copy(update={"autonomy": mandate.autonomy or policy.autonomy.default}))
 
     def list(self, principal):

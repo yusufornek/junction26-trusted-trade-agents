@@ -617,7 +617,7 @@ class Connection(Model):
 
 class NewConnection(Connection):
     key: str | None = Field(repr=False, description="Secret returned only on initial creation; null on an idempotent replay.")
-    mcp_url: str | None
+    mcp_url: str | None = Field(description="Public origin plus /mcp when served. Without GATEWAY_PUBLIC_URL, only loopback request origins are advertised; otherwise null (use REST).")
     rest_base_url: str
     mandate: AgentMandate
 

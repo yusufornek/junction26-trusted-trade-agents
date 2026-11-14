@@ -18,6 +18,53 @@ from test_verifiable_mandate import buyer as vc_issuer, issue
 KEYED_WRITES = ("create_quote", "place_order", "cancel", "approve", "reject", "update", "reset", "revoke", "change", "find_offers")
 
 
+@pytest.mark.parametrize("old_field_present", [False, True])
+@pytest.mark.parametrize("version", [None, 2])
+def test_review_policy_default_fingerprint_upgrade(gateway, old_field_present, version):
+    from copy import deepcopy
+    from hashlib import sha256
+    from app.canonical import canonical_json
+    from conftest import OPERATOR_HEADERS
+
+    body = {"policy": gateway.policy._editable(gateway.policy.get()), "updated_by": "Operator"}
+    body["policy"]["approval"].pop("max_auto_daily_total_eur", None)
+    with TestClient(create_app(gateway)) as client:
+        headers = {**OPERATOR_HEADERS, "Idempotency-Key": "pre-upgrade-policy"}
+        first = client.put("/v1/policy", headers=headers, json=body)
+        assert first.status_code == 200, first.text
+        # Reconstruct the previous release's serialized request and v2 envelope,
+        # independently of the current fingerprint implementation.
+        old_request = PolicyUpdateRequest.model_validate(body).model_dump(mode="json")
+        if not old_field_present:
+            old_request["policy"]["approval"].pop("max_auto_daily_total_eur")
+        with gateway.db.connect(write=True) as conn:
+            row = conn.execute("SELECT * FROM commands WHERE key=?", ("pre-upgrade-policy",)).fetchone()
+            payload = {"principal": row["principal"], "route": "policy.update",
+                       "arguments": {"request": old_request, "reset": False}}
+            saved = json.loads(row["result"])
+            assert saved["fingerprint_version"] == 2
+            if version is None:
+                saved.pop("fingerprint_version")
+                payload = {"command": "update", "arguments": {"request": old_request, "reset": False}}
+            if not old_field_present:
+                saved["value"]["approval"].pop("max_auto_daily_total_eur")
+            conn.execute("UPDATE commands SET digest=?,result=? WHERE key=?",
+                         (sha256(canonical_json(payload)).hexdigest(), json.dumps(saved), "pre-upgrade-policy"))
+        history = len(gateway.audit())
+        for explicit_default in (False, True):
+            retry = deepcopy(body)
+            if explicit_default:
+                retry["policy"]["approval"]["max_auto_daily_total_eur"] = 5000
+            replay = client.put("/v1/policy", headers=headers, json=retry)
+            assert replay.status_code == 200, replay.text
+            assert replay.json() == first.json()
+        changed = deepcopy(body)
+        changed["policy"]["approval"]["max_auto_daily_total_eur"] = 700
+        conflict = client.put("/v1/policy", headers=headers, json=changed)
+        assert (conflict.status_code, conflict.json()["code"]) == (409, "IDEMPOTENCY_CONFLICT")
+        assert len(gateway.audit()) == history
+
+
 @pytest.mark.parametrize("transport", ["rest", "mcp"])
 @pytest.mark.parametrize("withdrawal", ["scope", "suspension", "revocation", "invalid_header"])
 def test_review_cancel_replay_current_authority(gateway, need, upstream, vc_issuer, transport, withdrawal):

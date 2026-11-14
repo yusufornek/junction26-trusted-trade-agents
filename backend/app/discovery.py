@@ -51,7 +51,7 @@ def base_url(request):
     return request.app.state.gateway.settings.public_url or str(request.base_url).rstrip("/")
 
 
-def catalog(base):
+def catalog(base, mcp_served=True):
     entries = [("mcp", "trusted-trade-agents", "application/mcp-server-card+json", "/mcp/server-card"),
                ("a2a", "procurement", "application/a2a+json", "/.well-known/agent-card.json"),
                ("openapi", "gateway", "application/vnd.oai.openapi+json", "/openapi.json"),
@@ -59,7 +59,7 @@ def catalog(base):
                ("keys", "jwks", "application/jwk-set+json", "/.well-known/jwks.json")]
     return {"specVersion": "1.0", "entries": [
         {"identifier": f"urn:air:valioaimo.fi:{kind}:{name}", "type": mime, "url": base + path}
-        for kind, name, mime, path in entries]}
+        for kind, name, mime, path in entries if mcp_served or kind != "mcp"]}
 
 
 def cached(request, content, media_type):
@@ -83,12 +83,14 @@ def card_schema():
 
 
 def install_routes(app):
-    @app.get("/mcp/server-card", response_class=Response, responses={
-        200: {"content": {"application/mcp-server-card+json": {"schema": card_schema()}}},
-        304: {"description": "Representation unchanged; ETag matched."}},
-             summary="Draft MCP connection card; tools are listed at runtime")
     def card(request: Request):
         return cached(request, server_card(base_url(request)), "application/mcp-server-card+json")
+
+    if app.state.mcp_served:
+        app.add_api_route("/mcp/server-card", card, response_class=Response, responses={
+            200: {"content": {"application/mcp-server-card+json": {"schema": card_schema()}}},
+            304: {"description": "Representation unchanged; ETag matched."}},
+            summary="Draft MCP connection card; tools are listed at runtime")
 
     @app.get("/.well-known/ai-catalog.json", response_class=Response, responses={
         200: {"content": {"application/ai-catalog+json": {"schema": {"type": "object", "required": ["specVersion", "entries"],
@@ -98,7 +100,7 @@ def install_routes(app):
         304: {"description": "Representation unchanged; ETag matched."}},
              summary="Public MCP, A2A, OpenAPI, llms and verification-key discovery")
     def ai_catalog(request: Request):
-        return cached(request, catalog(base_url(request)), "application/ai-catalog+json")
+        return cached(request, catalog(base_url(request), app.state.mcp_served), "application/ai-catalog+json")
 
 
 class MCPTransport:

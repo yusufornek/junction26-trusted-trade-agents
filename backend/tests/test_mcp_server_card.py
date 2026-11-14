@@ -50,6 +50,24 @@ def test_ac_1_catalog_to_card_to_runtime_tools(gateway):
     server._lowlevel_server.version = "drift"
     with pytest.raises(RuntimeError, match="runtime identity"):
         check_server(server)
+    check_disabled_mcp_discovery(gateway)
+
+
+def check_disabled_mcp_discovery(gateway):
+    with TestClient(create_app(gateway, serve_mcp=False)) as client:
+        catalog = client.get("/.well-known/ai-catalog.json")
+        assert catalog.status_code == 200
+        entries = catalog.json()["entries"]
+        assert len(entries) == 4
+        assert all(entry["type"] != "application/mcp-server-card+json" for entry in entries)
+        assert all("/mcp" not in entry["url"] for entry in entries)
+        assert all(client.get(entry["url"]).status_code == 200 for entry in entries)
+        assert client.get("/mcp/server-card").status_code == 404
+        assert "/mcp/server-card" not in client.get("/openapi.json").json()["paths"]
+
+
+def test_review_disabled_mcp_discovery_omits_transport(gateway):
+    check_disabled_mcp_discovery(gateway)
 
 
 def test_ac_2_validates_pinned_draft_schema(gateway):
