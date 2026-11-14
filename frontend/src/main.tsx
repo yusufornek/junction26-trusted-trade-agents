@@ -16,6 +16,10 @@ import Connect from "./pages/Connect";
 import Repeat from "./pages/Repeat";
 import Basket from "./pages/Basket";
 import Consent from "./pages/Consent";
+import Governance from "./pages/Governance";
+import Changes from "./pages/Changes";
+import Team from "./pages/Team";
+import Signup from "./pages/Signup";
 import { MOCK } from "./api";
 import "./index.css";
 
@@ -46,6 +50,10 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/audit" element={<Audit />} />
           <Route path="/policy" element={<Policy />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/governance" element={<Governance />} />
+          <Route path="/changes" element={<Changes />} />
+          <Route path="/team" element={<Team />} />
+          <Route path="/signup" element={<Signup />} />
           <Route path="/trust" element={<Trust />} />
           <Route path="/connect" element={<Connect />} />
           <Route path="*" element={<Navigate to="/" replace />} />
