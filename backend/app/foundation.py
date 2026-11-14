@@ -159,7 +159,7 @@ class Outbox:
 def manifest():
     from mcp_types import LATEST_PROTOCOL_VERSION
     return {"specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
-            "mcp_server_card": {"status": "draft; planned_spec_37", "draft_commit": "526201bbc80231daa40ffcdecfc9da4e54e5dc93"},
+            "mcp_server_card": {"status": "draft; implemented", "draft_commit": "526201bbc80231daa40ffcdecfc9da4e54e5dc93"},
             "a2a": {"version": "1.0", "status": "implemented"}, "ubl": "2.1",
             "vc_data_model": "2.0", "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037",
             "problem_details": "RFC 9457", "standard_webhooks": {"commit": "36afae792227eae8a182a7a1a5711dbdc08a4334", "status": "implemented", "signature": "v1a Ed25519"}},

@@ -67,7 +67,7 @@ class Credentials:
             if compare_digest(digest, expected):
                 principal = Principal(agent_id)
         if principal is None:
-            raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
+            raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
         identity = policy.identities.get(principal.id) if policy else None
         organisation = identity.organisation_id if identity else None
         customers = policy.organisations[organisation].customer_ids if policy and organisation in policy.organisations else (
@@ -97,7 +97,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     source = request.client.host if request.client else "unknown"
     check_source(service, source)
     if credential is None:
-        raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
+        raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
     principal = request.app.state.keys.resolve(credential.credentials, service.policy.get())
     service.source_limiter.refund(source)
     request.state.principal = principal
@@ -146,9 +146,9 @@ class MCPBearerMiddleware:
                 value = headers.get(b"authorization", b"").decode("latin-1")
                 scheme, _, token = value.partition(" ")
                 if scheme.lower() != "bearer" or not token:
-                    raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
+                    raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
                 principal = self.keys.resolve(token, self.gateway.policy.get())
-                if principal.operator or principal.agent_id != self.agent_id:
+                if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 self.gateway.source_limiter.refund(source)
                 principal_token = PRINCIPAL.set(principal)
