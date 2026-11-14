@@ -28,6 +28,8 @@ class Gateway:
         self.buyer = Buyer(self)
         self.lookup = Lookup(self.db, self.catalog, self.valio, self.decisions, self.policy, self.mandates)
         self.orders = Orders(self.db, self.catalog, self.valio, self.policy, self.signing, self.mandates)
+        from .baskets import Baskets
+        self.baskets = Baskets(self)
         from .autonomy import Autonomy
         self.autonomy = Autonomy(self)
         from .foundation import Outbox
@@ -38,9 +40,10 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")
-        for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl"):
+        for name in ("get_order", "get_quote", "list_orders", "timeline", "get_order_ubl", "get_order_receipt"):
             install(self, self.orders, name, "read")
         install(self, self, "find_offers", "lookup")
+        install(self, self.baskets, "find_basket_offers", "lookup")
         install(self, self.policy, "update", "mutation")
         install(self, self.mandates, "revoke", "mutation")
         install(self, self.autonomy, "change", "mutation")

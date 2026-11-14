@@ -40,3 +40,5 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 41 | Frontend: sign-in, team management (roles), connect tabs on buyer and Valio side, OAuth consent — data contract in FRONTEND.md "Accounts and connections (spec 43)" | frontend teammate | todo |
 | 42 | Agent governance: ownership, policy layers, change requests, versions, simulation, register, pause, alerts, report (spec 44) | Gökalp + Codex | queued |
 | 43 | Frontend: agent register, effective-policy view with sources, policy editor + change-request review, simulation result, pause buttons, alerts, governance report — data contract in FRONTEND.md "Agent governance (spec 44)" | frontend teammate | todo |
+| 44 | Guardrail profiles, approver threshold, four-eyes, anomaly detection + fixes, optional Timestral forecast (spec 45) | Gökalp + Codex | queued |
+| 45 | Frontend: sign-up with business profile, preset review, anomaly cards with proposed fixes, APPROVAL_LIMIT / FOUR_EYES messages — data contract in FRONTEND.md "Guardrail profiles and anomalies (spec 45)" | frontend teammate | todo |

@@ -62,10 +62,15 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
                                     (arguments["delivery_id"], subscription_id)).fetchone()
             if delivery is None:
                 raise DomainError("WEBHOOK_NOT_FOUND", "Delivery was not found", 404)
-    elif route == "gateway.find_offers":
-        gateway.mandates.authorize(conn, arguments["mandate"], agent, arguments["need"].customer_id,
-                                  products=[offer["product_id"] for offer in saved["value"]["offers"]],
-                                  bound=("lookup", saved["value"]["lookup_id"]))
+    elif route in {"gateway.find_offers", "baskets.find_basket_offers"}:
+        basket = route == "baskets.find_basket_offers"
+        result = saved["value"]
+        request = arguments["request" if basket else "need"]
+        offers = result["basket"]["lines"] if basket else result["offers"]
+        lookup_id = result["basket_lookup_id" if basket else "lookup_id"]
+        gateway.mandates.authorize(conn, arguments["mandate"], agent, request.customer_id,
+                                  products=[offer["product_id"] for offer in offers],
+                                  bound=("lookup", lookup_id))
     elif route == "orders.create_quote":
         request = arguments["request"]
         row = conn.execute("SELECT data FROM lookups WHERE id=?", (request.need_ref,)).fetchone()
@@ -110,7 +115,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
 
 
 KEYED_ROUTES = frozenset({"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
-                          "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
+                          "orders.reject", "gateway.find_offers", "baskets.find_basket_offers", "policy.update", "mandates.revoke", "autonomy.change",
                            "buyer.control", "buyer.revoke",
                           "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"})
 
@@ -141,7 +146,7 @@ def matches_command(previous, digest, name, route, arguments, saved):
 def install(gateway, target, name, category):
     operation = getattr(target, name)
     signature = inspect.signature(operation)
-    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
+    namespace = next(key for key in ("orders", "policy", "mandates", "autonomy", "buyer", "webhooks", "baskets") if getattr(gateway, key, None) is target) if target is not gateway else "gateway"
     route = f"{namespace}.{name}"
     if category != "read" and route not in KEYED_ROUTES:
         raise RuntimeError(f"No replay authorization registered for {route}")

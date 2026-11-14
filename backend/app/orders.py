@@ -10,7 +10,7 @@ from .mandates import evidence as mandate_evidence
 from .auth import check_owner
 from .catalog import hard_violations
 from .db import DomainError
-from .lookup import availability_for, offer_for, reserved
+from .lookup import availability_for, offer_for, reserved, warning
 from .models import LiveCalls, LookupResult, NeedSpec, Quantity, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
 from .quantities import sales_step
@@ -191,6 +191,7 @@ class Orders:
                 order = Order.model_validate_json(row["data"])
                 if order.expires_at <= now:
                     order.status = "EXPIRED"
+                    order.order_revision += 1
                     self._sign_receipt(order, self._quote(conn, order.quote_id), "system")
                     self._save_order(conn, order)
                     conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
@@ -228,6 +229,17 @@ class Orders:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
         plan = None
         requested_lines = request.lines
+        from .baskets import stored_basket, bound_need
+        basket = None
+        with self.db.connect() as conn:
+            basket = stored_basket(conn, lookup.lookup_id)
+        if request.basket_ref:
+            if basket is None:
+                raise DomainError("BASKET_NOT_FOUND", "Basket lookup was not found", 404)
+            requested_lines = [QuoteLineRequest(product_id=line.product_id, quantity_sales_units=line.units_needed)
+                               for line in basket.basket.lines]
+            if not requested_lines:
+                raise DomainError("EMPTY_BASKET", "No purchasable basket lines; revise uncovered ingredients", 422)
         if request.plan_ref:
             if request.plan_ref.plan_index >= len(lookup.plans):
                 raise DomainError("INVALID_PLAN_INDEX", "plan_index is outside the stored lookup's plans", 422)
@@ -243,6 +255,8 @@ class Orders:
             if Decimal(str(line.quantity_sales_units)) % step:
                 raise DomainError("INVALID_LOT_SIZE", f"{p.id}: sales quantity must be a multiple of {step}", 422)
         ids = list(products)
+        if lookup.need.substitute_for and lookup.need.substitute_for.product_id not in ids:
+            ids.append(lookup.need.substitute_for.product_id)
         price = self.valio.fetch("price", request.customer_id, request.deliver_by, ids, counter, fresh=True)
         stock = self.valio.fetch("availability", request.customer_id, request.deliver_by, ids, counter, fresh=True)
         now = audit.utcnow()
@@ -259,8 +273,14 @@ class Orders:
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in requested_lines:
                 p = products[line.product_id]
+                need, effective = self.policy.effective_need(bound_need(conn, lookup, p.id))
                 offer = offer_for(p, need, price[p.id], stock[p.id], fit_by_id.get(p.id),
                                   sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id), sources=effective)
+                from .substitution import annotate, functional_categories
+                annotate(offer, need, self.catalog, policy, price)
+                categories = functional_categories(self.catalog, need)
+                if categories is not None and p.category not in categories:
+                    violations.append(f"{p.id}: functional product type does not match (customer_policy)")
                 if offer.unit_price is None or any(w.code == "PRICE_ERROR" for w in offer.warnings):
                     raise DomainError("PRICE_ERROR", f"Cannot lock an invalid price for {p.id}", 502)
                 if offer.currency != "EUR":
@@ -273,7 +293,11 @@ class Orders:
                 lines.append(offer)
             quote = Quote(mandate=record, id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
                           need_ref=request.need_ref, plan_ref=request.plan_ref,
-                          warnings=[w for w in plan.warnings if w.code == "PARTIAL_STOCK"] if plan else [],
+                          basket_ref=request.basket_ref or ({"basket_lookup_id": lookup.lookup_id} if basket else None),
+                          clinical_review=policy.customers[request.customer_id].clinical_review if request.customer_id in policy.customers else None,
+                          warnings=([w for w in plan.warnings if w.code == "PARTIAL_STOCK"] if plan else []) +
+                                   ([warning("PARTIAL_BASKET")] if basket and basket.basket.uncovered else []) +
+                                   ([warning("CLINICAL_REVIEW")] if policy.customers.get(request.customer_id) and policy.customers[request.customer_id].clinical_review == "required" else []),
                           status="OPEN", created_at=now, expires_at=min(expiries),
                           lines=lines, total=round(sum(o.total for o in lines), 2), currency="EUR",
                           hard_constraint_violations=violations, live_calls=counter.live())
@@ -357,6 +381,9 @@ class Orders:
                                                 agent_id=agent_id, customer_id=quote.customer_id,
                                                 policy=policy, warnings=quote.warnings)
             order = Order(mandate=record, id=str(uuid4()), quote_id=quote.id, agent_id=agent_id, idempotency_key=key,
+                          basket_ref=quote.basket_ref,
+                          atomicity=getattr(self.valio, "atomicity", "all-or-none local simulation; no supplier order transmitted") if quote.basket_ref else None,
+                          clinical_review=quote.clinical_review or (policy.customers[quote.customer_id].clinical_review if quote.customer_id in policy.customers else None),
                           status=result.outcome, created_at=now, expires_at=quote.expires_at,
                           total=quote.total, currency=quote.currency, lines=lines, warnings=quote.warnings,
                           policy=result, live_calls=counter.live())
@@ -393,7 +420,17 @@ class Orders:
                                             intent="Legacy quote", quantity=Quantity(value=1, unit="SALES_UNIT"))
         need, effective = self.policy.effective_need(need)
         for line in quote.lines:
-            violations.extend(hard_violations(self.catalog.get(line.product_id), need.required_claims, need.exclude_allergens, effective))
+            if quote.need_ref:
+                from .baskets import bound_need
+                need, effective = self.policy.effective_need(bound_need(conn, lookup, line.product_id))
+            product = self.catalog.get(line.product_id)
+            violations.extend(hard_violations(product, need.required_claims, need.exclude_allergens, effective))
+            from .substitution import functional_categories
+            categories = functional_categories(self.catalog, need)
+            if categories is not None and product.category not in categories:
+                violations.append(f"{product.id}: functional product type does not match (request)")
+            if need.function and (line.fit is None or line.fit < self.policy.get().approval.min_fit_probability):
+                violations.append(f"{product.id}: functional fit is not proven (request)")
         return sorted(set(violations))
 
     @staticmethod
@@ -416,6 +453,8 @@ class Orders:
     @staticmethod
     def _reserve(conn, order):
         conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
+        if order.basket_ref and any(not line.availability.enough for line in order.lines):
+            return  # An incomplete basket never holds a subset of its lines.
         if order.status in {"CONFIRMED", "PENDING_APPROVAL"}:
             for line in order.lines:
                 if line.availability.availability_known:
@@ -435,6 +474,15 @@ class Orders:
                                audit_checkpoints=[r["audit_id"] for r in events],
                                trace_ids=list(dict.fromkeys(r["trace_id"] for r in events)))
             return order
+
+    def get_order_receipt(self, order_id, agent_id=None):
+        # Use the same owned order resource as spec 10's offline receipt verifier.
+        order = Orders.get_order(self, order_id, agent_id)
+        if order.status == "PENDING_APPROVAL":
+            raise DomainError("NOT_DECIDED", "The order is waiting for human approval", 409,
+                              data={"order_id": order.id, "order_revision": order.order_revision,
+                                    "poll_after_seconds": order.poll_after_seconds})
+        return order
 
     def get_order_ubl(self, order_id, document="order", agent_id=None):
         from .ubl import export
@@ -512,6 +560,10 @@ class Orders:
             from .foundation import PRINCIPAL
             principal = PRINCIPAL.get()
             authorize_review(self.policy.get(), principal, order)
+            profile = self.policy.get().customers.get(order.customer_id)
+            if approve and (order.clinical_review == "required" or (profile and profile.clinical_review == "required")):
+                if not principal or principal.kind != "buyer_user" or principal.role != "buyer_approver":
+                    raise DomainError("BUYER_APPROVER_REQUIRED", "Clinical review requires a buyer_approver credential", 403)
             if order.status != "PENDING_APPROVAL":
                 raise DomainError("INVALID_TRANSITION", "Only PENDING_APPROVAL orders can be approved or rejected")
             if approve and evidence_revision is not None and evidence_revision != order.evidence_revision:
@@ -550,8 +602,11 @@ class Orders:
                 order.policy = evaluation
                 order.warnings = quote.warnings
                 changes = evidence_changes(previous, order)
+                if not changes and order.basket_ref and any(not line.availability.enough for line in order.lines):
+                    raise DomainError("BASKET_STOCK_UNAVAILABLE", "All basket lines must be available before approval", 409)
                 if changes:
                     order.evidence_revision += 1
+            order.order_revision += 1
             if not changes:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
@@ -606,6 +661,7 @@ class Orders:
             if any(c <= audit.utcnow() for c in cutoffs):
                 raise DomainError("CUTOFF_PASSED", "Cancellation cutoff has passed")
             order.status = "CANCELLED"
+            order.order_revision += 1
             order.cancelled_by = inputs.get("stated_name") or (actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor)
             order.cancel_reason = reason
             self._sign_receipt(order, self._quote(conn, order.quote_id),

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -81,7 +82,20 @@ class RequestScope(Model):
         return value
 
 
+class FunctionalNeed(Model):
+    product_type: str = Field(min_length=1)
+    intended_use: str = Field(min_length=1)
+    preparation: str | None = None
+    acceptable_units: list[Literal["L", "KG", "SALES_UNIT"]] = Field(min_length=1)
+
+
+class SubstituteFor(Model):
+    product_id: str = Field(min_length=1)
+
+
 class NeedSpec(RequestScope):
+    function: FunctionalNeed | None = Field(default=None, exclude_if=lambda v: v is None)
+    substitute_for: SubstituteFor | None = Field(default=None, exclude_if=lambda v: v is None)
     intent: str = Field(min_length=1, description="Buyer need; the outside agent structures this request.")
     search_terms: list[str] | None = Field(default=None, description="Optional FTS terms, combined with AND.")
     required_claims: list[str] = Field(default_factory=list, description="All must exist as catalog nutritionalClaim IDs.")
@@ -139,6 +153,8 @@ class Product(Model):
     deposits: list[dict[str, Any]] = Field(default_factory=list)
     delivery_reliability: float | None = None
     co2_kg_per_kg: float | None = Field(default=None, description="Product-group average, not an individual product measurement.")
+    density_kg_per_l: float | None = Field(default=None, gt=0, strict=True, exclude_if=lambda v: v is None,
+                                          description="Explicit catalog density evidence; never inferred from product type.")
 
 
 class Provenance(Model):
@@ -165,7 +181,15 @@ class Availability(Model):
         return data
 
 
+class Substitution(Model):
+    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
+    for_product: str = Field(alias="for")
+    differences: list[str]
+    allergen_evidence: list[str]
+
+
 class OfferCard(Model):
+    substitution: Substitution | None = Field(default=None, exclude_if=lambda v: v is None)
     product_id: str
     gtin: str | None = Field(default=None, description="GS1 GTIN of the sales unit, from salesUnitGtin.")
     name: str
@@ -233,12 +257,20 @@ class PolicyResult(Model):
     hits: list[RuleHit]
 
 
+class Shortage(Model):
+    requested: CoveredQuantity
+    best_single_coverage: CoveredQuantity
+    reason: str = Field(description="Plain-language explanation of why this plan combines or partially fulfils the need.")
+
+
 class FulfilmentPlan(Model):
     kind: Literal["single", "split", "partial"]
     lines: list[PlanLine] = Field(min_length=1, max_length=4)
     total: float = Field(ge=0, description="Sum of fixed net EUR line totals at lookup time.")
     coverage: CoveredQuantity = Field(description="Sum of line covers in the need's unit; whole packs may over-cover.")
     uncovered: CoveredQuantity = Field(description="Requested quantity still missing by the deadline; zero for a complete plan.")
+    shortage: Shortage | None = Field(default=None, exclude_if=lambda v: v is None,
+                                     description="Requested and best eligible single-product on-time quantity; present on split and partial plans.")
     warnings: list[Warning] = Field(default_factory=list)
     policy_preview: PolicyResult = Field(description="Side-effect-free current policy evaluation for the caller, including mandate and daily limits. Stock and policy may change before placement; the order result is authoritative.")
 
@@ -271,6 +303,87 @@ class LookupResult(Model):
     warnings: list[Warning] = Field(default_factory=list)
 
 
+class IngredientQuantity(Model):
+    value: float = Field(gt=0, le=1_000_000, strict=True)
+    unit: Literal["L", "KG", "G", "ML", "SALES_UNIT"]
+
+    @field_validator("unit", mode="before")
+    @classmethod
+    def normalize_unit(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class Ingredient(Model):
+    name: str = Field(min_length=1)
+    quantity: IngredientQuantity
+    search_terms: list[str] | None = None
+    required_claims: list[str] = Field(default_factory=list)
+    exclude_allergens: list[str] = Field(default_factory=list)
+    substitutions_allowed: bool
+    density_kg_per_l: float | None = Field(default=None, gt=0, strict=True)
+
+
+class IngredientManifest(Model):
+    version: Literal[1] = 1
+    recipe_name: str = Field(min_length=1)
+    servings: int = Field(gt=0, le=1_000_000, strict=True, description="Base servings for the supplied quantities.")
+    ingredients: list[Ingredient] = Field(min_length=1, max_length=50)
+    yield_note: str | None = None
+
+
+class BasketLookupRequest(RequestScope):
+    manifest: IngredientManifest
+    servings: int | None = Field(default=None, gt=0, le=1_000_000, strict=True,
+                                 description="Target servings; omission preserves manifest.servings.")
+
+
+class IngredientCoverage(Model):
+    ingredient_index: int
+    name: str
+    requested: IngredientQuantity
+    covered: float = Field(ge=0, le=1, description="Fraction of this scaled ingredient covered on time.")
+    product_id: str | None = None
+
+
+class UncoveredIngredient(Model):
+    ingredient_index: int
+    name: str
+    reason: str
+
+
+class IngredientOffers(Model):
+    ingredient_index: int
+    name: str
+    offers: list[OfferCard]
+    chosen_line: str | None = Field(default=None, description="Product ID of the shared basket line.")
+    purchasable_quantity: float | None = None
+    overbuy: Overbuy | None = None
+    coverage: float = Field(default=0, ge=0, le=1)
+    exclusion_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class BasketPlan(Model):
+    lines: list[OfferCard]
+    total: float
+    coverage_by_ingredient: list[IngredientCoverage]
+    uncovered: list[UncoveredIngredient]
+    policy_preview: PolicyResult
+
+
+class BasketLookupResult(Model):
+    context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    basket_lookup_id: str
+    agent_id: str
+    customer_id: str
+    deliver_by: date
+    scaled_manifest: IngredientManifest
+    ingredients: list[IngredientOffers]
+    basket: BasketPlan
+    line_needs: dict[str, NeedSpec] = Field(description="Bound per-SKU ingredient constraints, rechecked at quote, order and approval.")
+    live_calls: LiveCalls
+    decision_calls: int
+
+
 class QuoteLineRequest(Model):
     product_id: str = Field(min_length=1)
     quantity_sales_units: float = Field(gt=0, le=1_000_000, strict=True, description="Explicit whole sales quantity, at most 1,000,000, in allowedLotSize steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE.")
@@ -281,15 +394,24 @@ class PlanRef(Model):
     plan_index: int = Field(ge=0, description="Zero-based index in the stored lookup's plans.")
 
 
+class BasketRef(Model):
+    basket_lookup_id: str = Field(min_length=1)
+
+
 class QuoteRequest(RequestScope):
+    basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None, description="Quote the selected, deduplicated lines of a stored recipe basket; mutually exclusive with lines and plan_ref.")
     lines: list[QuoteLineRequest] | None = Field(default=None, min_length=1, max_length=10)
-    plan_ref: PlanRef | None = Field(default=None, description="Alternative to explicit lines; recheck a stored plan live. Exactly one of lines or plan_ref is required.")
+    plan_ref: PlanRef | None = Field(default=None, description="Recheck a stored plan live. Exactly one of lines, plan_ref or basket_ref is required.")
     need_ref: str | None = Field(default=None, description="Required with explicit lines: stored lookup_id binding fit, preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED.")
 
     @model_validator(mode="after")
     def unique_lines(self):
-        if (self.lines is None) == (self.plan_ref is None):
-            raise ValueError("Exactly one of lines or plan_ref is required")
+        if sum(x is not None for x in (self.lines, self.plan_ref, self.basket_ref)) != 1:
+            raise ValueError("Exactly one of lines, plan_ref or basket_ref is required")
+        if self.basket_ref:
+            if self.need_ref is not None and self.need_ref != self.basket_ref.basket_lookup_id:
+                raise ValueError("need_ref must match basket_ref.basket_lookup_id")
+            self.need_ref = self.basket_ref.basket_lookup_id
         if self.plan_ref:
             if self.need_ref is None:
                 self.need_ref = self.plan_ref.lookup_id
@@ -301,6 +423,8 @@ class QuoteRequest(RequestScope):
 
 
 class Quote(Model):
+    basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
+    clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -329,6 +453,10 @@ class OrderRequest(Model):
 
 
 class Order(Model):
+    basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
+    clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
+    atomicity: str | None = Field(default=None, exclude_if=lambda v: v is None,
+                                 description="Adapter commitment semantics; simulation reserves all basket lines or none locally.")
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     links: dict = Field(default_factory=dict)
@@ -351,6 +479,7 @@ class Order(Model):
     lines: list[OfferCard]
     warnings: list[Warning] = Field(default_factory=list, description="Order-level risks retained from the quoted fulfilment plan.")
     evidence_revision: int = Field(default=1, ge=1, description="Decision evidence revision; starts at 1 and increases when approval refresh changes the facts requiring review.")
+    order_revision: int = Field(default=1, ge=1, description="Durable order revision; increases on every status or decision-evidence change, including approval, rejection, expiry and cancellation. Polls and idempotent retries do not increase it.")
     policy: PolicyResult
     live_calls: LiveCalls
     approver: str | None = None
@@ -361,10 +490,21 @@ class Order(Model):
 
     @computed_field
     @property
-    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP"] | None:
+    def next_action(self) -> Literal["WAIT_FOR_APPROVAL", "STOP", "LOOKUP_REQUIRED"] | None:
         if self.status == "PENDING_APPROVAL":
             return "WAIT_FOR_APPROVAL"
-        return "STOP" if self.status in {"REJECTED", "EXPIRED", "CANCELLED"} else None
+        if self.status == "EXPIRED":
+            return "LOOKUP_REQUIRED"
+        return "STOP" if self.status in {"REJECTED", "CANCELLED"} else None
+
+    @computed_field
+    @property
+    def approval_reason(self) -> str | None:
+        """Summarise the recorded rule hits without inventing evidence of compliance."""
+        details = list(dict.fromkeys(
+            re.sub(r"[.!?]\s+", "; ", " ".join(hit.detail.split()).rstrip(".!?")).replace(" < ", " is below ")
+            for hit in self.policy.hits if hit.detail.strip()))
+        return "; ".join(details) + "." if details else None
 
     @computed_field
     @property
@@ -375,7 +515,7 @@ class Order(Model):
     @classmethod
     def stored_guidance(cls, value):
         if isinstance(value, dict):
-            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds"}}
+            value = {k: v for k, v in value.items() if k not in {"next_action", "poll_after_seconds", "approval_reason"}}
         return value
 
 
@@ -591,7 +731,16 @@ class BuyerJWK(Model):
     use: Literal["sig"] = "sig"
 
 
+class SubstitutionProfile(Model):
+    allowed_brands: list[str] | None = None
+    max_price_increase_pct: float = Field(ge=0, strict=True)
+    pack_size_range: PackSizePreference
+    requires_approval: bool
+
+
 class CustomerConstraints(Model):
+    substitution_profile: SubstitutionProfile | None = None
+    clinical_review: Literal["required"] | None = None
     mandate_issuers: dict[str, list[BuyerJWK]] = Field(default_factory=dict, description="Trusted buyer issuer IDs mapped to public Ed25519 JWKs; operator onboarding only.")
     required_claims: list[str] = Field(default_factory=list)
     exclude_allergens: list[str] = Field(default_factory=list)
@@ -664,7 +813,8 @@ class AutonomyChangeResult(Model):
 
 
 PROTECTED_WARNINGS = {"PRICE_ERROR", "AVAILABILITY_ERROR", "SIZE_UNKNOWN", "SIZE_UNCONFIRMED",
-                      "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN"}
+                      "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_FIT_SCORE", "CUTOFF_UNKNOWN",
+                      "CLINICAL_REVIEW", "SUBSTITUTION_PROFILE", "PARTIAL_BASKET"}
 
 
 class PolicyDocument(Model):

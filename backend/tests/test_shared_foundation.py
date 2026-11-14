@@ -30,10 +30,10 @@ def test_review_all_keyed_commands_reauthorize(gateway, need, upstream, command)
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     organisations(gateway)
-    # Buyer and webhook commands have replay coverage in their feature test modules.
+    # Buyer, webhook and basket commands have replay coverage in their feature test modules.
     assert gateway.keyed_routes == {"orders.create_quote", "orders.place_order", "orders.cancel", "orders.approve",
                                    "orders.reject", "gateway.find_offers", "policy.update", "mandates.revoke", "autonomy.change",
-                                   "buyer.control", "buyer.revoke",
+                                   "buyer.control", "buyer.revoke", "baskets.find_basket_offers",
                                    "webhooks.create", "webhooks.update", "webhooks.disable", "webhooks.redeliver"}
     actor = "external"
     headers = agent_headers(actor)

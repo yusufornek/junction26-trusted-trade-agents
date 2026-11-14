@@ -21,6 +21,7 @@ from .models import (ApprovalItem, ApprovalRequest, AuditEntry, CancelRequest, E
 from .models import PolicyResource, PolicyResetRequest, PolicyUpdateRequest, Stats
 from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, RevocationRequest
 from .models import AgentTrackRecord, AutonomyChange, AutonomyChangeResult
+from .models import BasketLookupRequest, BasketLookupResult
 from .service import Gateway
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
@@ -260,6 +261,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def get_lookup(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).lookup.get(lookup_id, principal.owner)
 
+    @app.post("/v1/basket-lookups", response_model=BasketLookupResult,
+              summary="Scale an agent-supplied recipe and price one deduplicated basket in two supplier batches")
+    def basket_offers(body: BasketLookupRequest, request: Request, principal: Principal = Depends(resolve_principal),
+                      mandate=Depends(presented_mandate)):
+        return svc(request).baskets.find_basket_offers(body, actor=f"agent:{principal.agent_id}", mandate=mandate)
+
+    @app.get("/v1/basket-lookups/{lookup_id}", response_model=BasketLookupResult, summary="Read this agent's stored recipe basket")
+    def get_basket(lookup_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).baskets.get(lookup_id, principal.owner)
+
     @app.get("/v1/policy", response_model=PolicyResource, summary="Read effective procurement policy and known warning codes")
     def get_policy(request: Request, principal: Principal = Depends(require_operator)):
         return svc(request).policy.get()
@@ -307,9 +318,16 @@ def create_app(gateway=None, *, settings=None, keys=None):
     def orders(request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.list_orders(agent_id=principal.owner)
 
-    @app.get("/v1/orders/{id}", response_model=Order)
+    @app.get("/v1/orders/{id}", response_model=Order,
+             description="Owned order state with durable order_revision, approval_reason, expires_at and next_action. Pending: WAIT_FOR_APPROVAL with poll_after_seconds; confirmed: null; rejected/cancelled: STOP; expired: LOOKUP_REQUIRED. Rejection retains the approver comment. Polling never places another order.")
     def get_order(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.get_order(id, principal.owner)
+
+    @app.get("/v1/orders/{id}/receipt", response_model=Order,
+             summary="Get a decided order and its detached signed receipt",
+             description="Same owned order resource and spec 10 receipt signature, verifiable with receipt_payload and independently trusted gateway JWKS. Pending orders return 409 NOT_DECIDED with WAIT_FOR_APPROVAL and a polling interval in data. Receipt id is the order id; commitment is gateway-simulated.")
+    def get_order_receipt(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).orders.get_order_receipt(id, principal.owner)
 
     @app.get("/v1/orders/{id}/ubl", response_class=Response,
              summary="Export UBL 2.1 Order or OrderResponse; agent owns order, operator sees all",
