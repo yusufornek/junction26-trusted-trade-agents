@@ -85,6 +85,8 @@ class Gateway:
         self.connections = Connections(self)
         from .accounts import Accounts
         self.accounts = Accounts(self)
+        from .oauth import OAuth
+        self.oauth = OAuth(self)
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")

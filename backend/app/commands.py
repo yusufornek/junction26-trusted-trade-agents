@@ -217,7 +217,14 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     values = json_value({k: v for k, v in arguments.items() if k not in excluded})
     if route == "connections.create":
         body = values.get("body", {})
-        defaults = {"type": "mcp", "audience": "buyer", "scopes": ["*"], "expires_at": None, "tenant_id": None}
+        # Optional webhook fields did not exist in older command records.
+        # Their omission and null must retain the same replay fingerprint for
+        # every connection audience, including non-default REST/tenant records.
+        for field in ("webhook_url", "event_types"):
+            if body.get(field) is None:
+                body.pop(field, None)
+        defaults = {"type": "mcp", "audience": "buyer", "scopes": ["*"], "expires_at": None, "tenant_id": None,
+                    "webhook_url": None, "event_types": None}
         if all(body.get(k) == v for k, v in defaults.items()):
             for k in defaults:
                 body.pop(k, None)

@@ -43,7 +43,7 @@ MVP first (see `DECISIONS.md`). Design decisions are revisited after the MVP run
 | 32 | Gateway product build-out: specs 22–38 | Backend (Claude → Codex) | in progress | sequential build chain; live verification after each group |
 | 10 | Business case + pitch deck | Business | todo | |
 | 11 | Deploy + demo video | Team | todo | before 15.11 10:00 |
-| 40 | Accounts, tenants, team management, OAuth, three audiences (spec 43) | Gökalp + Codex | building |
+| 40 | Accounts, tenants, team management, OAuth, three audiences (spec 43) | Gökalp + Codex | building | Part 2 done: OAuth, MCP, A2A, webhooks/tool packs; 21 new AC cases + 7 API/auth checks passed. Part 1 final fixes merge separately. |
 | 41 | Frontend: sign-in, team management (roles), connect tabs on buyer and Valio side, OAuth consent — data contract in FRONTEND.md "Accounts and connections (spec 43)" | frontend teammate | todo |
 | 42 | Agent governance: ownership, policy layers, change requests, versions, simulation, register, pause, alerts, report (spec 44) | Gökalp + Codex | queued |
 | 43 | Frontend: agent register, effective-policy view with sources, policy editor + change-request review, simulation result, pause buttons, alerts, governance report — data contract in FRONTEND.md "Agent governance (spec 44)" | frontend teammate | todo |

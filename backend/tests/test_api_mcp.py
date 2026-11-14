@@ -179,10 +179,15 @@ def test_contract_all_routes_have_response_schema():
                                     "/v1/suggestions/{id}/snooze", "/v1/buyer/memory-preferences",
                                     "/v1/buyer/memory", "/v1/connections", "/v1/connections/{connection_id}"}
     assert legacy_paths <= set(schema["paths"])
-    assert all(path.startswith(("/v1/auth/", "/v1/tenant/", "/v1/operator/", "/v1/connect/")) for path in set(schema["paths"]) - legacy_paths)
+    assert all(path.startswith(("/v1/auth/", "/v1/tenant/", "/v1/operator/", "/v1/connect/", "/v1/oauth/", "/oauth/",
+                               "/.well-known/oauth-", "/a2a/tenant", "/a2a/operator")) for path in set(schema["paths"]) - legacy_paths)
     for path in schema["paths"].values():
         for operation in path.values():
-            content = operation["responses"].get("200", operation["responses"].get("201"))["content"]
+            success = operation["responses"].get("200", operation["responses"].get("201"))
+            if success is None:
+                assert "303" in operation["responses"]  # OAuth form consent redirects to the registered client.
+                continue
+            content = success["content"]
             assert content and all(media["schema"] for media in content.values())
     # Route inventory includes spec 10, 11 and 13 trust and UBL endpoints.
     models = schema["components"]["schemas"]

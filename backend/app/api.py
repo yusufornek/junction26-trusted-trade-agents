@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import asyncio
 from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -82,10 +83,20 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
+        audience_apps = [mcp_http]
+        for audience in ("tenant", "operator"):
+            server = create_server(service, agent_id=None, audience=audience)
+            server.keys = keys
+            http = server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
+            setattr(app.state, "mcp_"+audience+"_server", server)
+            setattr(app.state, "mcp_"+audience+"_http", http)
+            audience_apps.append(http)
         worker = asyncio.create_task(deliver_notifications())
         service.recurring.start()
         try:
-            async with mcp_http.router.lifespan_context(mcp_http):
+            async with AsyncExitStack() as stack:
+                for http in audience_apps:
+                    await stack.enter_async_context(http.router.lifespan_context(http))
                 yield
         finally:
             stop.set()
@@ -101,6 +112,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                              for code in (401, 403, 404, 409, 410, 422, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
+    from .oauth import install as install_oauth
+    install_oauth(app)
     from .accounts import router as accounts_router
     app.include_router(accounts_router)
     from .connect_catalog import router as connect_router
@@ -124,6 +137,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     install_developer_docs(app)
     if serve_mcp:
         app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+        for audience in ("tenant", "operator"):
+            app.router.routes.append(Route("/mcp/"+audience, endpoint=MCPTransport(audience), methods=["GET", "POST", "DELETE"]))
     app.include_router(recurring_router)
     app.include_router(proposals_router)
     from .purchase_memory import router as memory_router
@@ -138,19 +153,11 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         environment_token = ENVIRONMENT.set(settings.environment)
         from .telemetry import CURRENT
         telemetry_token = CURRENT.set(telemetry)
-        transport_token = TRANSPORT.set("a2a" if request.url.path == "/a2a" else "mcp" if request.url.path.startswith("/mcp") else "rest")
+        transport_token = TRANSPORT.set("a2a" if request.url.path.startswith("/a2a") else "mcp" if request.url.path.startswith("/mcp") else "rest")
         token = CORRELATION.set(request.headers.get("X-Correlation-Id") or correlation_id())
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
         try:
-            if request.url.path == "/a2a":
-                try:
-                    await resolve_principal(request, await bearer(request))
-                except DomainError as error:
-                    response = await domain_error(request, error)
-                    response.headers["X-Correlation-Id"] = CORRELATION.get()
-                    response.headers["X-Environment"] = settings.environment
-                    return response
             public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
             response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
@@ -174,6 +181,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     async def domain_error(request, error):
         content = problem(error, request.url.path)
         headers = {"WWW-Authenticate": "Bearer"} if error.status == 401 else {}
+        if error.status == 401 and request.url.path in {"/a2a", "/a2a/tenant", "/a2a/operator", "/mcp", "/mcp/tenant", "/mcp/operator"}:
+            from .accounts import origin
+            headers["WWW-Authenticate"] = f'Bearer resource_metadata="{origin(request)}/.well-known/oauth-protected-resource{request.url.path}"'
         if content["retry_after_seconds"] is not None:
             headers["Retry-After"] = str(content["retry_after_seconds"])
         return JSONResponse(status_code=error.status, content=content, media_type="application/problem+json", headers=headers)
@@ -503,14 +513,17 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     original_openapi = app.openapi
     def problem_openapi():
         schema = original_openapi()
-        for path in schema["paths"].values():
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})["OAuth2"] = {
+            "type": "oauth2", "flows": {"authorizationCode": {"authorizationUrl": "/oauth/authorize", "tokenUrl": "/oauth/token",
+                "scopes": {"*": "Consented gateway operations"}}}}
+        for path_name, path in schema["paths"].items():
             for operation in path.values():
                 if not isinstance(operation, dict):
                     continue
                 for status, response in operation.get("responses", {}).items():
                     response.setdefault("headers", {})["X-Environment"] = {"schema": {"type": "string", "enum": ["live", "sandbox"]}, "description": "Isolated gateway environment; sandbox observations are synthetic fixtures."}
                     response.setdefault("headers", {})["X-Correlation-Id"] = {"schema": {"type": "string"}, "description": "Accepted or generated request correlation identifier."}
-                    if status.isdigit() and int(status) >= 400:
+                    if status.isdigit() and int(status) >= 400 and not (path_name.startswith("/oauth/") and status == "400"):
                         response.get("content", {}).pop("application/json", None)
                     if status in {"429", "502", "503"}:
                         response.setdefault("headers", {})["Retry-After"] = {"schema": {"type": "integer", "minimum": 1}, "description": "Seconds before retrying the same command, when retryable."}

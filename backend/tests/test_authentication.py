@@ -88,9 +88,12 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
             if path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
                         "/.well-known/jwks-history.json", "/v1/meta",
                         "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connect/catalog", "/v1/auth/login",
-                        "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept"}:
+                        "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept",
+                        "/oauth/register", "/oauth/token", "/.well-known/oauth-authorization-server",
+                        "/a2a/tenant/.well-known/agent-card.json", "/a2a/operator/.well-known/agent-card.json",
+                        "/v1/connect/tool-pack"}:
                 continue
-            assert {"BearerAuth": []} in operation["security"]
+            assert ({"SessionCookie": []} if path.startswith("/oauth/") else {"BearerAuth": []}) in operation["security"]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
             for headers in ({}, {"Authorization": "Bearer unknown"}, {"X-Agent-Id": "agent-a"},
                             {"Authorization": "Basic unknown"}):
@@ -98,7 +101,10 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
                     response = client.request(method, url, **({"headers": headers} | payload))
                     assert response.status_code == 401, (method, path, response.text)
                     assert response.json()["code"] == "UNAUTHENTICATED"
-                    assert response.headers["www-authenticate"] == "Bearer"
+                    if path.startswith("/a2a"):
+                        assert response.headers["www-authenticate"].startswith('Bearer resource_metadata="')
+                    else:
+                        assert response.headers["www-authenticate"] == "Bearer"
     for url in ("/health", "/docs", "/openapi.json", "/.well-known/jwks.json"):
         assert client.get(url).status_code == 200
     cors = client.options("/v1/offers", headers={"Origin": "http://localhost:5173",

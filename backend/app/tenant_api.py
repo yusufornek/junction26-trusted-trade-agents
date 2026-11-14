@@ -58,7 +58,9 @@ def _confirm_rest(service, p, operation, target, payload, token, apply, *, force
             conn.execute("INSERT INTO decision_confirmations VALUES(?,?,?,?,?,?,?,?,NULL)",
                          (digest(secret), user, p.tenant_id, operation, target, encoded, revision, expires.isoformat()))
             return DecisionPreview(confirmation_token=secret, expires_at=expires.isoformat(),
-                summary={"operation": operation, "target": target, "order": order.model_dump(mode="json") if order else None, "changes": payload})
+                summary={"operation": operation, "target": target, "order": order.model_dump(mode="json") if order else None,
+                         "evidence": {"evidence_revision": revision, "quote": service.orders._get_quote(order.quote_id).model_dump(mode="json")} if order else None,
+                         "changes": payload})
         row = conn.execute("SELECT * FROM decision_confirmations WHERE digest=?", (digest(token),)).fetchone()
         if (not row or row["used_at"] or row["expires_at"] <= audit.utcnow().isoformat() or
                 row["user_id"] != user or row["tenant_id"] != p.tenant_id or row["operation"] != operation or
@@ -267,11 +269,12 @@ def set_policy(body: Overlay, request: Request, p: Principal = Depends(resolve_p
 def install_aliases(app):
     """REST audience endpoints reuse the existing operations and validation models."""
     from .evidence import router as evidence_router
+    from .webhooks import router as webhook_router
     # Included routers are lazy in current FastAPI; use their registered routes
     # directly when creating aliases for an included endpoint.
-    for route in [*app.routes, *evidence_router.routes]:
+    for route in [*app.routes, *evidence_router.routes, *webhook_router.routes]:
         src = getattr(route, "path", "")
-        if src in {"/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/orders/{id}/ubl", "/v1/orders/{order_id}/timeline", "/v1/orders/{order_id}/evidence",
+        if src.startswith("/v1/webhook-subscriptions") or src in {"/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/orders/{id}/ubl", "/v1/orders/{order_id}/timeline", "/v1/orders/{order_id}/evidence",
                    "/v1/approvals", "/v1/approvals/{order_id}/approve", "/v1/approvals/{order_id}/reject", "/v1/orders/{order_id}/cancel",
                    "/v1/agents/{agent_id}/autonomy", "/v1/agents/{agent_id}/track-record"}:
             for audience in ("tenant", "operator"):

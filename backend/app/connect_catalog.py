@@ -25,7 +25,7 @@ DOCS = {"mcp": "https://modelcontextprotocol.io/docs/develop/connect-remote-serv
 @router.get("/v1/connect/catalog", response_model=dict)
 async def catalog(request: Request, audience: str = Query(default="buyer", pattern="^(buyer|tenant|operator)$")):
     from types import SimpleNamespace
-    schemas = await tool_schemas()
+    schemas = await tool_schemas(audience=audience)
     connection = SimpleNamespace(connection_id="<CONNECTION_ID>", audience=audience, customer_ids=["<CUSTOMER_ID>"])
     setups = {}
     for client in {client for clients in CLIENTS.values() for client in clients}:
@@ -34,12 +34,12 @@ async def catalog(request: Request, audience: str = Query(default="buyer", patte
         setups[client] = {k: setup[k] for k in ("steps", "snippet", "language", "secret_placeholder")}
     return {"audience": audience, "audiences": AUDIENCES, "scopes": ["*", "read", "write", "lookup", "quotes", "orders", "approvals:decide", "connections:manage", "agents:manage", "mandates:manage", "users:manage", "policy:manage"], "types": [
         {"type": kind, "clients": clients, "credential_methods": ["api_key", "oauth"] if kind in {"mcp", "a2a"} else ["api_key"],
-         "documentation_links": [DOCS[kind]], "available": kind == "rest" or (kind == "mcp" and audience == "buyer" and request.app.state.mcp_served),
+         "documentation_links": [DOCS[kind]], "available": kind != "mcp" or request.app.state.mcp_served,
          "transports": ["streamable_http", "stdio"] if kind == "mcp" else ["http"],
-         "client_details": [{"client": client, "credential_methods": ["oauth"] if client == "chatgpt" else ["api_key"],
+         "client_details": [{"client": client, "credential_methods": ["oauth"] if client == "chatgpt" else ["api_key", "oauth"] if kind in {"mcp", "a2a"} else ["api_key"],
                              **setups[client],
-                             "available": client != "chatgpt" and (kind == "rest" or kind == "mcp" and audience == "buyer" and request.app.state.mcp_served)} for client in clients],
-         "oauth_available": False, "rest_base_path": AUDIENCES[audience]["rest"]}
+                             "available": (kind != "mcp" or request.app.state.mcp_served)} for client in clients],
+         "oauth_available": kind in {"mcp", "a2a"}, "rest_base_path": AUDIENCES[audience]["rest"]}
         for kind, clients in CLIENTS.items()]}
 
 
@@ -83,13 +83,13 @@ async def instructions(service, connection, client, base, audience, *, schemas=N
         raise DomainError("WRONG_AUDIENCE", "Instructions must use the connection's audience", 401)
     if client not in {c for clients in CLIENTS.values() for c in clients}:
         raise DomainError("VALIDATION_ERROR", "Unknown client; see connection catalog", 422)
-    schemas = schemas or await tool_schemas()
+    schemas = schemas or await tool_schemas(audience=audience)
     placeholder = "VTG_CONNECTION_KEY"
     rest = base + AUDIENCES[audience]["rest"]
     resource = "/offers" if audience == "buyer" else "/orders"
     # This example is checked against the actual MCP input schema. Both transports
     # use the same NeedSpec; no duplicated function declarations are maintained.
-    properties = schemas["find_offers"]["inputSchema"]["properties"]
+    properties = schemas.get("find_offers", {}).get("inputSchema", {}).get("properties", {})
     from datetime import timedelta
     from .audit import utcnow
     example = {"customer_id": connection.customer_ids[0] if hasattr(connection, "customer_ids") else "1",
@@ -111,7 +111,7 @@ async def instructions(service, connection, client, base, audience, *, schemas=N
             config["mcpServers"][connection.connection_id]["type"] = "http"
         elif client == "chatgpt":
             config = {"connector_url": base+"/mcp"+suffix, "authentication": "oauth", "connection_id": connection.connection_id,
-                      "credential_placeholder": placeholder, "available": False, "note": "ChatGPT OAuth connections become available in part 2."}
+                      "credential_placeholder": placeholder, "available": True, "note": "Sign in and consent to connect this resource over OAuth 2.1."}
         snippet = json.dumps(config, indent=2)
         language = "json"
     elif client in {"python", "openai_agents_sdk", "anthropic_api", "langchain"}:
@@ -126,12 +126,37 @@ async def instructions(service, connection, client, base, audience, *, schemas=N
         if audience == "buyer":
             snippet += " -H 'Content-Type: application/json' --data '" + json.dumps(example) + "'"
         language = "shell"
+    kind = getattr(connection, "type", None)
+    if kind == "a2a":
+        suffix = "" if audience == "buyer" else "/"+audience
+        snippet = json.dumps({"agent_card_url": base+("/.well-known/agent-card.json" if audience == "buyer" else "/a2a/"+audience+"/.well-known/agent-card.json"),
+            "url": base+"/a2a"+suffix, "headers": {"Authorization": "Bearer ${"+placeholder+"}", "A2A-Version": "1.0"},
+            "security": {"oauth_authorization_server": base+"/.well-known/oauth-authorization-server", "api_key_placeholder": placeholder}}, indent=2)
+        language = "json"
+    elif kind == "webhook":
+        snippet = json.dumps({"subscriptions_url": rest+"/webhook-subscriptions", "headers": {"Authorization": "Bearer ${"+placeholder+"}"},
+            "audience": audience, "verify_jwks_url": base+"/.well-known/jwks.json", "signature_headers": ["webhook-id", "webhook-timestamp", "webhook-signature"]}, indent=2)
+        language = "json"
+    elif kind == "tool_pack":
+        snippet = json.dumps({"tool_pack_url": base+"/v1/connect/tool-pack?format=openai&audience="+audience,
+            "headers": {"Authorization": "Bearer ${"+placeholder+"}"}, "executor": "Use the returned Python executor with VTG_CONNECTION_KEY."}, indent=2)
+        language = "json"
+    elif kind == "oauth":
+        transport = "a2a" if getattr(connection, "client", None) == "a2a" else "mcp"
+        snippet = json.dumps({"url": base+"/"+transport+("" if audience == "buyer" else "/"+audience),
+            "authentication": "oauth", "authorization_server": base+"/.well-known/oauth-authorization-server",
+            "connection_id": connection.connection_id, "note": "Authorize with this client's PKCE flow; the gateway cannot redisplay issued tokens."}, indent=2)
+        language = "json"
     return {"connection_id": connection.connection_id, "audience": audience, "client": client,
-            "steps": ["Copy the connection key from its creation response.", f"Set {placeholder} in your client environment.",
-                      "Apply the configuration below and make a test call. Keep the key private."],
+            "steps": (["Open the connector URL in your client and choose OAuth authentication.", "Sign in to your tenant or Valio staff account.",
+                       "Review the client, redirect host, agent, customers and scopes, then consent."] if client == "chatgpt" or kind == "oauth" else
+                      ["Copy the connection key from its creation response.", f"Set {placeholder} in your client environment.",
+                       "Apply the configuration below and make a test call. Keep the key private."]),
             "secret_placeholder": placeholder, "language": language, "snippet": snippet,
             "rest_base_url": rest, "tool_schemas": schemas, "lookup_example": example,
-            "local_stdio": {"command": "backend/.venv/bin/python", "args": ["-m", "app.mcp_server"], "note": "Local stdio needs local gateway configuration; use remote HTTP for a connection key."} if client in CLIENTS["mcp"] else None}
+            "local_stdio": {"command": "backend/.venv/bin/python", "args": ["-m", "app.mcp_server", "--audience", audience],
+                "env": {placeholder: "<YOUR_CONNECTION_KEY>"},
+                "note": "Local stdio needs the local gateway database and configuration that issued this key; otherwise use remote HTTP."} if client in CLIENTS["mcp"] and kind != "oauth" else None}
 
 
 @router.get("/v1/tenant/connections/{connection_id}/instructions", response_model=dict)
@@ -144,3 +169,59 @@ async def connection_instructions(connection_id: str, request: Request, client: 
     from types import SimpleNamespace
     full = SimpleNamespace(**{**connection.model_dump(), "customer_ids": json.loads(row[0])})
     return await instructions(service, full, client, origin(request), audience or connection.audience)
+
+
+@router.get("/v1/connect/tool-pack", response_model=dict, summary="Function declarations generated from the selected MCP audience and a REST executor")
+async def tool_pack(request: Request, format: str = Query(default="openai", pattern="^(openai|anthropic|gemini)$"),
+                    audience: str = Query(default="buyer", pattern="^(buyer|tenant|operator)$")):
+    from .auth import admit_credential
+    from .oauth import require_audience
+    header = request.headers.get("authorization")
+    if header:
+        scheme, _, secret = header.partition(" ")
+        p = admit_credential(request.app.state.gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
+        require_audience(p, audience, "/tool-pack/"+audience)
+    schemas = await tool_schemas(audience=audience)
+    functions = [{"name": name, "description": schema["description"], "parameters": schema["inputSchema"]} for name, schema in schemas.items()]
+    if format == "openai":
+        declarations = [{"type": "function", "function": value} for value in functions]
+    elif format == "anthropic":
+        declarations = [{"name": v["name"], "description": v["description"], "input_schema": v["parameters"]} for v in functions]
+    else:
+        declarations = [{"functionDeclarations": functions}]
+    base = origin(request)+AUDIENCES[audience]["rest"]
+    executor = """import os, httpx
+BASE_URL = """+repr(origin(request))+"""
+AUDIENCE = """+repr(audience)+"""
+def execute(name, arguments):
+    with httpx.Client(base_url=BASE_URL, headers={"Authorization": "Bearer " + os.environ["VTG_CONNECTION_KEY"]}) as client:
+        response = client.post("/v1/connect/tools/" + name, params={"audience": AUDIENCE}, json=arguments)
+        response.raise_for_status()
+        return response.json()
+# Decisions first return confirmation_required. Show summary/evidence to the human,
+# then call again with confirmation_token only after explicit human confirmation.
+"""
+    return {"audience": audience, "format": format, "declarations": declarations, "tool_schemas": schemas,
+            "language": "python", "executor": executor, "secret_placeholder": "VTG_CONNECTION_KEY"}
+
+
+@router.post("/v1/connect/tools/{name}", response_model=dict | list, summary="Execute a generated tool-pack function through the shared command layer")
+async def execute_tool(name: str, body: dict, request: Request,
+                       audience: str = Query(default="buyer", pattern="^(buyer|tenant|operator)$"), p: Principal = Depends(resolve_principal)):
+    from .commands import json_value
+    from .oauth import require_audience
+    require_audience(p, audience, "/tool-pack/"+audience)
+    service = request.app.state.gateway
+    if name not in await tool_schemas(audience=audience):
+        raise DomainError("TOOL_NOT_FOUND", "Tool is not available for this audience", 404)
+    if audience != "buyer":
+        from .human_tools import execute
+        return json_value(execute(service, p, audience, name, body))
+    from .mcp_server import create_server
+    server = create_server(service, agent_id=None)
+    result = await server.call_tool(name, body)
+    if result.is_error:
+        from fastapi.responses import JSONResponse
+        value = result.structured_content or json.loads(result.content[0].text)
+        return JSONResponse(value, status_code=value.get("status", 422))
+    return result.structured_content if result.structured_content is not None else [item.model_dump(mode="json") for item in result.content]

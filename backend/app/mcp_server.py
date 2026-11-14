@@ -24,7 +24,7 @@ from .recurring import Deviations, RecurringRequest
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
-MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. The buyer MCP resource remains /mcp; OAuth and human MCP audiences are part 2. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. Remote MCP supports OAuth 2.1 code/PKCE consent at /oauth/authorize; tenant humans use /mcp/tenant and Valio staff use /mcp/operator, each an isolated audience. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
                 "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
@@ -69,10 +69,10 @@ class GatewayMCPServer(MCPServer):
         return tools
 
     def streamable_http_app(self, **kwargs):
-        if self.agent_id is not None and not self.keys.has_agent(self.agent_id):
+        if self.audience == "buyer" and self.agent_id is not None and not self.keys.has_agent(self.agent_id):
             raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
         app = super().streamable_http_app(**kwargs)
-        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway)
+        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway, audience=self.audience)
         return app
 
     async def call_tool(self, name, arguments, context=None):
@@ -101,7 +101,7 @@ class GatewayMCPServer(MCPServer):
                 correlation = metadata.get("correlation_id") or metadata.get("correlationId") or correlation
         token = PRESENTED_MANDATE.set(mandate)
         correlation_token = CORRELATION.set(correlation or correlation_id())
-        active_agent = self.agent_id or (PRINCIPAL.get().id if PRINCIPAL.get() else None)
+        active_agent = self.agent_id or (PRINCIPAL.get().id if PRINCIPAL.get() else "mcp-agent" if getattr(self, "local_credential", None) else None)
         if active_agent is None:
             raise RuntimeError("Remote MCP requires an authenticated principal")
         policy = self.gateway.policy.get()
@@ -112,8 +112,29 @@ class GatewayMCPServer(MCPServer):
         local_principal = Principal(active_agent, kind=identity.kind if identity else "agent",
             organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
             credential_ref="stdio:" + active_agent)
-        principal_token = PRINCIPAL.set(PRINCIPAL.get() or self.gateway.accounts.bind(local_principal))
+        principal_token = PRINCIPAL.set(PRINCIPAL.get())
         try:
+            if getattr(self, "local_credential", None):
+                from .auth import resolve_credential
+                from .oauth import require_audience
+                PRINCIPAL.set(resolve_credential(self.keys, self.local_credential, self.gateway))
+                require_audience(PRINCIPAL.get(), self.audience, "/mcp"+("" if self.audience == "buyer" else "/"+self.audience))
+            elif PRINCIPAL.get() is None:
+                PRINCIPAL.set(self.gateway.accounts.bind(local_principal))
+            if self.audience != "buyer":
+                from .oauth import require_audience
+                from .human_tools import execute, confirm_mcp
+                from .commands import json_value
+                require_audience(PRINCIPAL.get(), self.audience, "/mcp/"+self.audience)
+                if name in {"approve_order", "reject_order", "cancel_order", "set_policy"}:
+                    result = await confirm_mcp(self, name, arguments, context)
+                    from mcp.types import InputRequiredResult
+                    if isinstance(result, InputRequiredResult):
+                        return result
+                else:
+                    result = execute(self.gateway, PRINCIPAL.get(), self.audience, name, arguments)
+                value = json_value(result)
+                return CallToolResult(content=[TextContent(type="text", text=json.dumps(value))], structured_content=value if isinstance(value, dict) else {"items": value})
             from .auth import check_scope
             if name != "get_agent_context":
                 resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name else "orders" if "order" in name else "read"
@@ -143,7 +164,20 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer"):
+    if audience != "buyer":
+        server = GatewayMCPServer(NAME+"-"+audience, title=TITLE+" — "+audience, version=VERSION,
+            instructions="Human " + audience + " assistant. Credentials bind the consenting human and audience. "
+            "Roles and tenant scope are checked on every call. Read orders, evidence, approval inbox and governance data. "
+            "Approve, reject, cancel and policy changes return input_required: show the summary and evidence to the human, "
+            "then retry the same tool/arguments with requestState and inputResponses.decision from the user's answer. "
+            "State is single use, valid five minutes and bound to this human, decision and evidence revision. "
+            "EVIDENCE_CHANGED requires reviewing fresh evidence and a new confirmation. Never invent confirmation answers.")
+        server.keys, server.gateway, server.agent_id = gateway.settings.keys or Credentials(), gateway, agent_id
+        server.mandate, server.audience = mandate, audience
+        from .human_tools import register_tools
+        register_tools(server, audience)
+        return server
     # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
     server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
@@ -169,6 +203,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     server.gateway = gateway
     server.agent_id = agent_id
     server.mandate = mandate
+    server.audience = audience
 
     def current_agent():
         principal = PRINCIPAL.get()
@@ -300,11 +335,17 @@ def main():
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--agent-id", default="mcp-agent", help="Buyer agent identity recorded in the audit log")
     parser.add_argument("--mandate", type=Path, help="Buyer-issued VC-JWT file (stdio); HTTP uses Agent-Mandate header")
+    parser.add_argument("--audience", choices=["buyer", "tenant", "operator"], default="buyer")
     args = parser.parse_args()
     gateway = Gateway()
     gateway.recurring.start()
     try:
-        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None)
+        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience)
+        import os
+        server.local_credential = os.environ.get("VTG_CONNECTION_KEY")
+        if args.audience != "buyer":
+            if not args.http and not server.local_credential:
+                parser.error("Tenant/operator stdio needs a human connection key in VTG_CONNECTION_KEY")
         if args.http:
             server.run(transport="streamable-http", host=args.host, port=args.port)
         else:

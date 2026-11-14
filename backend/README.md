@@ -46,8 +46,7 @@ request hosts receive `mcp_url: null` and use REST until a public origin is conf
 `create_app(..., serve_mcp=False)` disables MCP, returns `mcp_url: null`, and removes
 the MCP catalog entry and server-card route.
 Run one gateway process per database; do not start a second MCP process on its database.
-The `chatgpt` client value records a preference only: OAuth sign-in is not implemented
-by this connection API. Tests run offline against isolated databases and in-process MCP:
+The `chatgpt` client supports OAuth sign-in through `/oauth/authorize` (spec 43); API-key issuance remains available for other clients. Tests run offline against isolated databases and in-process MCP:
 `.venv/bin/python -m pytest tests/test_spec42_agent_connections.py -q`.
 
 ## Buyer view and portable evidence (specs 28–29)
@@ -583,7 +582,7 @@ MCP stdio is unchanged: launch `python -m app.mcp_server --agent-id hotel-chain-
 `demo/run_buyer_agent.sh` continues to provision this identity). For `--http`, configure that agent
 in `AGENT_KEYS` and send `Authorization: Bearer <that agent's secret>` on **every** HTTP request,
 including initialization, GET and DELETE. Another agent's key or the operator token is refused.
-OAuth for remote MCP and named operator accounts are production follow-ups.
+Remote MCP OAuth and named tenant/platform accounts are implemented in spec 43 below.
 
 ## UBL 2.1 / Peppol BIS Ordering 3 mapping
 
@@ -862,7 +861,7 @@ when an issuer ID or key ID is reused with different keys. Legacy unscoped
 revocations retain their prior denial through migration because their signer
 scope was not recorded; migration never silently restores revoked authority.
 The JWT itself is not returned in objects or audit entries. Holder binding uses
-the existing agent secret; key-bound proof of possession and OAuth remain follow-ups.
+the existing agent secret; key-bound proof of possession remains a follow-up; OAuth is implemented in spec 43.
 
 ## Public audit anchoring (spec 21)
 
@@ -1748,9 +1747,84 @@ Human REST decisions use a summary and single-use five-minute confirmation token
 identical retry including confirmation_token. Approval records approver_user_id and approver_role.
 Tokens bind the user, tenant, action, payload and evidence revision. Existing OPERATOR_TOKEN paths
 also use confirmation for human decisions; the token retains platform-admin authority. Agent purchases
-keep their existing autonomous mandate flow. OAuth and tenant/operator MCP, A2A, webhook and
-tool-pack audiences ship in part 2; catalog availability explicitly identifies the current subset.
+keep their existing autonomous mandate flow. Part 2 below implements OAuth and tenant/operator MCP, A2A, webhook and
+tool-pack audiences; catalog availability identifies what the deployment serves.
 The frontend data contract is docs/FRONTEND.md, Accounts and connections (spec 43).
 
 Verify offline from backend/: .venv/bin/python -m pytest tests -q, then
 .venv/bin/python scripts/export_openapi.py. No startup/schema-generation command needs demo state.
+
+
+## OAuth and protocol audiences (spec 43, part 2)
+
+`app/oauth.py` implements the vendored MCP authorization revision 2026-07-28,
+with MCP 2025-11-25 clients accepted. A single authorization server serves six
+exact OAuth resources: `/mcp`, `/mcp/tenant`, `/mcp/operator`, `/a2a`, `/a2a/tenant`,
+`/a2a/operator`. The root protected-resource metadata describes `/mcp`; each
+resource also has `/.well-known/oauth-protected-resource<resource-path>`.
+401 responses advertise the resource-specific metadata URL. Authorization server
+discovery is at `/.well-known/oauth-authorization-server`.
+
+The human first signs in with `/v1/auth/login`. `/oauth/authorize` requires that
+session and an exact registered redirect URI, resource indicator, and S256 PKCE.
+Client IDs can be HTTPS Client ID Metadata Document URLs (HTTPX, no redirects,
+64 KiB and five-second limits), pre-registered IDs via `gateway.oauth.register(id,
+metadata)`, or IDs returned by `POST /oauth/register`. Dynamic registration requires
+`application_type:native|web`; this implementation supports public PKCE clients
+(`token_endpoint_auth_method:none`). Redirects are HTTPS or loopback HTTP; web
+clients require HTTPS redirects. Client documents must match their client_id URL.
+
+The plain consent form displays the client and redirect host, lets a tenant admin
+select/create a buyer agent, and narrow customers/scopes. Tenant humans can consent
+to their own assistant with their current role; platform staff consent to the
+operator audience. `FRONTEND_CONSENT_URL` selects a custom consent screen receiving
+`request_id`; read `/v1/oauth/requests/{id}` and POST its `/decision` with CSRF.
+Approval returns `redirect_url` plus an `oauth` connection id; denial returns an
+`access_denied` redirect. The redirect includes issuer and state. Codes live five
+minutes, consent requests ten. `/oauth/token` takes form-encoded code/PKCE or refresh
+grants and the same resource. Only code/access/refresh digests are stored. Access
+tokens live one hour; refresh tokens thirty days and rotate on every use. Refresh
+reuse revokes the entire family. Revoking the connection or disabling its creator
+makes grants unusable on the next request. Tokens are never sent to suppliers.
+
+The three SDK MCP servers share procurement commands with REST. Human tools expose
+orders/evidence, approval inbox, confirmed approve/reject/cancel, and policy changes.
+Tenant tools additionally expose spend, memory suggestions, agents and connections;
+operator tools expose every tenant, exceptions, upstream/supplier health, stats,
+audit verification and anchors. Human tools enforce live role and scope checks.
+MCP decisions return `InputRequiredResult` with an elicitation and opaque
+`requestState`; retry the same request with the human's `inputResponses.decision`.
+The state is single use, human/tenant/operation/body/evidence bound, expires in five
+minutes and reuses REST's `confirm_rest`. Evidence changes return `EVIDENCE_CHANGED`.
+For local stdio, run `.venv/bin/python -m app.mcp_server --audience tenant` (or
+`operator`) with a human connection key in `VTG_CONNECTION_KEY`; stdio revalidates
+that key on every call. HTTP uses the corresponding remote resource instead.
+
+A2A tenant/operator cards are at `/a2a/<audience>/.well-known/agent-card.json`;
+the buyer card remains at `/.well-known/agent-card.json`. Each advertises OAuth
+code/PKCE and HTTP bearer security. Human `SendMessage` data parts are
+`{version:1,command:<skill-id>,arguments:{...}}`. Decisions return an `INPUT_REQUIRED`
+task with REST's summary and `confirmation_token`, then execute on a new message
+carrying the confirmed token. Task access and business objects retain tenant scope.
+
+`type:webhook` connections require `webhook_url` and optionally `event_types`;
+creation challenges the destination and registers a signed spec 33 subscription.
+Tenant/operator subscriptions use `/v1/<audience>/webhook-subscriptions` with the
+same delivery/retry controls. Buyer subscriptions see own orders; tenant
+subscriptions see selected customers within their tenant; operator subscriptions
+see every tenant and platform upstream-rate-limit, audit-anchor and supplier-health
+events. Revoked connection subscriptions stop receiving deliveries.
+
+`GET /v1/connect/tool-pack?format=openai|anthropic|gemini&audience=buyer|tenant|operator`
+returns declarations derived from that MCP audience's input schemas and a Python
+executor using `VTG_CONNECTION_KEY`. The executor calls REST
+`POST /v1/connect/tools/{name}?audience=...`; no second business implementation is
+maintained. Human tool-pack decisions use the REST preview/confirmation handshake.
+The schema endpoint is public; supplied credentials must match the audience and
+execution always requires credentials. OAuth tokens only work at their exact
+MCP/A2A resource; connection keys work within their audience.
+
+Validation (isolated fixtures; no live demo state or network):
+`.venv/bin/python -m pytest -q tests/test_spec43_oauth_audiences.py`.
+The frontend consent and protocol contracts are in `docs/FRONTEND.md`,
+"Accounts and connections (spec 43)".

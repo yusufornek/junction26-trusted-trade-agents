@@ -84,9 +84,9 @@ Need another field or endpoint? Ask the backend side — it is quick to add.
 ## Accounts and connections (spec 43)
 
 This section describes backend data and behaviour; the frontend owner designs the screens.
-Part 1 implements accounts, tenant isolation and REST audiences. OAuth and the tenant/operator MCP,
-A2A, webhook and tool-pack audiences are part 2 and are not implemented yet. Read `available` and
-`oauth_available` from the connection catalog rather than assuming that every catalog entry is live.
+Accounts, tenant isolation, REST audiences and all part 2 protocols are implemented. Read `available` and
+`oauth_available` from the connection catalog for deployment-specific availability. Remote MCP and A2A
+support OAuth code/PKCE consent alongside connection keys; tenant/operator credentials bind a human.
 
 **Sign-in and session.** `POST /v1/auth/login` takes `{email,password}` and returns
 `{csrf_token,user,role,tenant_id,tenant,customer_ids,permissions}`. The server sets `vtg_session`
@@ -175,11 +175,65 @@ fresh evidence and starting a new confirmation. `409 CONFIRMATION_INVALID` requi
 Existing `OPERATOR_TOKEN` callers keep their platform-admin identity; human decisions on the existing
 paths also require this confirmation handshake.
 
-**OAuth consent contract (part 2).** The planned frontend flow reads
-`GET /v1/oauth/requests/{id}` to show the client name and redirect host, tenant agents, allowed
-customers and requested scopes, then calls `POST /v1/oauth/requests/{id}/decision` to approve or deny.
-These endpoints and `FRONTEND_CONSENT_URL` are not available in part 1. Do not render a working
-consent button until the part 2 contract lands; use catalog availability for current choices.
+**OAuth consent contract.** The assistant opens `/oauth/authorize` with `client_id`, exact
+`redirect_uri`, `resource`, `response_type=code`, `code_challenge`, `code_challenge_method=S256`,
+`scope` and `state`. The human must already be signed in through `/v1/auth/login`. The gateway
+serves a plain consent form by default. Set `FRONTEND_CONSENT_URL` to a frontend URL to receive
+`?request_id=...`; use the same credentialed session and CSRF token for the following calls:
+
+| Endpoint | Data |
+|---|---|
+| `GET /v1/oauth/requests/{id}` | `request_id,client_name,redirect_host,resource,scopes[],customer_ids[],agents[{agent_id,name}]` |
+| `POST /v1/oauth/requests/{id}/decision` | `{approve,agent_id?,customer_ids?,scopes?}` → `{redirect_url,connection_id?}` |
+
+Show the client name, redirect host, resource, customers and scopes. Tenant admins pick an existing
+buyer agent or supply a new agent id; its connection starts approval-first. Approvers/viewers may
+consent to their own tenant assistant and retain their live role. Scopes/customers can only be
+narrowed. Denial returns a redirect with `error=access_denied`; approval returns an authorization
+code and an `oauth` connection visible to the admin and revocable through the normal connection API.
+Navigate to `redirect_url` after the decision. The redirect includes `iss` and the original `state`.
+Consent requests last ten minutes, authorization codes five. `/oauth/token` accepts form-encoded
+code/PKCE or refresh grants with the same exact resource. Access tokens last one hour, refresh
+credentials thirty days and rotate on use. Reusing a refresh token revokes its whole family.
+OAuth endpoints return OAuth error objects; business endpoints retain RFC 9457 errors.
+
+**MCP and A2A audiences.** Each resource has its own protected resource metadata at
+`/.well-known/oauth-protected-resource` plus the exact resource path. The root metadata describes
+`/mcp`. A 401 response advertises the corresponding metadata URL in `WWW-Authenticate`.
+Authorization server metadata is at `/.well-known/oauth-authorization-server`.
+
+| Audience | MCP | A2A RPC | Agent Card |
+|---|---|---|---|
+| buyer | `/mcp` | `/a2a` | `/.well-known/agent-card.json` |
+| tenant human | `/mcp/tenant` | `/a2a/tenant` | `/a2a/tenant/.well-known/agent-card.json` |
+| Valio staff | `/mcp/operator` | `/a2a/operator` | `/a2a/operator/.well-known/agent-card.json` |
+
+The cards advertise OAuth authorization-code and HTTP bearer schemes. MCP accepts the 2026-07-28
+and 2025-11-25 protocol envelopes. Human tools include orders, evidence, approvals, confirmed
+decisions, tenant spend/memory/agent/connection management and operator health/stats/audit/tenant
+overview. Roles remain authoritative; a viewer cannot decide. An OAuth token is valid only at its
+exact resource; a connection key is valid only for its audience.
+
+MCP human decisions first return `{resultType:"input_required",inputRequests:{decision:...},requestState}`.
+Show the elicitation's order summary and quote evidence. Retry the identical tool and arguments with
+`requestState` and `inputResponses:{decision:{action:"accept",content:{confirm:true}}}` only after
+human confirmation; decline/cancel makes no decision. State is single-use and expires in five minutes.
+A2A uses a versioned data part `{version:1,command:<skill id>,arguments:{...}}` through `SendMessage`.
+A decision returns an `INPUT_REQUIRED` task whose decision artifact contains the same REST preview.
+After confirmation, send a new message with the same command/arguments plus `confirmation_token`.
+`EVIDENCE_CHANGED` requires a new preview and review on both transports.
+
+**Webhooks and function packs.** Creating `type:webhook` requires `webhook_url` and optionally
+`event_types`; ownership is challenged and its audience-scoped subscription is registered atomically.
+Manage subscriptions under `/v1/tenant/webhook-subscriptions` or `/v1/operator/webhook-subscriptions`
+using the same CRUD/delivery routes as spec 33. Tenant subscriptions receive only that tenant's
+selected customers' events; operator subscriptions receive matching events across every tenant,
+including `platform.upstream_rate_limited`, `platform.audit_anchored`, and `platform.supplier_health`.
+Verify Standard Webhooks signatures with `/.well-known/jwks.json` and preserve raw request bytes.
+`GET /v1/connect/tool-pack?format=openai|anthropic|gemini&audience=buyer|tenant|operator` returns
+`declarations`, `tool_schemas` and a Python `executor`. The executor calls
+`POST /v1/connect/tools/{name}?audience=...` with the connection key. Function inputs derive from
+the selected MCP server's schemas; human decisions use the REST two-step confirmation.
 
 All failures use the existing RFC 9457 problem shape (`code`, `next_action`, `detail`, correlation id).
 Relevant codes: `401 UNAUTHENTICATED`/`WRONG_AUDIENCE`, `403 CSRF_REQUIRED`, `HUMAN_REQUIRED`,

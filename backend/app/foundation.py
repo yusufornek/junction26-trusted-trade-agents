@@ -71,6 +71,7 @@ EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
 EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
+EVENT_ACTIONS.update(UPSTREAM_RATE_LIMITED="platform.upstream_rate_limited", AUDIT_ANCHORED="platform.audit_anchored", SUPPLIER_HEALTH="platform.supplier_health")
 EVENT_ACTIONS.update(RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
@@ -113,7 +114,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}
-    revision = conn.execute("SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM events WHERE aggregate_type=? AND aggregate_id=?",
+    event_table = "main.events" if kind == "platform" else "events"
+    revision = conn.execute(f"SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM {event_table} WHERE aggregate_type=? AND aggregate_id=?",
                             (kind, aggregate_id)).fetchone()[0]
     event_id = obj.get("links", {}).get("event_id") if action in {"LOOKUP", "CREATE_QUOTE"} else None
     event_id = event_id or str(uuid4())
@@ -126,12 +128,17 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         links["placement_span"] = placement
     payload = {**data, "links": links, "status": obj.get("status"), "context": context,
                "evidence_revision": obj.get("evidence_revision")}
-    conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                 (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
+    values = (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
                   context.get("environment", "live"), kind, aggregate_id, revision, actor, ts,
-                  correlation, CAUSATION.get(), json.dumps(payload), audit_id))
-    conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
-                 "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))
+                  correlation, CAUSATION.get(), json.dumps(payload), audit_id)
+    if kind == "platform":
+        conn.execute("INSERT INTO events(id,schema_version,type,customer_id,environment,aggregate_type,aggregate_id,aggregate_revision,actor,ts,correlation_id,causation_id,payload,audit_id,tenant_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (*values, "platform"))
+        conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at,tenant_id) "
+                     "SELECT ?,name,'pending',0,?,'platform' FROM event_consumers WHERE enabled=1", (event_id, ts))
+    else:
+        conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
+                     "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))
     trace = conn.execute("SELECT links FROM trace_links WHERE id=?", (links["trace_id"],)).fetchone()
     trace_links = json.loads(trace[0]) if trace else {}
     for name, value in links.items():

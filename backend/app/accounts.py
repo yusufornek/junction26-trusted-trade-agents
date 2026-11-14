@@ -45,6 +45,7 @@ class SecretLinkFilter(logging.Filter):
         text = record.getMessage()
         safe = re.sub(r"(/v1/auth/(?:invites|password-resets)/)[^/\s]+", r"\1[redacted]", text)
         safe = re.sub(r"vtg_(?:live|sbx)_con_[a-z0-9]+_[A-Za-z0-9_-]+", "[connection-key]", safe)
+        safe = re.sub(r"vtg_(?:oauth_(?:access|refresh)|code)_[A-Za-z0-9_-]+", "[oauth-credential]", safe)
         if safe != text:
             record.msg, record.args = safe, ()
         return True

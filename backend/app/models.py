@@ -817,6 +817,8 @@ class ConnectionRequest(Model):
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     expires_at: AwareDatetime | None = None
     tenant_id: str | None = None
+    webhook_url: str | None = Field(default=None, max_length=2048, description="Required for webhook connections; ownership is challenged before registration.")
+    event_types: list[str] | None = None
 
 
 class Connection(Model):

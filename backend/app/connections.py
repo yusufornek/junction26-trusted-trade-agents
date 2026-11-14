@@ -64,6 +64,8 @@ class Connections:
 
     def create(self, body: ConnectionRequest, principal: Principal, origin: str, mcp_served: bool):
         require_connection_admin(principal)
+        if body.type == "webhook" and not body.webhook_url:
+            raise DomainError("VALIDATION_ERROR", "webhook_url is required for a webhook connection", 422)
         if body.client not in {"claude_desktop", "claude_code", "cursor", "vscode", "chatgpt", "mcp_other", "rest", "curl", "python", "typescript", "openai_agents_sdk", "anthropic_api", "langchain", "a2a"}:
             raise DomainError("VALIDATION_ERROR", "Unsupported client; see /v1/connect/catalog", 422)
         tid = body.tenant_id if principal.operator and body.tenant_id else principal.tenant_id
@@ -122,6 +124,18 @@ class Connections:
                  sha256(secret.encode()).hexdigest(), json.dumps(body.customer_ids), now.isoformat(), None, None,
                  tid, body.type, body.audience, json.dumps(body.scopes), principal.user_id or principal.id,
                  body.expires_at.isoformat() if body.expires_at else None))
+            if body.type == "webhook":
+                from dataclasses import replace
+                from .webhooks import SubscriptionCreate
+                subscriber = replace(principal, connection_id=connection_id, audience=body.audience,
+                    tenant_id=None if body.audience == "operator" else tid,
+                    agent_id=body.agent_id if body.audience == "buyer" else principal.agent_id,
+                    kind="agent" if body.audience == "buyer" else principal.kind,
+                    operator=principal.operator if body.audience != "buyer" else False,
+                    user_id=principal.user_id if body.audience != "buyer" else None,
+                    customer_ids=tuple(body.customer_ids))
+                self.gateway.webhooks.create(SubscriptionCreate(url=body.webhook_url, customer_ids=body.customer_ids,
+                    audience=body.audience, event_types=body.event_types or ["order.approval_required", "order.confirmed", "order.rejected"]), subscriber)
             audit.append(conn, "human:operator" if principal.user_id == "legacy-operator" else "human:" + (principal.user_id or principal.id), "CONNECTION_CREATED", "Issued an agent connection.",
                 data={"connection_id": connection_id, "agent_id": body.agent_id,
                       "client": body.client, "tenant_id": tid, "key_prefix": secret[:8]})
@@ -138,9 +152,9 @@ class Connections:
                 key_prefix=secret[:8], created_at=now, key=secret, tenant_id=tid, type=body.type, audience=body.audience,
                 scopes=body.scopes, created_by=principal.user_id or principal.id, expires_at=body.expires_at,
                 customer_ids=body.customer_ids,
-                mcp_url=origin + "/mcp" if mcp_served and (self.gateway.settings.public_url or
+                mcp_url=origin + "/mcp" + ("" if body.audience == "buyer" else "/"+body.audience) if mcp_served and (self.gateway.settings.public_url or
                     urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}) else None,
-                rest_base_url=origin + "/v1",
+                rest_base_url=origin + "/v1" + ("" if body.audience == "buyer" else "/"+body.audience),
                 mandate=mandate.model_copy(update={"autonomy": mandate.autonomy or policy.autonomy.default}))
 
     def list(self, principal):

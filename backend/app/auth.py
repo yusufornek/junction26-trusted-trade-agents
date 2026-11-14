@@ -24,6 +24,7 @@ class Principal:
     connection_id: str | None = None
     scopes: tuple[str, ...] = ("*",)
     audience: str = "legacy"
+    resource: str | None = None
 
     @property
     def customers(self):
@@ -113,6 +114,8 @@ def resolve_credential(keys, secret, service):
     except DomainError as error:
         if error.status != 401:
             raise
+    if secret.startswith("vtg_oauth_"):
+        return service.oauth.resolve(secret)
     return service.accounts.bind(service.connections.resolve(secret))
 
 
@@ -154,7 +157,14 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
             service.accounts.csrf(request.cookies["vtg_session"], request.headers.get("X-CSRF-Token", ""))
     else:
         principal = admit_credential(service, request.app.state.keys, source, secret)
-    service.accounts.guard(principal, request.url.path, request.method)
+    if principal.resource:
+        raise DomainError("WRONG_AUDIENCE", "OAuth token is bound to its MCP or A2A resource", 401)
+    if request.url.path.startswith("/v1/connect/tools/"):
+        from .oauth import require_audience
+        audience = request.query_params.get("audience", "buyer")
+        require_audience(principal, audience, "/tool-pack/"+audience)
+    else:
+        service.accounts.guard(principal, request.url.path, request.method)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)
@@ -200,8 +210,9 @@ def check_scope(principal, resource, permission, action=None):
 
 class MCPBearerMiddleware:
     """Guard every HTTP request, including initialization, GET and DELETE."""
-    def __init__(self, app, keys, agent_id, gateway):
+    def __init__(self, app, keys, agent_id, gateway, audience="buyer"):
         self.app, self.keys, self.agent_id, self.gateway = app, keys, agent_id, gateway
+        self.audience = audience
 
     async def __call__(self, scope, receive, send):
         from .foundation import CORRELATION, PRINCIPAL, correlation_id
@@ -217,15 +228,18 @@ class MCPBearerMiddleware:
                 scheme, _, token = value.partition(" ")
                 secret = token if scheme.lower() == "bearer" else ""
                 principal = admit_credential(self.gateway, self.keys, source, secret)
-                if principal.connection_id and principal.audience != "buyer":
-                    raise DomainError("WRONG_AUDIENCE", "This key is bound to a different resource audience", 401)
-                if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
+                from .oauth import require_audience
+                base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
+                require_audience(principal, self.audience, "/mcp" + ("" if self.audience == "buyer" else "/" + self.audience), base)
+                if self.audience == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
                 if error.status == 401:
-                    response_headers["WWW-Authenticate"] = "Bearer"
+                    base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
+                    suffix = "/mcp" + ("" if self.audience == "buyer" else "/" + self.audience)
+                    response_headers["WWW-Authenticate"] = f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource{suffix}"'
                 elif error.data.get("retry_after_seconds"):
                     response_headers["Retry-After"] = str(error.data["retry_after_seconds"])
                 await JSONResponse(problem(error, scope.get("path")), status_code=error.status,

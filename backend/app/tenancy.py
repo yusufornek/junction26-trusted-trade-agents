@@ -16,7 +16,8 @@ HOSPITAL = "kaari-hospital"
 SHARED = {"products", "products_fts", "catalog_metadata", "supplier_products", "workspace",
           "runtime_files", "event_consumers", "audit_anchors", "tenants", "tenant_customers",
           "users", "sessions", "account_links", "login_attempts", "tenant_agents",
-          "tenant_issuers", "connection_secrets", "decision_confirmations"}
+          "tenant_issuers", "connection_secrets", "decision_confirmations",
+          "oauth_clients", "oauth_requests", "oauth_codes", "oauth_tokens"}
 
 
 def principal():
@@ -44,6 +45,11 @@ def migrate(conn):
     CREATE TABLE IF NOT EXISTS decision_confirmations(digest TEXT PRIMARY KEY,user_id TEXT NOT NULL,tenant_id TEXT,
         operation TEXT NOT NULL,target TEXT NOT NULL,payload TEXT NOT NULL,revision INTEGER,expires_at TEXT NOT NULL,used_at TEXT);
     CREATE TABLE IF NOT EXISTS tenant_policy_overlays(id TEXT PRIMARY KEY,data TEXT NOT NULL,tenant_id TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS oauth_clients(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS oauth_requests(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT);
+    CREATE TABLE IF NOT EXISTS oauth_codes(digest TEXT PRIMARY KEY,connection_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT);
+    CREATE TABLE IF NOT EXISTS oauth_tokens(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,family TEXT NOT NULL,
+        connection_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT,revoked_at TEXT);
     """)
     from .audit import utcnow
     for tid, name, customer in [(HOTEL, "Hotel Aurora chain", "1"), (HOSPITAL, "Kaari Hospital Kitchen", "2")]:
