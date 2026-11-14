@@ -8,6 +8,9 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       - .env
+    environment:
+      # Public origin for MCP host checks and connection URLs; the deploy workflow passes the site URL.
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
     volumes:
       - gateway_data:/data
     restart: unless-stopped
