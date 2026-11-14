@@ -6,6 +6,36 @@ wording are the frontend owner's call. Each item names the endpoints and the cod
 **next push** = built and tested, lands on main tonight (endpoint names may still move slightly — the OpenAPI file in
 that push is the truth).
 
+## Latest changes — read this first after every pull
+
+Newest on top. Each entry says what landed, what the console can build on it, and any server step. Continue from the
+top entry; the numbered sections below hold the details.
+
+- **Push 3 (14.11, ~22:30) — brief scenarios (spec 46) + fixes.**
+  - Basket lines accept `on_hand {value, unit}`; responses show needed / on hand / to buy per line.
+  - Near `deliver_by`: lines carry `arrives_in_time` and, when late, `cannot_source_in_time` with in-time alternatives.
+  - Substitutes carry a `trade_off` object (price per required quantity, pack change, allergen/claim difference,
+    delivery date difference, one-line explanation); substitutes always need approval.
+  - Stock-out watch: `POST /v1/stockout-watch/run`, `GET /v1/stockout-watch/inbox` (`STOCKOUT_PREDICTED` items with a
+    substitute and trade-off; also a signed webhook).
+  - Proactive selling: `POST /v1/proposals/suggest` (never-bought products in categories the buyer buys).
+  - Nutrition limits in standing constraints (`max_salt_g`, `max_sugar_g`, `max_saturated_fat_g`, `min_protein_g`);
+    products without nutrition data are excluded with a reason.
+  - Five scripted demos: `backend/demo/scenario_1..5_*.py`; plain-language walkthrough in `docs/SCENARIOS.md`.
+  - Fix: an agent whose customer grant was withdrawn now gets `403 CUSTOMER_NOT_IN_MANDATE` on suggestions.
+- **Push 2 (14.11, 21:33, `76d5f1b`) — accounts, OAuth audiences, governance, guardrail profiles (specs 43–45).**
+  Sections 2, 3, 4 and 5 below are now **live** (they still say "next push" in places).
+  - Sign-in and sign-up: `GET /v1/auth/signup/options`, `POST /v1/auth/signup`, `POST /v1/auth/login`,
+    `GET /v1/auth/session`, `POST /v1/auth/logout`, invites and password resets under `/v1/auth/...`.
+  - Team and agents of a business: 56 endpoints under `/v1/tenant/...` (members, roles, agents, pause/resume,
+    policy versions, simulate, activity, mandates, connections).
+  - Connect page per audience: `GET /v1/connect/catalog?audience=buyer|tenant|operator`, `GET /v1/connect/tool-pack`.
+  - Server: demo accounts need the six `DEMO_*_PASSWORD` values and one `reset_demo.py` run (section 8); done on
+    luotsi.online per TASKS.
+- **Next (being built one at a time):** capability specs 47–58 (purchase intents, untrusted input containment,
+  constraint engine, commitment ceiling, resource ledger, document reconciliation, neutral ranking and RFQ, supplier
+  fact integrity, decision authority, agent conduct guard, audit narrative, make-or-buy). Each lands with an entry here.
+
 ## 1. Fix now (live)
 
 | What | Why | Backend |
