@@ -41,6 +41,8 @@ class Limiter:
                 return
             retry = max(1, math.ceil((1 - state[0]) * 60 / config.refill_per_minute))
         from . import audit
+        from .telemetry import metric
+        metric("throttles")
         with self.db.connect(write=True) as conn:
             audit.append(conn, principal, "RATE_LIMITED", "Principal token bucket exhausted.",
                          data={"category": category, "retry_after_seconds": retry})
@@ -73,6 +75,8 @@ class SourceLimiter:
             while len(self.sources) > self.max_sources:
                 self.sources.popitem(last=False)
         if not allowed:
+            from .telemetry import metric
+            metric("throttles")
             raise DomainError("RATE_LIMITED", "Authentication attempt limit reached", 429,
                               {"retry_after_seconds": max(1, math.ceil((1 - tokens) / self.rate))})
 

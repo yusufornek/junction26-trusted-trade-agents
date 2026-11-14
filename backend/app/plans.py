@@ -1,3 +1,4 @@
+from .telemetry import traced
 """Bounded fulfilment proposals using already-priced offers, without upstream calls or writes."""
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
@@ -5,6 +6,7 @@ from .models import CoveredQuantity, FulfilmentPlan, PlanLine, Warning
 from .quantities import pack_quantity, sales_step
 
 
+@traced("plan.build")
 def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                 autonomous_total=Decimal(0), node_budget=20_000):
     target = Decimal(str(need.quantity.value))

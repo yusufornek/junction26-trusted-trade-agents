@@ -31,6 +31,9 @@ MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate pl
                 "human approval revalidates the original stored mandate. Without a buyer VC, policy-row behavior applies.")
 
 WARNINGS = (
+    "NeedSpec.supplier_id defaults to valio; nordfood is a synthetic case-priced supplier. A stored need_ref binds the supplier through quote and order; GET /v1/suppliers advertises capabilities. Supplier restrictions in policy and buyer VC supplier_ids apply before lookup and on commitment. EUR-only policy refuses SEK with UNSUPPORTED_CURRENCY. "
+    "Orders expose execution.mode/status/supplier_ref/acknowledged_at. Valio is gateway-simulated. Nordfood becomes supplier-acknowledged only after its service accepts; PENDING_EXECUTION with next_action RETRY_SAME_COMMAND means repeat place_order with exactly the same idempotency key to reconcile an uncertain submit. "
+    "Sandbox is a separate deployment with sandbox-only credentials and storage, fixture provenance, environment=sandbox signed artifacts and UBL labels. Sandbox reset expires outstanding promises with reason sandbox_reset; admin routes require the sandbox admin credential. "
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
     "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; cache hits advance the fetched supplier time by monotonic cache age, preserving fetched-at provenance. SALES_BLOCK means not for sale; "
     "NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a usable schedule amount >=999999: stock unknown, ignored by default. When on time, any quantity is orderable, available_amount=null, availability_known=false, with no local reservation. Later unknown stock leaves finite on-time stock known and reserved. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
@@ -64,6 +67,10 @@ class GatewayMCPServer(MCPServer):
         return app
 
     async def call_tool(self, name, arguments, context=None):
+        from .runtime import TRANSPORT, CLOCK, ENVIRONMENT
+        transport_token = TRANSPORT.set("mcp")
+        clock_token = CLOCK.set(self.gateway.sandbox.now if self.gateway.sandbox else None)
+        environment_token = ENVIRONMENT.set(self.gateway.settings.environment)
         mandate = self.mandate
         correlation = CORRELATION.get()
         if context is not None:
@@ -116,6 +123,9 @@ class GatewayMCPServer(MCPServer):
             PRINCIPAL.reset(principal_token)
             CORRELATION.reset(correlation_token)
             PRESENTED_MANDATE.reset(token)
+            TRANSPORT.reset(transport_token)
+            CLOCK.reset(clock_token)
+            ENVIRONMENT.reset(environment_token)
 
 
 def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
@@ -156,10 +166,10 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
 
     @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; mandate categories filter before the result limit; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path." + MANDATE_HELP)
     def search_products(query: str, required_claims: list[str] | None = None,
-                        exclude_allergens: list[str] | None = None, limit: int = 10) -> list[Product]:
+                        exclude_allergens: list[str] | None = None, limit: int = 10, supplier_id: str = "valio") -> list[Product]:
         gateway.limiter.consume(current_agent(), "lookup")
         return gateway.mandates.search(query, required_claims, exclude_allergens, limit,
-                                       token=PRESENTED_MANDATE.get(), agent_id=current_agent())
+                                       token=PRESENTED_MANDATE.get(), agent_id=current_agent(), supplier_id=supplier_id)
 
     @server.tool(description="Find up to 10 ranked live priced offers for a structured need. Union current customer standing constraints with the request; effective_constraints and exclusion_counts name request/customer_policy sources and evidence reasons. Decisions screens the catalog pool when configured; screened_count counts actual submissions (including failed requests), zero when skipped. Then one price and stock batch checks suitable products up to shortlist.live_max (default 25). Rank orderable offers first, then scored before unscored, then preference matches before substitutes. Unknown-size offers retain SIZE_UNKNOWN and compare their known sales-unit prices separately. Pack conversion uses Decimal arithmetic and six-decimal sizes; CASE content includes its multiplier once. Every sales quantity is whole, including KG: allowedLotSize below one counts as one. Price factor uses purchase_total (whole packs), overbuy {amount, unit} states excess, score_breakdown exposes weighted factors; unit_price is per sales unit. Reliability is absolute and CO2 uses the global catalog range; missing values use neutral catalog medians. Plans use ALL ranked priced offers before the returned slice, with fill and cheapest-split searches sharing a 20,000-node budget and valid greedy fallbacks, without extra calls; previews include mandate and daily limits. Placement rechecks stock/policy. Explicit search_terms use AND; otherwise intent uses AND, broadening only empty results deterministically to meaningful OR words and hyphenated parts. RETRIEVAL_BROADENED names tried words; POOL_TRUNCATED discloses unscreened matches. Returns retrieval {mode, terms_used}, matched_count, screened_count, priced_count, lookup_id, evidence, provenance, fit, stock and single/split/partial plans. no_match_reason explains empty hard-filter results and suggests search_terms after empty broadening. " + WARNINGS + MANDATE_HELP)
     def find_offers(need: NeedSpec) -> LookupResult:

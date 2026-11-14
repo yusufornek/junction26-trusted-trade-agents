@@ -143,7 +143,7 @@ finally:
 
 def test_contract_all_routes_have_response_schema():
     schema = create_app(keys=TEST_KEYS).openapi()
-    assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
+    assert set(schema["paths"]) == {"/v1/suppliers", "/v1/sandbox/scenarios", "/v1/sandbox/reset", "/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/approvals", "/v1/approvals/{order_id}/approve",
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",

@@ -21,9 +21,13 @@ RECOVERY.update(NEED_REF_REQUIRED=(False, "LOOKUP_REQUIRED"), EXPIRED_QUOTE=(Fal
                 EVIDENCE_CHANGED=(False, "REVIEW_UPDATED_EVIDENCE"))
 RECOVERY.update(WEBHOOK_DESTINATION_UNSAFE=(False, "FIX_REQUEST"), WEBHOOK_CHALLENGE_FAILED=(False, "FIX_REQUEST"),
                 WEBHOOK_NOT_FOUND=(False, "STOP"), TASK_NOT_FOUND=(False, "STOP"))
+RECOVERY.update(UNKNOWN_SUPPLIER=(False, "FIX_REQUEST"), SUPPLIER_NOT_IN_MANDATE=(False, "CONTACT_ADMIN"),
+                SUPPLIER_UNAVAILABLE=(True, "RETRY_SAME_COMMAND"), SANDBOX_ONLY=(False, "FIX_REQUEST"),
+                UNKNOWN_SCENARIO=(False, "FIX_REQUEST"))
 
 
 def problem(error, instance=None):
+    from .runtime import ENVIRONMENT
     retryable, action = RECOVERY[error.code]
     data = error.data if error.status != 401 else {}
     result = {"type": f"urn:trusted-trade:problem:{error.code.lower().replace('_', '-')}",
@@ -34,6 +38,8 @@ def problem(error, instance=None):
               "retry_after_seconds": data.get("retry_after_seconds", 1 if retryable else None),
               "correlation_id": correlation_id(), "violations": data.get("violations", []), "data": data}
     # References are deliberately omitted unless a transport has verified read access.
+    if ENVIRONMENT.get() == "sandbox":
+        result["environment"] = "sandbox"
     return result
 
 

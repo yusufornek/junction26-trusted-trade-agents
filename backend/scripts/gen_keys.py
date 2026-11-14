@@ -11,14 +11,16 @@ from app.config import BACKEND, ROOT
 from app.policy import Policy
 
 
-def provision(env_file, agent_ids):
+def provision(env_file, agent_ids, *, sandbox=False):
+    agent_var = "SANDBOX_AGENT_KEYS" if sandbox else "AGENT_KEYS"
+    operator_var = "SANDBOX_ADMIN_TOKEN" if sandbox else "OPERATOR_TOKEN"
     content = env_file.read_text() if env_file.exists() else ""
     lines = content.splitlines(keepends=True)
     entries = {}
     for index, line in enumerate(lines):
         text = line.strip().removeprefix("export ")
         name, sep, value = text.partition("=")
-        if sep and name.strip() in {"AGENT_KEYS", "OPERATOR_TOKEN"}:
+        if sep and name.strip() in {agent_var, operator_var}:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -28,7 +30,7 @@ def provision(env_file, agent_ids):
                 raise ValueError("Duplicate credential variable; keep one definition per name")
             entries[name.strip()] = (index, value)
     added, changes = [], {}
-    current = entries.get("AGENT_KEYS", (None, ""))[1]
+    current = entries.get(agent_var, (None, ""))[1]
     pairs = [pair.strip() for pair in current.split(",") if pair.strip()]
     identities = {}
     for pair in pairs:
@@ -40,12 +42,12 @@ def provision(env_file, agent_ids):
         if not identities.get(agent_id):
             pairs = [pair for pair in pairs if pair.partition(":")[0] != agent_id]
             pairs.append(f"{agent_id}:{secrets.token_urlsafe(32)}")
-            added.append(f"AGENT_KEYS ({agent_id})")
-    if any(name.startswith("AGENT_KEYS") for name in added):
-        changes["AGENT_KEYS"] = ",".join(pairs)
-    if not entries.get("OPERATOR_TOKEN", (None, ""))[1]:
-        changes["OPERATOR_TOKEN"] = secrets.token_urlsafe(32)
-        added.append("OPERATOR_TOKEN")
+            added.append(f"{agent_var} ({agent_id})")
+    if any(name.startswith(agent_var) for name in added):
+        changes[agent_var] = ",".join(pairs)
+    if not entries.get(operator_var, (None, ""))[1]:
+        changes[operator_var] = secrets.token_urlsafe(32)
+        added.append(operator_var)
     if changes:
         for name, value in changes.items():
             entry = entries.get(name)
@@ -64,12 +66,15 @@ def provision(env_file, agent_ids):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--write", action="store_true", required=True, help="Write missing credentials")
+    parser.add_argument("--write", action="store_true", help="Write missing live credentials")
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.local")
+    parser.add_argument("--sandbox-agent", help="Issue a sandbox-only agent credential (and sandbox admin token)")
     args = parser.parse_args()
-    policy = Policy(BACKEND / "policy.yaml", BACKEND / "var/policy.yaml").get()
+    if not args.write and not args.sandbox_agent:
+        parser.error("Use --write or --sandbox-agent ID")
+    policy = Policy(BACKEND / "policy.yaml", BACKEND / "policy.yaml").get()
     try:
-        added = provision(args.env_file, set(policy.agents) | set(policy.identities))
+        added = provision(args.env_file, {args.sandbox_agent} if args.sandbox_agent else set(policy.agents) | set(policy.identities), sandbox=bool(args.sandbox_agent))
     except ValueError as error:
         parser.error(str(error))
     print("Added: " + ", ".join(added) if added else "No names added.")

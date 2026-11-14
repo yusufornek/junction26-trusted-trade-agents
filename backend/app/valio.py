@@ -176,6 +176,8 @@ class ValioClient:
                             f"{self.base}/api/{endpoint}", headers={"X-API-Key": self.key},
                             json={"customer": customer, "requestedDate": day, "products": missing})
                         if response.status_code == 429:
+                            from .telemetry import metric
+                            metric("throttles")
                             block = UPSTREAM_PACER.block(response.headers.get("Retry-After"))
                             if block is not None:
                                 with self.lock:

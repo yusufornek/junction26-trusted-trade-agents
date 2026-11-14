@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Request, Query
+from pydantic import BaseModel
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -36,16 +37,21 @@ def create_app(gateway=None, *, settings=None, keys=None):
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
+    from .telemetry import Telemetry
+    telemetry = gateway.telemetry if gateway else Telemetry(settings.environment)
 
     @asynccontextmanager
     async def lifespan(app):
-        service = gateway or Gateway(settings)
+        service = gateway or Gateway(settings, telemetry=telemetry)
         app.state.gateway = service
         stop = asyncio.Event()
         async def deliver_notifications():
             while not stop.is_set():
-                await run_in_threadpool(service.outbox.dispatch)
-                await run_in_threadpool(service.webhooks.dispatch)
+                def deliver():
+                    with service.activate():
+                        service.outbox.dispatch()
+                        service.webhooks.dispatch()
+                await run_in_threadpool(deliver)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=.5)
                 except asyncio.TimeoutError:
@@ -72,7 +78,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                 service.close()
 
     app = FastAPI(title="Valio Aimo Trusted Trade Agents", version="0.1.0", lifespan=lifespan,
-                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Commitments are gateway-simulated.",
+                  description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. supplier_id defaults to valio (gateway-simulated); nordfood is synthetic and supplier-acknowledged after submit. Sandbox deployments use isolated credentials, storage and fixture time; every response carries X-Environment. Signed webhooks deliver decisions independently of purchasing state.",
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
                              for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
     app.state.keys = keys
@@ -88,6 +94,13 @@ def create_app(gateway=None, *, settings=None, keys=None):
 
     @app.middleware("http")
     async def correlation(request, call_next):
+        from .runtime import CLOCK, ENVIRONMENT, TRANSPORT
+        service = getattr(app.state, "gateway", None)
+        clock_token = CLOCK.set(service.sandbox.now if service and service.sandbox else None)
+        environment_token = ENVIRONMENT.set(settings.environment)
+        from .telemetry import CURRENT
+        telemetry_token = CURRENT.set(telemetry)
+        transport_token = TRANSPORT.set("a2a" if request.url.path == "/a2a" else "mcp" if request.url.path.startswith("/mcp") else "rest")
         token = CORRELATION.set(request.headers.get("X-Correlation-Id") or correlation_id())
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
@@ -98,6 +111,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                 except DomainError as error:
                     response = await domain_error(request, error)
                     response.headers["X-Correlation-Id"] = CORRELATION.get()
+                    response.headers["X-Environment"] = settings.environment
                     return response
             public = request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
@@ -106,10 +120,15 @@ def create_app(gateway=None, *, settings=None, keys=None):
                 response.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type, If-None-Match", "Access-Control-Expose-Headers": "ETag"})
             response.headers["X-Correlation-Id"] = CORRELATION.get()
+            response.headers["X-Environment"] = settings.environment
             return response
         finally:
             PRINCIPAL.reset(principal_token)
             CORRELATION.reset(token)
+            CLOCK.reset(clock_token)
+            ENVIRONMENT.reset(environment_token)
+            TRANSPORT.reset(transport_token)
+            CURRENT.reset(telemetry_token)
 
     @app.exception_handler(DomainError)
     async def domain_error(request, error):
@@ -133,6 +152,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
         try:
             response = await domain_error(request, DomainError("INTERNAL_ERROR", "The request could not be completed", 500))
             response.headers["X-Correlation-Id"] = CORRELATION.get()
+            response.headers["X-Environment"] = settings.environment
             return response
         finally:
             CORRELATION.reset(token)
@@ -184,6 +204,26 @@ def create_app(gateway=None, *, settings=None, keys=None):
     @app.get("/v1/meta", response_model=dict, summary="Public pinned standards and installed packages; limiter scope")
     def meta():
         return manifest()
+
+    @app.get("/v1/suppliers", response_model=list[dict], summary="Supplier capabilities; Nordfood is synthetic")
+    def suppliers(request: Request, principal: Principal = Depends(resolve_principal)):
+        return svc(request).suppliers.list()
+
+    class SandboxReset(BaseModel):
+        scenario: str
+
+    def sandbox_admin(request: Request, principal: Principal = Depends(require_operator)):
+        if svc(request).sandbox is None:
+            raise DomainError("SANDBOX_ONLY", "Use the isolated sandbox deployment and its admin credential", 403)
+        return svc(request).sandbox
+
+    @app.get("/v1/sandbox/scenarios", response_model=list[dict], summary="Versioned synthetic scenarios; sandbox admin only")
+    def sandbox_scenarios(workspace=Depends(sandbox_admin)):
+        return workspace.list()
+
+    @app.post("/v1/sandbox/reset", response_model=dict, summary="Expire outstanding sandbox promises with reason sandbox_reset, reset fixture state")
+    def sandbox_reset(body: SandboxReset, workspace=Depends(sandbox_admin)):
+        return workspace.reset(body.scenario)
 
     @app.get("/v1/me", response_model=AgentContext, summary="Caller scope, mandate, effective limits, budget, environment and operations")
     def me(request: Request, principal: Principal = Depends(resolve_principal),
@@ -276,8 +316,9 @@ def create_app(gateway=None, *, settings=None, keys=None):
         return read_stats(service.db, since, registered_agents=set(service.policy.get().agents), mandates=service.mandates)
 
     @app.get("/v1/products/{id}", response_model=Product)
-    def product(id: str, request: Request, principal: Principal = Depends(resolve_principal)):
-        return svc(request).catalog.get(id)
+    def product(id: str, request: Request, supplier_id: str = Query(default="valio"), principal: Principal = Depends(resolve_principal)):
+        svc(request).policy.check_supplier(principal.id, supplier_id)
+        return svc(request).suppliers.get(supplier_id).catalog.get(id)
 
     @app.post("/v1/quotes", response_model=Quote, summary="Recheck selected lines or a plan_ref live and lock fixed prices",
               description="Lookup, quote and order require a customer mandate and enforce agent ownership.")
@@ -387,6 +428,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                 if not isinstance(operation, dict):
                     continue
                 for status, response in operation.get("responses", {}).items():
+                    response.setdefault("headers", {})["X-Environment"] = {"schema": {"type": "string", "enum": ["live", "sandbox"]}, "description": "Isolated gateway environment; sandbox observations are synthetic fixtures."}
                     response.setdefault("headers", {})["X-Correlation-Id"] = {"schema": {"type": "string"}, "description": "Accepted or generated request correlation identifier."}
                     if status.isdigit() and int(status) >= 400:
                         response.get("content", {}).pop("application/json", None)
@@ -394,6 +436,7 @@ def create_app(gateway=None, *, settings=None, keys=None):
                         response.setdefault("headers", {})["Retry-After"] = {"schema": {"type": "integer", "minimum": 1}, "description": "Seconds before retrying the same command, when retryable."}
         return schema
     app.openapi = problem_openapi
+    telemetry.instrument_app(app)
     return app
 
 

@@ -33,7 +33,8 @@ class Principal:
 
 
 class Credentials:
-    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console"):
+    def __init__(self, operator_token="", agent_keys="", operator_agent_id="web-console", *, environment="live"):
+        self.environment = environment
         self.operator_agent_id = operator_agent_id
         self._operator = sha256(operator_token.encode()).digest() if operator_token else None
         self._agents = []
@@ -56,6 +57,10 @@ class Credentials:
 
     def has_agent(self, agent_id):
         return any(identity == agent_id for identity, _ in self._agents)
+
+    @property
+    def agent_ids(self):
+        return tuple(identity for identity, _ in self._agents)
 
     def resolve(self, secret, policy=None):
         digest = sha256(secret.encode()).digest()
@@ -99,6 +104,8 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     if credential is None:
         raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
     principal = request.app.state.keys.resolve(credential.credentials, service.policy.get())
+    if request.app.state.keys.environment != service.settings.environment:
+        raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
     service.source_limiter.refund(source)
     request.state.principal = principal
     PRINCIPAL.set(principal)
@@ -148,6 +155,8 @@ class MCPBearerMiddleware:
                 if scheme.lower() != "bearer" or not token:
                     raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required; expired or revoked credentials must be replaced by the issuer. See /developers#failures", 401)
                 principal = self.keys.resolve(token, self.gateway.policy.get())
+                if self.keys.environment != self.gateway.settings.environment:
+                    raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
                 if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 self.gateway.source_limiter.refund(source)

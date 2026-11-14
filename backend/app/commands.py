@@ -1,6 +1,7 @@
 """Shared command boundary used by current and future transports."""
 import inspect
 import json
+import time
 from dataclasses import asdict, is_dataclass
 from functools import wraps
 from hashlib import sha256
@@ -38,7 +39,7 @@ def install(gateway, target, name, category):
         return result
 
     @wraps(operation)
-    def command(*args, **kwargs):
+    def execute(*args, **kwargs):
         supplied_key = kwargs.pop("command_key", None)
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
@@ -90,5 +91,52 @@ def install(gateway, target, name, category):
             TRACE.reset(trace_token)
             CORRELATION.reset(tokens[0])
             CAUSATION.reset(tokens[1])
+
+    @wraps(operation)
+    def command(*args, **kwargs):
+        from .runtime import SUPPLIER
+        from .telemetry import span, metric, links
+        values = signature.bind_partial(*args, **{k: v for k, v in kwargs.items() if k != "command_key"}).arguments
+        supplier = getattr(values.get("need"), "supplier_id", None)
+        saved_links = []
+        reference = values.get("order_id") or values.get("quote_id") or getattr(values.get("request"), "need_ref", None)
+        if reference:
+            table = "orders" if values.get("order_id") else "quotes" if values.get("quote_id") else "lookups"
+            with gateway.db.connect() as conn:
+                row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (reference,)).fetchone()
+            if row:
+                obj = json.loads(row[0])
+                supplier = obj.get("supplier_id") or obj.get("need", {}).get("supplier_id", "valio")
+                if name in {"approve", "reject"}:
+                    saved_links = links(obj.get("links", {}).get("placement_span"))
+        token = SUPPLIER.set(supplier or "valio")
+        label = {"create_quote": "quote.create", "place_order": "order.place", "approve": "approval.review",
+                 "reject": "approval.review"}.get(name, "command." + name)
+        started = time.perf_counter()
+        try:
+            with gateway.activate(), span(label, links=saved_links) as current:
+                result = execute(*args, **kwargs)
+                if gateway.sandbox:
+                    gateway.sandbox.after(name, result)
+                if current is not None:
+                    for key, value in {"order.ref": getattr(result, "id", None) if target is gateway.orders and name != "create_quote" else None,
+                                       "quote.ref": getattr(result, "quote_id", None) or (getattr(result, "id", None) if name == "create_quote" else None),
+                                       "outcome": getattr(result, "status", "success")}.items():
+                        if value is not None:
+                            current.set_attribute(key, value)
+                if name == "find_offers":
+                    metric("candidates.screened", result.screened_count)
+                    metric("candidates.priced", result.priced_count)
+                    if current is not None:
+                        current.set_attribute("candidates.screened", result.screened_count)
+                        current.set_attribute("candidates.priced", result.priced_count)
+                if name in {"approve", "reject"}:
+                    from .audit import utcnow
+                    metric("approval.wait", max(0, (utcnow() - result.created_at).total_seconds()))
+                return result
+        finally:
+            with gateway.activate():
+                metric("request.latency", time.perf_counter() - started)
+            SUPPLIER.reset(token)
 
     setattr(target, name, command)

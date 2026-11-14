@@ -469,7 +469,7 @@ make these demonstration documents unsuitable for delivery over Peppol.
 | Order.created_at / decided_at | IssueDate, IssueTime | Creation for Order; decision time for OrderResponse |
 | Order.currency | DocumentCurrencyCode and currencyID on amounts | Upstream price currency (EUR) |
 | Quote.customer_id, Order.customer_id | BuyerCustomerParty/Party/PartyIdentification/ID; PartyName/Name | Internal customer identifier and display name; legal registered buyer name needs data from Valio Aimo |
-| Seller identity | SellerSupplierParty/Party/PartyIdentification/ID; PartyName/Name | Explicit gateway-simulated identity/name; seller legal registration identifier and legal name need data from Valio Aimo |
+| Seller identity | SellerSupplierParty/Party/PartyIdentification/ID; PartyName/Name | Supplier ID; Valio gateway simulation or explicitly synthetic Nordfood; legal registration data is unavailable |
 | Buyer and seller electronic address (mandatory Peppol routing data) | BuyerCustomerParty and SellerSupplierParty / Party/EndpointID, schemeID=0088 | Literal placeholder: **needs data from Valio Aimo**; not an invented GLN |
 | Party legal registration, postal addresses, country codes, VAT identifiers, contacts | PartyLegalEntity, PostalAddress/Country, PartyTaxScheme, Contact | needs data from Valio Aimo; omit unavailable fields, including conditional Peppol fields |
 | Quote.deliver_by | Delivery/RequestedDeliveryPeriod/EndDate | Requested delivery deadline; delivery location/address and recipient identity need data from Valio Aimo |
@@ -483,7 +483,7 @@ make these demonstration documents unsuitable for delivery over Peppol.
 | Allowances, charges, rounding, payment means/terms, accounting references, originator references | AllowanceCharge, monetary totals, PaymentMeans, PaymentTerms, AccountingCost, OriginatorDocumentReference | No gateway allowances/charges; other mandatory-if-applicable Peppol data needs data from Valio Aimo; never manufacture values |
 | Order.status | OrderResponseCode: CONFIRMED=AP, REJECTED=RE, PENDING_APPROVAL=CA; CANCELLED/EXPIRED=RE | Gateway decision, not a supplier response |
 | Order.policy.hits | Note per rule and detail | All policy rule hits; includes approval conditions |
-| Order.commitment | Note: gateway-simulated, no supplier order transmitted | Explicit simulated commitment |
+| Order.commitment | Note: gateway-simulated or supplier-acknowledged plus supplier reference | Explicit execution commitment; synthetic Nordfood acknowledgements are labelled |
 
 UN/ECE Recommendation 20 measures and Recommendation 21 package codes (X prefix):
 
@@ -823,7 +823,7 @@ domain events commit atomically. Refusals do not cache a successful command resu
 
 Every new lookup, quote and order has `context`: customer, supplier (`valio-aimo`), request reference,
 effective constraints, mandate reference, SHA-256 of canonical effective policy, and environment
-(`live`; the sandbox is a later spec). `links` connect request, quote, order, receipt, event, audit
+(`live` or the isolated `sandbox` workspace). `links` connect request, quote, order, receipt, event, audit
 checkpoint and trace identifiers; task references remain null until task transports are installed.
 Order detail exposes all event IDs, audit checkpoints and trace IDs. Trace links are stored locally;
 when an OpenTelemetry span exists its trace ID is used. Span export is provided by spec 27.
@@ -1134,9 +1134,9 @@ The client requires context environment `sandbox`. An operator must prepare the 
 supplier/catalog and policy beforehand: full_stock covers 10 L autonomously; split_stock
 covers 400 L with a split plan and requires human approval. It follows `next_action`, polls
 pending orders, retains mutation keys on retries and verifies the Ed25519 receipt against
-public JWKS. It cannot approve its own order. This kit does not implement sandbox reset
+public JWKS. It cannot approve its own order. This kit does not call sandbox reset
 or credential issuance: use a separate deployment/storage/credentials and set
-`GATEWAY_ENVIRONMENT=sandbox`; that label alone does not provision or isolate data.
+`GATEWAY_ENVIRONMENT=sandbox`; spec 26 now provisions isolated fixture adapters, storage and sandbox-only credentials.
 Opaque credentials are expired by issuer removal/rotation; a refused key returns 401 with
 replacement guidance. Offline verification of a saved order is also available:
 
@@ -1150,3 +1150,79 @@ Claude Code configuration syntax is checked, Desktop stdio executes as a subproc
 MCP transport suite, and the installed generic CLI loader checks `app/mcp_entry.py` without
 launching the optional inspector UI. To use that UI, install `mcp[cli]==2.3.0` and run
 `MCP_AGENT_ID=issued-agent .venv/bin/mcp dev app/mcp_entry.py` on the gateway host.
+# Supplier adapters, sandbox and observability (specs 25–27)
+
+`GET /v1/suppliers` lists capabilities, execution atomicity and synthetic labels. Set
+`NeedSpec.supplier_id` to `nordfood` to use the **synthetic** second supplier; omission keeps
+the existing Valio path. A stored need binds the supplier through lookup, quote and order.
+Products use `(supplier_id, supplier_sku)` identities; GTIN is packaging evidence, never a lookup key.
+Valio's catalog builder and paced/cache-aware client are behind `ValioAdapter` without changing the
+recorded demo's best product or total. Nordfood is a different HTTP API with 60 fixture products,
+case prices, minimum case lots, finite inventory and EUR/SEK. The default EUR-only policy refuses
+SEK with `UNSUPPORTED_CURRENCY`; no implicit exchange rate is used. Agent policy and buyer VC
+`supplier_ids` intersect to restrict authority, including on approval and idempotent retry.
+
+From `backend/`, run `.venv/bin/python -m suppliers.nordfood` (localhost:8002), then the gateway as
+usual. `NORDFOOD_API_BASE` changes its origin. This service is synthetic and keeps its acknowledgements
+and stock in process memory for demonstrations; restart resets them. Tests use its actual ASGI app,
+without sockets. `SupplierAdapter` exposes capabilities/catalog ingestion/normalised price and stock
+facts. `OrderExecution` exposes submit/status/cancel and declares atomic, no-partial-acceptance execution.
+The normalised evidence retains supplier SKU, GTIN, sales unit/conversion, net currency/validity,
+stock semantics, requested/returned dates, source and observation time.
+
+Every new order has `execution {mode, supplier_ref, acknowledged_at, status}`. Valio remains
+`commitment: gateway-simulated`; Nordfood changes to `supplier-acknowledged` only after an accepted
+service response. Rejected or pending-approval orders are never submitted. An uncertain submit returns
+`PENDING_EXECUTION`, execution status `unknown`, and `next_action: RETRY_SAME_COMMAND`. Repeat
+`place_order` with the **same quote and idempotency key** to reconcile it. The deterministic gateway
+order UUID is the supplier's idempotency key, also protecting crash-before-local-commit retries.
+Cancellation requires the supplier's cancellation acknowledgement. Supplier execution is not a payment.
+
+The sandbox runs as a **separate deployment** of the same gateway. Its database is environment-bound:
+one database cannot be opened by both environments. It has independent credentials, keys, customers,
+reservations, budgets, command idempotency, caches, webhooks, outbox and audit. To start it:
+
+```sh
+.venv/bin/python scripts/gen_keys.py --sandbox-agent sandbox-buyer
+GATEWAY_ENVIRONMENT=sandbox .venv/bin/python -m uvicorn app.api:app --port 8010
+```
+
+The script writes only `SANDBOX_AGENT_KEYS` and `SANDBOX_ADMIN_TOKEN` into the local env file and
+prints names, never secrets. Live credentials are neither reused nor accepted. Default sandbox customer:
+`sandbox-customer`; new sandbox agents require approval. Defaults and generated storage live under the
+ignored `backend/sandbox-state/`, or `SANDBOX_DB_PATH` can point to an isolated temporary directory.
+Live `DB_PATH`, signing-key and anchoring settings do not configure the sandbox. The workspace uses
+`FixtureSupplierAdapter` for both suppliers and deterministic suitability fixtures, with the same
+production evidence, policy, planning, signing and approval code. Fixture time starts at the scenario's
+versioned clock; use delivery dates relative to that clock (listed by the scenario endpoint and as
+`fixture_clock` in `/v1/me`). The reference buyer uses that clock automatically. Grant the sandbox agent
+autonomy through the existing autonomy endpoint for an automatic full-stock rehearsal, or sign off its
+orders with the sandbox admin credential.
+
+`GET /v1/sandbox/scenarios` and `POST /v1/sandbox/reset {"scenario":"split_stock"}` require the
+sandbox admin credential. They are refused in a live deployment. The seven versioned YAML scenarios
+are `full_stock`, `split_stock`, `missing_evidence`, `shifted_date`, `expired_quote`,
+`approval_time_stock_change`, and `supplier_timeout`. The approval-change scenario lowers stock after
+a pending placement; the default approval-required sandbox policy supplies its human gate. The expiry
+scenario advances fixture time after quoting. Reset preserves historical evidence and audit, expires
+open quotes/pending orders with `expiration_reason: sandbox_reset`, releases reservations, clears command
+idempotency and cache/limit state, starts a fresh spending epoch, and disables previous webhook deliveries.
+Every HTTP response carries `X-Environment`; sandbox resources, signed quote/receipt payloads and UBL
+notes explicitly carry `environment: sandbox`. Provenance names the scenario version and fixture source.
+
+OpenTelemetry is opt-in: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` enables OTLP/HTTP traces
+and metrics; `OTEL_CONSOLE=1` enables console exporters. With neither variable, no provider/exporter
+threads or automatic instrumentation are started. Export failures are isolated from procurement requests.
+FastAPI/httpx are auto-instrumented; business spans cover catalog, fit, price, stock, planning, policy,
+quote, placement, approval, webhook delivery and anchoring. Approval/delivery link to a persisted placing
+span context; delivery starts a separate trace. Trace IDs are stored as hex strings for canonical JSON.
+The exported attribute allowlist is in `app/telemetry.py`; automatic HTTP attributes, exception events,
+credentials, raw prompts and personal data are excluded. Metrics include request/upstream latency,
+upstream calls, cache hits, candidate counts, decisions, approval wait, throttles, backlog, delivery attempts
+and expiries. REST, MCP and A2A set the transport attribute at their shared command boundary.
+
+For the optional local observability stack, run `docker compose -f observability/docker-compose.yml up`.
+Collector, Jaeger (16686), Prometheus (9090) and Grafana (3000, provisioned gateway dashboard) use pinned
+versions, also exposed with installed OTel package versions in `/v1/meta`. No Docker/network is needed
+for backend tests. Run all checks with `.venv/bin/python -m pytest tests -q`, then regenerate the contract
+with `.venv/bin/python scripts/export_openapi.py`.

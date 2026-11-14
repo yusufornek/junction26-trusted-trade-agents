@@ -1,3 +1,4 @@
+from .telemetry import traced
 from typing import Protocol
 
 import httpx
@@ -15,6 +16,7 @@ class OpenAIDecisions:
     def close(self):
         self.client.close()
 
+    @traced("fit.classify")
     def ask(self, need, candidates, counter=None):
         if not self.key or not candidates:
             return None

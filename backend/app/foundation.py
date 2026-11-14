@@ -24,12 +24,13 @@ def trace_id():
     return format(context.trace_id, "032x") if context.is_valid else TRACE.get() or uuid4().hex
 
 
-def procurement_context(policy, customer_id, request_ref, constraints, mandate=None):
+def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio"):
+    from .runtime import ENVIRONMENT
     document = policy._editable(policy.get())
-    return {"customer_id": customer_id, "supplier_id": "valio-aimo", "request_ref": request_ref,
+    return {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
-            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": "live"}
+            "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": ENVIRONMENT.get()}
 
 
 EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "QUOTE_ACCEPTED": "quote.accepted",
@@ -39,6 +40,7 @@ EVENT_ACTIONS = {"LOOKUP": "request.created", "CREATE_QUOTE": "quote.created", "
                  "EVIDENCE_CHANGED": "order.evidence_changed", "POLICY_UPDATED": "policy.updated",
                  "MANDATE_REVOKED": "mandate.revoked"}
 EVENT_ACTIONS["PROPOSAL_RECEIVED"] = "proposal.received"
+EVENT_ACTIONS.update(SUPPLIER_ACKNOWLEDGED="order.confirmed", SUPPLIER_REJECTED="order.rejected")
 EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGESTED="autonomy.review_suggested")
 
 
@@ -77,6 +79,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
              "order_id": order_id, "event_id": event_id, "audit_checkpoint": audit_id,
              "receipt_id": order_id if obj.get("receipt") else None,
              "trace_id": TRACE.get() or obj.get("links", {}).get("trace_id") or trace_id(), "task_id": TASK.get()}
+    if placement := obj.get("links", {}).get("placement_span"):
+        links["placement_span"] = placement
     payload = {**data, "links": links, "status": obj.get("status"), "context": context,
                "evidence_revision": obj.get("evidence_revision")}
     conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -158,10 +162,11 @@ class Outbox:
 
 def manifest():
     from mcp_types import LATEST_PROTOCOL_VERSION
-    return {"specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
+    from .telemetry import STACK_VERSIONS
+    return {"observability": STACK_VERSIONS, "specifications": {"openapi": "3.1.0", "mcp_protocol": LATEST_PROTOCOL_VERSION,
             "mcp_server_card": {"status": "draft; implemented", "draft_commit": "526201bbc80231daa40ffcdecfc9da4e54e5dc93"},
             "a2a": {"version": "1.0", "status": "implemented"}, "ubl": "2.1",
             "vc_data_model": "2.0", "vc_securing_profile": "VC-JWT EdDSA / RFC 7519 / RFC 8037",
             "problem_details": "RFC 9457", "standard_webhooks": {"commit": "36afae792227eae8a182a7a1a5711dbdc08a4334", "status": "implemented", "signature": "v1a Ed25519"}},
-            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx", "a2a-sdk")},
+            "packages": {name: version(name) for name in ("fastapi", "mcp", "pydantic", "httpx", "a2a-sdk", "opentelemetry-api", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http", "opentelemetry-instrumentation-fastapi", "opentelemetry-instrumentation-httpx")},
             "limiter_scope": "in-process, single instance", "recovery_version": 1}

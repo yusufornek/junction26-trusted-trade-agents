@@ -1,0 +1,7 @@
+name: split_stock
+version: 1
+clock: "2026-11-14T10:00:00+00:00"
+stock:
+  "1": 400
+  "2": 120
+  "3": 0

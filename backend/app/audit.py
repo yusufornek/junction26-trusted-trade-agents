@@ -42,12 +42,18 @@ def migrate(conn):
 
 
 def utcnow():
+    from .runtime import CLOCK
+    if clock := CLOCK.get():
+        return clock()
     return datetime.now(timezone.utc)
 
 
 def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=None):
     from .foundation import CORRELATION, TRACE, emit
     data = dict(data or {})
+    from .runtime import ENVIRONMENT
+    if ENVIRONMENT.get() == "sandbox":
+        data["environment"] = "sandbox"
     if CORRELATION.get():
         data["correlation_id"] = CORRELATION.get()
     if TRACE.get():
@@ -73,9 +79,12 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
 
 
 def head(db, signing):
+    from .runtime import ENVIRONMENT
     with db.connect() as conn:
         row = conn.execute("SELECT COUNT(*) AS entries, (SELECT hash FROM audit ORDER BY id DESC LIMIT 1) AS head_hash FROM audit").fetchone()
     payload = {"entries": row["entries"], "head_hash": row["head_hash"] or GENESIS, "at": utcnow().isoformat()}
+    if ENVIRONMENT.get() == "sandbox":
+        payload["environment"] = "sandbox"
     return {**payload, "jws": signing.sign(payload)}
 
 

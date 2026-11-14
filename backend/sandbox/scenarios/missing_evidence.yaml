@@ -1,0 +1,8 @@
+name: missing_evidence
+version: 1
+clock: "2026-11-14T10:00:00+00:00"
+stock:
+  "1": 2000
+  "2": 2000
+  "3": 2000
+missing_evidence: true

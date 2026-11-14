@@ -1,4 +1,5 @@
 """Public audit checkpoints via locally signed EIP-1559 JSON-RPC transactions."""
+from .telemetry import traced, metric
 import fcntl
 import threading
 from dataclasses import dataclass, field
@@ -107,6 +108,7 @@ class Anchoring:
         if not isinstance(tx_hash, str) or tx_hash.lower() != expected_hash.lower():
             raise AnchorError("Anchoring transaction hash mismatch")
 
+    @traced("audit.anchor")
     def anchor_once(self, *, current_head=False):
         if not self.config.enabled:
             raise AnchorError("Missing anchoring variables: " + ", ".join(self.config.missing))

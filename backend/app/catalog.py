@@ -1,3 +1,4 @@
+from .telemetry import traced
 import argparse
 import csv
 import gzip
@@ -184,7 +185,8 @@ def build(db, source=ROOT / "data/product_data.json.gz", reliability_path=ROOT /
                 continue
             product = extract(raw, reliability, carbon)
             values = product.model_dump()
-            for field, value in values.items():
+            for field in Product.model_fields:
+                value = getattr(product, field)
                 filled = value is not None and value != "" and value != [] and value != {} and value is not False
                 coverage[field]["filled" if filled else "empty"] += 1
             vocabulary["required_claims"].update(product.claims)
@@ -290,6 +292,7 @@ class Catalog:
         with self.db.connect() as conn:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
+    @traced("catalog.search")
     def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
                removed_by=None, mode="and", counts=None, sources=None, categories=None):
         """Keep the (products, excluded) API; optional counts includes every hard-filter match.
