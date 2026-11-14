@@ -24,7 +24,7 @@ from .recurring import Deviations, RecurringRequest
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
-MANDATE_HELP = (" Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. The buyer MCP resource remains /mcp; OAuth and human MCP audiences are part 2. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
                 "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
@@ -109,10 +109,16 @@ class GatewayMCPServer(MCPServer):
         org = identity.organisation_id if identity else None
         customers = policy.organisations[org].customer_ids if org in policy.organisations else (
             policy.agents[active_agent].customer_ids if active_agent in policy.agents else [])
-        principal_token = PRINCIPAL.set(PRINCIPAL.get() or Principal(active_agent, kind=identity.kind if identity else "agent",
+        local_principal = Principal(active_agent, kind=identity.kind if identity else "agent",
             organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
-            credential_ref="stdio:" + active_agent))
+            credential_ref="stdio:" + active_agent)
+        principal_token = PRINCIPAL.set(PRINCIPAL.get() or self.gateway.accounts.bind(local_principal))
         try:
+            from .auth import check_scope
+            if name != "get_agent_context":
+                resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name else "orders" if "order" in name else "read"
+                permission = "write" if name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_")) else "read"
+                check_scope(PRINCIPAL.get(), resource, permission, name)
             return await super().call_tool(name, arguments, context)
         except (ToolError, DomainError, ValidationError) as error:
             # SDK argument validation happens before the function and otherwise adds prose around errors.

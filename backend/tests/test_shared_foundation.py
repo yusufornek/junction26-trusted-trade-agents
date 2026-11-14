@@ -2,6 +2,7 @@
 import asyncio
 import json
 import sqlite3
+from app.tenancy import TenantConnection
 
 import pytest
 from fastapi.testclient import TestClient
@@ -245,12 +246,12 @@ def test_review_policy_file_waits_for_outer_commit(gateway, monkeypatch, section
             conn.execute(f"CREATE TRIGGER fail_review BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT,'review failure'); END")
     else:
         original_connect = sqlite3.connect
-        class FailingCommit(sqlite3.Connection):
+        class FailingCommit(TenantConnection):
             def commit(self):
                 if self.execute("SELECT COUNT(*) FROM commands WHERE key='file-review'").fetchone()[0]:
                     raise sqlite3.OperationalError("review failure")
                 return super().commit()
-        monkeypatch.setattr(db_module.sqlite3, "connect", lambda *a, **kw: original_connect(*a, **kw, factory=FailingCommit))
+        monkeypatch.setattr(db_module.sqlite3, "connect", lambda *a, **kw: original_connect(*a, **{**kw, "factory": FailingCommit}))
     token = PRINCIPAL.set(Principal("web-console", operator=True, kind="operator", role="valio_operator"))
     try:
         with pytest.raises(sqlite3.Error, match="review failure"):
@@ -280,11 +281,11 @@ def test_review_policy_cleanup_cannot_fail_committed_write(gateway, monkeypatch,
     original_connect = sqlite3.connect
     connections = []
 
-    class TrackedConnection(sqlite3.Connection):
+    class TrackedConnection(TenantConnection):
         pass
 
     def connect(*args, **kwargs):
-        conn = original_connect(*args, **kwargs, factory=TrackedConnection)
+        conn = original_connect(*args, **{**kwargs, "factory": TrackedConnection})
         connections.append(conn)
         return conn
 

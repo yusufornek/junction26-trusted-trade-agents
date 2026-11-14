@@ -18,6 +18,9 @@ ADMISSION = ContextVar("command_admission", default=None)
 
 
 def charge(gateway, identity, category):
+    p = PRINCIPAL.get()
+    if p and p.connection_id and identity == p.id:
+        identity = p.connection_id
     credit = ADMISSION.get()
     if credit and credit["identity"] == identity and credit["category"] == category and not credit["used"]:
         credit["used"] = True
@@ -106,7 +109,10 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     agent = principal.id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
     if route == "autonomy.change":
         gateway.autonomy._target(conn, arguments["agent_id"], principal or arguments["principal"], change=True)
-    elif route in {"policy.update", "connections.create"}:
+    elif route == "connections.create":
+        from .connections import require_connection_admin
+        require_connection_admin(principal or arguments["principal"])
+    elif route == "policy.update":
         if principal is not None:
             require_operator(principal)
     elif route == "mandates.revoke":
@@ -209,6 +215,12 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     if route == "connections.create":
         excluded.update({"origin", "mcp_served"})
     values = json_value({k: v for k, v in arguments.items() if k not in excluded})
+    if route == "connections.create":
+        body = values.get("body", {})
+        defaults = {"type": "mcp", "audience": "buyer", "scopes": ["*"], "expires_at": None, "tenant_id": None}
+        if all(body.get(k) == v for k, v in defaults.items()):
+            for k in defaults:
+                body.pop(k, None)
     if not policy_defaults:
         omit_policy_defaults(route, values)
     payload = {"principal": scope, "route": route, "arguments": values}
@@ -285,8 +297,8 @@ def install(gateway, target, name, category):
         bound.apply_defaults()
         arguments = bound.arguments
         principal = PRINCIPAL.get() or arguments.get("principal")
-        identity = principal.agent_id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
-        scope = f"{principal.kind}:{principal.id}" if principal else f"agent:{identity}"
+        identity = principal.id if principal else arguments.get("agent_id") or (arguments.get("actor") or "agent:external").split(":", 1)[-1]
+        scope = f"{'operator' if principal.user_id == 'legacy-operator' else principal.kind}:{principal.id}" if principal else f"agent:{identity}"
         key = supplied_key if supplied_key is not None else arguments.get("idempotency_key")
         digest = fingerprint(scope, route, arguments)
 
@@ -295,6 +307,9 @@ def install(gateway, target, name, category):
         prepared_token = None
         try:
             def preflight():
+                from .auth import check_scope
+                resource = "lookup" if category == "lookup" else "approvals" if name in {"approve", "reject"} else "quotes" if name in {"create_quote", "get_quote"} else namespace
+                check_scope(principal, resource, "read" if category == "read" else "write", name)
                 if category != "read" and (principal is None or principal.kind == "agent"):
                     from .buyer import check_suspension
                     check_suspension(gateway.db, identity)
@@ -389,21 +404,32 @@ def install(gateway, target, name, category):
     @wraps(operation)
     def command(*args, **kwargs):
         from .runtime import SUPPLIER
+        from .tenancy import TARGET_TENANT
         from .telemetry import span, metric, links
         values = signature.bind_partial(*args, **{k: v for k, v in kwargs.items() if k != "command_key"}).arguments
         supplier = getattr(values.get("need"), "supplier_id", None)
         saved_links = []
+        target_tenant = None
+        need = values.get("need") or values.get("request")
+        customer = getattr(need, "customer_id", None)
+        if customer:
+            with gateway.db.connect() as conn:
+                customer_row = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer,)).fetchone()
+            target_tenant = customer_row[0] if customer_row else None
         reference = values.get("order_id") or values.get("quote_id") or getattr(values.get("request"), "need_ref", None)
         if reference:
             table = "orders" if values.get("order_id") else "quotes" if values.get("quote_id") else "lookups"
             with gateway.db.connect() as conn:
-                row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (reference,)).fetchone()
+                row = conn.execute(f"SELECT data,tenant_id FROM {table} WHERE id=?", (reference,)).fetchone()
             if row:
+                target_tenant = row["tenant_id"]
                 obj = json.loads(row[0])
                 supplier = obj.get("supplier_id") or obj.get("need", {}).get("supplier_id", "valio")
                 if name in {"approve", "reject"}:
                     saved_links = links(obj.get("links", {}).get("placement_span"))
         token = SUPPLIER.set(supplier or "valio")
+        tenant_token = TARGET_TENANT.set(target_tenant)
+        principal_token = PRINCIPAL.set(PRINCIPAL.get() or values.get("principal"))
         label = {"create_quote": "quote.create", "place_order": "order.place", "approve": "approval.review",
                  "reject": "approval.review"}.get(name, "command." + name)
         started = time.perf_counter()
@@ -432,5 +458,7 @@ def install(gateway, target, name, category):
             with gateway.activate():
                 metric("request.latency", time.perf_counter() - started)
             SUPPLIER.reset(token)
+            TARGET_TENANT.reset(tenant_token)
+            PRINCIPAL.reset(principal_token)
 
     setattr(target, name, command)

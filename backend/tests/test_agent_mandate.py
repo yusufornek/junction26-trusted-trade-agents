@@ -49,8 +49,10 @@ def place(gateway, need, key, *, qty=100, agent=AGENT):
 
 def test_ac_1_registered_agent_within_limits_confirms(gateway, need, upstream):
     defaults = gateway.policy.get()
-    assert set(defaults.agents) == {AGENT, "web-console"}
-    assert all(m.customer_ids == ["1"] and m.max_auto_daily_total_eur == 5000 for m in defaults.agents.values())
+    assert set(defaults.agents) == {AGENT, "web-console", "hospital-kitchen-agent"}
+    assert all(m.customer_ids == ["1"] and m.max_auto_daily_total_eur == 5000 for agent, m in defaults.agents.items() if agent != "hospital-kitchen-agent")
+    assert defaults.agents["hospital-kitchen-agent"].customer_ids == ["2"]
+    assert defaults.agents["hospital-kitchen-agent"].autonomy == "approval_required"
     upstream.price = 14
     order = place(gateway, need, "registered")
     assert order.total == 1400 and order.status == "CONFIRMED"
@@ -175,10 +177,12 @@ def test_ac_6_effective_per_order_limit_reports_source(gateway, need, upstream):
 
 
 def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need, upstream):
-    other_need = need.model_copy(update={"customer_id": "2"})
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT INTO tenant_customers VALUES('3','hotel-aurora')")
+    other_need = need.model_copy(update={"customer_id": "3"})
     # Create owned evidence while authorised, then revoke that customer's scope.
     policy = gateway.policy.get().model_dump(mode="json")
-    policy["agents"][AGENT]["customer_ids"] = ["1", "2"]
+    policy["agents"][AGENT]["customer_ids"] = ["1", "3"]
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Ada"))
     lookup = gateway.find_offers(other_need, actor=f"agent:{AGENT}")
     request = quote_request(other_need, qty=1, need_ref=lookup.lookup_id).model_dump(mode="json")
@@ -205,7 +209,7 @@ def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need,
         # Revoking scope after quote creation also takes effect at placement.
         quote = fitted_quote(gateway, need)
         body = gateway.policy.get().model_dump(mode="json")
-        body["agents"][AGENT]["customer_ids"] = ["2"]
+        body["agents"][AGENT]["customer_ids"] = ["3"]
         gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
         assert client.post("/v1/orders", json={"quote_id": quote.id}, headers={
             **agent_headers(AGENT), "Idempotency-Key": "revoked"}).status_code == 403
@@ -248,7 +252,7 @@ def test_ac_8_policy_merges_legacy_fields_validates_and_audits_mandates(gateway)
         assert diff[f"agents.{AGENT}"]["after"] is None
         assert client.put("/v1/policy", json={"policy": {**body, "agents": {}}, "updated_by": "Ada"}).json()["agents"] == {}
         reset = client.post("/v1/policy/reset", json={"updated_by": "Ada"}).json()
-        assert set(reset["agents"]) == {AGENT, "web-console"}
+        assert set(reset["agents"]) == {AGENT, "web-console", "hospital-kitchen-agent"}
         # An old runtime file falls back to the actual committed defaults, preserving other edits.
         body["approval"]["max_auto_total_eur"] = 1200
         gateway.policy.runtime_path.write_text(yaml.safe_dump(body))
@@ -313,7 +317,7 @@ def test_ac_11_revoked_mandate_blocks_approval_but_allows_replay_and_rejection(g
     order = place(gateway, need, "revoke-pending")
     assert order.status == "PENDING_APPROVAL"
     with gateway.db.connect() as conn:
-        reservations = [tuple(row) for row in conn.execute("SELECT * FROM reservations")]
+        reservations = [tuple(row) for row in conn.execute("SELECT order_id,product_id,quantity FROM reservations")]
     assert reservations == [(order.id, "1", 100)]
 
     with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
@@ -336,7 +340,7 @@ def test_ac_11_revoked_mandate_blocks_approval_but_allows_replay_and_rejection(g
         pending = client.get(f"/v1/orders/{order.id}").json()
         assert pending["status"] == "PENDING_APPROVAL" and pending["approver"] is None
         with gateway.db.connect() as conn:
-            assert [tuple(row) for row in conn.execute("SELECT * FROM reservations")] == reservations
+            assert [tuple(row) for row in conn.execute("SELECT order_id,product_id,quantity FROM reservations")] == reservations
         rejected = client.post(f"/v1/approvals/{order.id}/reject", json={"approver": "Ada"})
         assert rejected.status_code == 200 and rejected.json()["status"] == "REJECTED"
         with gateway.db.connect() as conn:

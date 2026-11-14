@@ -14,3 +14,6 @@ Use authenticated GET /v1/me or MCP get_agent_context for your own scope and bud
 List tools over MCP at /mcp. Follow next_action in structured responses, retain command
 idempotency keys on retries, and wait for a human when WAIT_FOR_APPROVAL is returned.
 This file is navigation. Executable constraints live in tool schemas and current policy.
+
+Accounts: POST /v1/auth/login (email/password), GET /v1/auth/session, POST /v1/auth/logout. Cookie mutations require X-CSRF-Token. Tenant roles are tenant_admin, approver and viewer; platform_admin reads all tenants. GET /v1/me includes tenant, connection and customer scope.
+Connection catalog: {{BASE_URL}}/v1/connect/catalog?audience=buyer|tenant|operator. Types: MCP, REST, A2A, webhook, tool_pack. API keys are issued once; rotate/revoke and client instructions live under /v1/tenant/connections. OAuth and human MCP/A2A/webhook/tool-pack audiences are part 2 and not available yet; consult availability flags. Human REST decisions require a summary then a confirmed retry with its single-use five-minute confirmation_token.

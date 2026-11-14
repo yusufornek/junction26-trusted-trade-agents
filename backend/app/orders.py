@@ -637,7 +637,7 @@ class Orders:
     def _review(self, order_id, approver, comment, approve, evidence_revision=None, *, actor=None):
         from .foundation import PRINCIPAL
         principal = PRINCIPAL.get()
-        if principal and principal.kind == "buyer_user":
+        if principal and principal.kind in {"buyer_user", "tenant_user"}:
             actor = f"human:buyer_approver:{principal.credential_ref}"
         self.expire()
         if not approver.strip():
@@ -660,7 +660,7 @@ class Orders:
             authorize_review(self.policy.get(), principal, order)
             profile = self.policy.get().customers.get(order.customer_id)
             if approve and (order.clinical_review == "required" or (profile and profile.clinical_review == "required")):
-                if not principal or principal.kind != "buyer_user" or principal.role != "buyer_approver":
+                if not principal or principal.kind not in {"buyer_user", "tenant_user"} or principal.role not in {"buyer_approver", "approver", "tenant_admin"}:
                     raise DomainError("BUYER_APPROVER_REQUIRED", "Clinical review requires a buyer_approver credential", 403)
             if order.status != "PENDING_APPROVAL":
                 raise DomainError("INVALID_TRANSITION", "Only PENDING_APPROVAL orders can be approved or rejected")
@@ -723,7 +723,9 @@ class Orders:
             if not changes:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
-                order.approval_side = "buyer" if principal and principal.kind == "buyer_user" else "valio_operator"
+                order.approver_user_id = principal.user_id if principal else None
+                order.approver_role = principal.role if principal else None
+                order.approval_side = "buyer" if principal and principal.kind in {"buyer_user", "tenant_user"} else "valio_operator"
                 if approve and order.supplier_id != "valio":
                     self._execute(conn, order, quote)
                 self._sign_receipt(order, quote, "operator")
@@ -733,7 +735,7 @@ class Orders:
                 self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
                     "organisation_id": principal.organisation_id if principal else None,
-                    "evidence_revision": order.evidence_revision, "approval_side": order.approval_side,
+                    "evidence_revision": order.evidence_revision, "approval_side": order.approval_side, "user_id": principal.user_id if principal else None, "role": principal.role if principal else None,
                     **mandate_evidence(order.mandate),
                     "rule_hits": [h.model_dump() for h in order.policy.hits],
                     "fit_scores": {o.product_id: o.fit for o in order.lines},

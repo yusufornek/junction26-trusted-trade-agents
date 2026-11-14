@@ -28,6 +28,98 @@ TEST_KEYS = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{token}" for agent, t
 OPERATOR_HEADERS = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
 
 
+LEGACY_HUMAN_REST_MODULES = {
+    "test_a2a_service.py", "test_agent_mandate.py", "test_api_mcp.py", "test_approval_evidence.py",
+    "test_audit_anchoring.py", "test_audit_chain.py", "test_authentication.py", "test_basket_recipe.py",
+    "test_buyer_view.py", "test_catalog_lookup.py", "test_connect_kit.py", "test_control_plane.py",
+    "test_cross_interface.py", "test_demo_reset.py", "test_evidence_bundle.py", "test_evidence_completeness.py",
+    "test_exception_journey.py", "test_exceptions.py", "test_graduated_autonomy.py", "test_hospital_substitution.py",
+    "test_lookup_fallback.py", "test_mcp_server_card.py", "test_opentelemetry.py", "test_order_cancel.py",
+    "test_order_timeline.py", "test_orders_policy.py", "test_organiser_answers.py", "test_purchase_memory.py",
+    "test_rate_limits.py", "test_recovery_contract.py", "test_recurring_drift.py", "test_sandbox.py",
+    "test_shared_foundation.py", "test_shortlist.py", "test_signed_quotes.py", "test_size_reconciliation.py",
+    "test_spec42_agent_connections.py", "test_standing_constraints.py", "test_supplier_adapters.py", "test_supplier_proposals.py",
+    "test_total_cost_ranking.py", "test_ubl_export.py", "test_verifiable_mandate.py", "test_webhooks.py",
+}
+
+
+@pytest.fixture(autouse=True)
+def confirm_legacy_human_rest_decisions(request, monkeypatch):
+    """Older domain tests consent through the new REST handshake.
+
+    Spec 43 tests deliberately use the raw client and verify the summary, human
+    confirmation, expiry, replay and evidence binding themselves. This adapter
+    keeps existing domain assertions about the resulting order/policy meaningful.
+    """
+    if request.node.path.name not in LEGACY_HUMAN_REST_MODULES:
+        return
+    from fastapi.testclient import TestClient
+    original = TestClient.request
+
+    def confirmed(client, method, url, *args, **kwargs):
+        response = original(client, method, url, *args, **kwargs)
+        if str(method).upper() not in {"POST", "PUT", "PATCH"} or response.status_code != 200:
+            return response
+        try:
+            preview = response.json()
+        except ValueError:
+            return response
+        if not isinstance(preview, dict) or not preview.get("confirmation_required"):
+            return response
+        body = kwargs.get("json")
+        if body is None:
+            try:
+                body = json.loads(kwargs.get("content", ""))
+            except (ValueError, TypeError):
+                return response
+        if not isinstance(body, dict):
+            return response
+        retry = {k: v for k, v in kwargs.items() if k not in {"content", "data", "json"}}
+        retry["json"] = {**body, "confirmation_token": preview["confirmation_token"]}
+        return original(client, method, url, *args, **retry)
+
+    monkeypatch.setattr(TestClient, "request", confirmed)
+
+    # A2A SDK integration tests approve via an asynchronous REST client.
+    # Their purchasing transport stays unchanged; only the human decision retries.
+    import importlib
+    seen = set()
+    for module_name in ("httpx", "httpx2"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        if module.AsyncClient in seen:
+            continue
+        seen.add(module.AsyncClient)
+
+        def async_confirmation(original_request):
+            async def request(client, method, url, *args, **kwargs):
+                response = await original_request(client, method, url, *args, **kwargs)
+                if str(method).upper() not in {"POST", "PUT", "PATCH"} or response.status_code != 200:
+                    return response
+                try:
+                    preview = response.json()
+                except ValueError:
+                    return response
+                if not isinstance(preview, dict) or not preview.get("confirmation_required"):
+                    return response
+                body = kwargs.get("json")
+                if body is None:
+                    try:
+                        body = json.loads(kwargs.get("content", ""))
+                    except (ValueError, TypeError):
+                        return response
+                if not isinstance(body, dict):
+                    return response
+                retry = {k: v for k, v in kwargs.items() if k not in {"content", "data", "json"}}
+                retry["json"] = {**body, "confirmation_token": preview["confirmation_token"]}
+                return await original_request(client, method, url, *args, **retry)
+            return request
+
+        monkeypatch.setattr(module.AsyncClient, "request", async_confirmation(module.AsyncClient.request))
+
+
 class PacerClock:
     """Advance supplier pacing deterministically without wall-clock sleeps."""
     def __init__(self):

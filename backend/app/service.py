@@ -83,6 +83,8 @@ class Gateway:
         self.source_limiter = SourceLimiter()
         from .connections import Connections
         self.connections = Connections(self)
+        from .accounts import Accounts
+        self.accounts = Accounts(self)
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")

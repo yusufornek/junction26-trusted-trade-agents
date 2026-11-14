@@ -37,10 +37,21 @@ for _code in ("NO_RECURRING_OFFER", "PROPOSAL_NO_MATCH"):
 RECOVERY.update(UNKNOWN_SUPPLIER=(False, "FIX_REQUEST"), SUPPLIER_NOT_IN_MANDATE=(False, "CONTACT_ADMIN"),
                 SUPPLIER_UNAVAILABLE=(True, "RETRY_SAME_COMMAND"), SANDBOX_ONLY=(False, "FIX_REQUEST"),
                 UNKNOWN_SCENARIO=(False, "FIX_REQUEST"))
+for _code in ("CSRF_REQUIRED", "CONFIRMATION_INVALID", "ALREADY_ACTIVE", "EMAIL_EXISTS", "AGENT_EXISTS", "CUSTOMER_ASSIGNED"):
+    RECOVERY[_code] = (False, "FIX_REQUEST")
+for _code in ("WRONG_AUDIENCE", "HUMAN_REQUIRED", "INSUFFICIENT_SCOPE", "TENANT_ADMIN_REQUIRED", "LAST_TENANT_ADMIN",
+              "POLICY_CEILING", "LINK_EXPIRED", "CONNECTION_REVOKED"):
+    RECOVERY[_code] = (False, "CONTACT_ADMIN")
+for _code in ("USER_NOT_FOUND", "TENANT_NOT_FOUND", "MANDATE_NOT_FOUND"):
+    RECOVERY[_code] = (False, "STOP")
+RECOVERY["LOGIN_THROTTLED"] = (True, "RETRY_SAME_COMMAND")
 
 
 
 def problem(error, instance=None):
+    import re
+    if instance:
+        instance = re.sub(r"(/v1/auth/(?:invites|password-resets)/)[^/]+", r"\1[redacted]", instance)
     from .runtime import ENVIRONMENT
     retryable, action = RECOVERY[error.code]
     data = error.data if error.status != 401 else {}

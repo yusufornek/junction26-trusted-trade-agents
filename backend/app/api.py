@@ -24,6 +24,7 @@ from .models import JWKSet, AuditHead, AuditVerification, AuditAnchor, Revocatio
 from .models import AgentTrackRecord, AutonomyChange, AutonomyChangeResult
 from .models import BasketLookupRequest, BasketLookupResult
 from .service import Gateway
+from .tenant_api import DecisionPreview, confirm_rest
 from .stats import read_stats
 from .foundation import CORRELATION, PRINCIPAL, correlation_id, manifest
 from .recovery import problem, validation_problem
@@ -97,9 +98,15 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                   description="Fixed-price gateway. REST, MCP and A2A 1.0 share one core. Signed webhooks deliver decisions independently of purchasing state. Bearer credentials establish agent ownership and operator authority. Keyed writes bind the principal, command route including all targets, and payload. Every exact replay rechecks current authorization and scope before returning its saved result. Policy changes commit with their audit and command result; runtime YAML is published only after commit, with durable recovery from SQLite. supplier_id defaults to valio (gateway-simulated); nordfood is synthetic and supplier-acknowledged after submit. Sandbox deployments use isolated credentials, storage and fixture time; every response carries X-Environment.",
 
                   responses={code: {"model": ErrorResponse, "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
-                             for code in (401, 403, 404, 409, 422, 429, 500, 502, 503)})
+                             for code in (401, 403, 404, 409, 410, 422, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
+    from .accounts import router as accounts_router
+    app.include_router(accounts_router)
+    from .connect_catalog import router as connect_router
+    app.include_router(connect_router)
+    from .tenant_api import router as tenant_router, install_aliases
+    app.include_router(tenant_router)
     from .connections import router as connections_router
     app.include_router(connections_router)
     from .webhooks import router as webhook_router
@@ -121,7 +128,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     app.include_router(proposals_router)
     from .purchase_memory import router as memory_router
     app.include_router(memory_router)
-    app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origin_regex=r"http://localhost(?::\d+)?", allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
     @app.middleware("http")
     async def correlation(request, call_next):
@@ -152,6 +159,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     "Access-Control-Allow-Headers": "Content-Type, If-None-Match", "Access-Control-Expose-Headers": "ETag"})
             response.headers["X-Correlation-Id"] = CORRELATION.get()
             response.headers["X-Environment"] = settings.environment
+            if any(part in request.url.path for part in ("/auth/", "/connections", "/users")):
+                response.headers["Cache-Control"] = "no-store"
             return response
         finally:
             PRINCIPAL.reset(principal_token)
@@ -269,12 +278,16 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                      principal: Principal = Depends(resolve_principal)):
         return svc(request).autonomy.track_record(agent_id, principal, window_days)
 
-    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult,
+    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult | DecisionPreview,
               description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key binds this target and payload, rechecks current target scope, and replays the first result without changing authority again; changed target or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows the enclosing command commit. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
                         principal: Principal = Depends(resolve_principal),
                         idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).autonomy.change(agent_id, body, principal, command_key=idempotency_key)
+        service = svc(request)
+        with service.db.connect() as conn:
+            service.autonomy._target(conn, agent_id, principal, change=True)
+        return confirm_rest(service, principal, "autonomy", agent_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.autonomy.change(agent_id, body, principal, command_key=idempotency_key), force="/operator/" in request.url.path)
 
     def audit_cancel_validation(request, raw_body, message):
         """Audit a cancel request refused by validation, with a normalised actor (never raw input)."""
@@ -342,15 +355,19 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     def get_policy(request: Request, principal: Principal = Depends(require_operator)):
         return svc(request).policy.get()
 
-    @app.put("/v1/policy", response_model=PolicyResource, summary="Persist policy for subsequent operations and audit changed fields")
+    @app.put("/v1/policy", response_model=PolicyResource | DecisionPreview, summary="Persist policy for subsequent operations and audit changed fields")
     def put_policy(body: PolicyUpdateRequest, request: Request, principal: Principal = Depends(require_operator),
                    idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).policy.update(body, actor="human:operator", command_key=idempotency_key)
+        service = svc(request)
+        return confirm_rest(service, principal, "policy", "platform", body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.policy.update(body, actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id), command_key=idempotency_key), force="/operator/" in request.url.path)
 
-    @app.post("/v1/policy/reset", response_model=PolicyResource, summary="Restore committed policy defaults with a human audit event")
+    @app.post("/v1/policy/reset", response_model=PolicyResource | DecisionPreview, summary="Restore committed policy defaults with a human audit event")
     def reset_policy(body: PolicyResetRequest, request: Request, principal: Principal = Depends(require_operator),
                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).policy.update(body, reset=True, actor="human:operator", command_key=idempotency_key)
+        service = svc(request)
+        return confirm_rest(service, principal, "policy_reset", "platform", body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.policy.update(body, reset=True, actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id), command_key=idempotency_key), force="/operator/" in request.url.path)
 
     @app.get("/v1/stats", response_model=Stats, summary="Operator metrics from persisted evidence; no upstream calls")
     def stats(request: Request, since: datetime | None = None, principal: Principal = Depends(require_operator)):
@@ -414,13 +431,15 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     def order_timeline(order_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
         return svc(request).orders.timeline(order_id, principal.owner)
 
-    @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
+    @app.post("/v1/orders/{order_id}/cancel", response_model=Order | DecisionPreview,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
     def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
                      idempotency_key: Annotated[str | None, Header(min_length=1)] = None, mandate=Depends(presented_mandate)):
-        return svc(request).orders.cancel(order_id,
-            actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
-            stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key)
+        service = svc(request)
+        return confirm_rest(service, principal, "cancel", order_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.orders.cancel(order_id,
+                actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id) if principal.kind in {"tenant_user", "platform_admin"} else f"agent:{principal.agent_id}", reason=body.reason,
+                stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key), force="/operator/" in request.url.path)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
@@ -429,7 +448,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id)) for o in service.orders.list_orders(True)
                 if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
-    @app.post("/v1/approvals/{order_id}/approve", response_model=Order,
+    @app.post("/v1/approvals/{order_id}/approve", response_model=Order | DecisionPreview,
               description="Approve only the reviewed evidence. Optionally send evidence_revision; a stale revision "
                           "returns 409 EVIDENCE_CHANGED without upstream calls. Refresh stock and policy; changed decision "
                           "evidence stays pending at a new revision and returns 409 EVIDENCE_CHANGED with "
@@ -439,15 +458,19 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                           "Refused replay checks record APPROVE_FAILED without repeating approval.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
-            actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
+        service = svc(request)
+        return confirm_rest(service, principal, "approve", order_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.orders.approve(order_id, body.approver, body.comment, body.evidence_revision,
+                actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id), command_key=idempotency_key), force="/operator/" in request.url.path)
 
-    @app.post("/v1/approvals/{order_id}/reject", response_model=Order,
+    @app.post("/v1/approvals/{order_id}/reject", response_model=Order | DecisionPreview,
               description="Reject a pending order. Optional Idempotency-Key replays the first result; cached responses recheck the reviewer's current organisation and customer scope.")
     def reject(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
-        return svc(request).orders.reject(order_id, body.approver, body.comment,
-            actor="human:operator" if principal.operator else f"human:{principal.id}", command_key=idempotency_key)
+        service = svc(request)
+        return confirm_rest(service, principal, "reject", order_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
+            lambda: service.orders.reject(order_id, body.approver, body.comment,
+                actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id), command_key=idempotency_key), force="/operator/" in request.url.path)
 
     @app.get("/v1/audit", response_model=list[AuditEntry])
     def audit(request: Request, order_id: str | None = None, quote_id: str | None = None, principal: Principal = Depends(require_operator)):
@@ -474,6 +497,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         if anchor is not None:
             result.update(svc(request).anchoring.verify(anchor))
         return result
+
+    install_aliases(app)
 
     original_openapi = app.openapi
     def problem_openapi():

@@ -12,6 +12,8 @@ from app.policy import Policy
 
 
 def provision(env_file, agent_ids, *, sandbox=False):
+    from app.accounts import DEMO_USERS
+    password_vars = {row[-1] for row in DEMO_USERS} if not sandbox else set()
     agent_var = "SANDBOX_AGENT_KEYS" if sandbox else "AGENT_KEYS"
     operator_var = "SANDBOX_ADMIN_TOKEN" if sandbox else "OPERATOR_TOKEN"
     content = env_file.read_text() if env_file.exists() else ""
@@ -20,7 +22,7 @@ def provision(env_file, agent_ids, *, sandbox=False):
     for index, line in enumerate(lines):
         text = line.strip().removeprefix("export ")
         name, sep, value = text.partition("=")
-        if sep and name.strip() in {agent_var, operator_var}:
+        if sep and name.strip() in {agent_var, operator_var} | password_vars:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -48,6 +50,11 @@ def provision(env_file, agent_ids, *, sandbox=False):
     if not entries.get(operator_var, (None, ""))[1]:
         changes[operator_var] = secrets.token_urlsafe(32)
         added.append(operator_var)
+    if not sandbox:
+        for *_, variable in DEMO_USERS:
+            if not entries.get(variable, (None, ""))[1]:
+                changes[variable] = secrets.token_urlsafe(24)
+                added.append(variable)
     if changes:
         for name, value in changes.items():
             entry = entries.get(name)

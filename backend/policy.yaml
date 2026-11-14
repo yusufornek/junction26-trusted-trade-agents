@@ -45,6 +45,11 @@ customers: {}
 shortlist: {catalog_pool: 40, live_max: 25}
 ranking_weights: {price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1}
 agents:
+  hospital-kitchen-agent:
+    autonomy: approval_required
+    customer_ids: ["2"]
+    max_auto_daily_total_eur: 5000
+    note: "Hospital purchases require a human approver."
   hotel-chain-agent:
     autonomy: autonomous_within_limits
     customer_ids: ["1"]
