@@ -11,6 +11,12 @@ that push is the truth).
 Newest on top. Each entry says what landed, what the console can build on it, and any server step. Continue from the
 top entry; the numbered sections below hold the details.
 
+- **URGENT (14.11 22:10) — approvals do not complete in the console.** Every human decision (approve, reject, cancel,
+  policy reset, autonomy and governance writes) is two requests: the first answers `confirmation_required` with a
+  summary and `confirmation_token`; repeat the identical request with that token within five minutes. The console's
+  approve/reject sends only the first request (`frontend/src/pages/Approvals.tsx`), so approvals never finish. Handle
+  `CONFIRMATION_INVALID` and `EVIDENCE_CHANGED`. This blocks the brief's third core requirement in the demo.
+
 - **Push 3 (14.11, ~22:30) — brief scenarios (spec 46) + fixes.**
   - Basket lines accept `on_hand {value, unit}`; responses show needed / on hand / to buy per line.
   - Near `deliver_by`: lines carry `arrives_in_time` and, when late, `cannot_source_in_time` with in-time alternatives.
@@ -122,6 +128,88 @@ top entry; the numbered sections below hold the details.
   (TASKS #44).
 - **Sandbox scenarios** for the demo: `GET /v1/sandbox/scenarios`, `POST /v1/sandbox/reset {scenario}` (next push).
 - **Suppliers:** `GET /v1/suppliers` (Valio + synthetic second supplier) (next push).
+
+## 9. Backend capabilities not listed above yet (audit 14.11 22:10)
+
+Found by comparing this file with the routes the backend serves. Data and behaviour only.
+
+
+- **Complete a purchase:** create/read a fixed-price quote, then place the order: `POST /v1/quotes`, `GET /v1/quotes/{id}`, `POST /v1/orders`. Bind quotes using `need_ref`, `plan_ref`, or `basket_ref`; preserve the placement `Idempotency-Key`. Handle `OPEN`, `ACCEPTED`, `EXPIRED`, `EXPIRED_QUOTE`, `QUOTE_ALREADY_ACCEPTED`, `NEED_REF_REQUIRED`, and `IDEMPOTENCY_CONFLICT`. **User:** kitchen buyer through a purchasing agent; current console uses the operator’s agent. **Specs:** 02, 10, 16, 22.
+
+- **Compare fulfillment plans and soft preferences:** `POST /v1/offers` supports brands, price caps, pack ranges and labels, and returns `single`, `split`, `partial` plans with `policy_preview`; quote a selected plan through `POST /v1/quotes`. Handle `OUTSIDE_PREFERENCE`, uncovered quantity, and preview outcomes `CONFIRMED` / `PENDING_APPROVAL` / `REJECTED`. **User:** kitchen buyer. **Spec:** 08.
+
+- **Understand search coverage and ranking:** `POST /v1/offers`, `GET /v1/lookups/{id}` expose retrieval terms, matched/screened/priced counts, constraint exclusions, whole-pack purchase totals, overbuy, conversion evidence and score contributions. Handle `RETRIEVAL_BROADENED`, `POOL_TRUNCATED`, `UNKNOWN_CODE`, `SIZE_MISMATCH`, `SIZE_UNCONFIRMED`, and honest empty results. **User:** kitchen buyer. **Specs:** 01, 05, 09, 15, 18, 20.
+
+- **Inspect product facts:** `GET /v1/products/{id}?supplier_id=…` returns GTINs, units, pack quantities, allergens, claims, labels, nutrition and provenance-related facts. Missing declarations differ from proven absence; handle `PRODUCT_NOT_FOUND`. **User:** kitchen buyer, approver. **Specs:** 01, 13, 15, 46.
+
+- **Review purchase history and its full explanation:** `GET /v1/orders`, `GET /v1/orders/{id}`, `GET /v1/quotes/{id}`, `GET /v1/lookups/{id}`, `GET /v1/orders/{id}/timeline`, `GET /v1/audit?order_id=…&quote_id=…`. Preserve rejection/cancellation reasons, evidence revisions, failed attempts and call totals; foreign resources can return 404. **User:** kitchen buyer, approver, Valio operator within their scope. **Specs:** 02, 03, 07, 19, 22.
+
+- **Cancel a confirmed purchase:** `POST /v1/orders/{id}/cancel`. Only `CONFIRMED → CANCELLED`, before every known cutoff; reservations are released. Handle `INVALID_TRANSITION`, `CUTOFF_PASSED`, `ORDER_NOT_FOUND`, and the confirmation handshake below. **User:** authorized buyer/approver, Valio operator. **Spec:** 04.
+
+- **Edit/reset the procurement runtime policy:** `GET/PUT /v1/policy`, `POST /v1/policy/reset` cover warning handling, ranking weights, shortlist settings, mandates and rate limits—additional controls beyond `/v1/operator/governance/policy`. Handle validation failures and returned update metadata/diffs. **User:** Valio operator. **Specs:** 03, 06, 09, 15, 24.
+
+- **Maintain standing procurement constraints:** `GET/PUT /v1/policy` → `customers`, and `GET/PUT /v1/tenant/policy` for the tenant overlay. Manage claims, allergen exclusions and substitution/clinical rules; requests cannot relax standing constraints. Handle `UNKNOWN_CODE`, hard violations, and constraint source `request` versus `customer_policy`. **User:** tenant admin, Valio operator. **Specs:** 16, 31, 43.
+
+- **Complete human decisions with two requests:** approval/rejection/cancellation, policy/reset, autonomy and governance writes first return `confirmation_required`, a summary and `confirmation_token`; repeat the identical request with that token within five minutes. Handle `CONFIRMATION_INVALID` and `EVIDENCE_CHANGED`. **User:** approver, tenant admin, Valio operator. **Specs:** 43–44. This is enforced even for the legacy operator token. [Implementation](backend/app/tenant_api.py:42)
+
+- **Review readiness and grant/withdraw autonomy:** `GET /v1/agents/{id}/track-record?window_days=…`, `POST /v1/agents/{id}/autonomy`, including tenant/operator aliases. Levels are `approval_required` and `autonomous_within_limits`; recommendations never promote automatically. Tenant changes use governance change control. Handle `AGENT_NOT_FOUND`, `BUYER_ADMIN_REQUIRED`, and confirmation responses. **User:** tenant admin, Valio operator. **Spec:** 40.
+
+- **Create, rename and disable agents:** `POST /v1/tenant/agents`, `PATCH /v1/tenant/agents/{id}`. New agents start approval-first; disabling revokes existing connections. Handle `AGENT_EXISTS`, `AGENT_NOT_FOUND`, and active/disabled state. The to-do lists the register, but not these lifecycle actions. **User:** tenant admin/authorized agent owner. **Specs:** 43–44.
+
+- **Issue and revoke signed purchasing authority:** `POST/GET /v1/tenant/agents/{id}/mandates`, `DELETE /v1/tenant/agents/{id}/mandates/{mandate_id}`; signed external revocations use `POST /v1/mandates/revocations`. Handle expiry/revocation, `MANDATE_NOT_FOUND`, `MANDATE_INVALID`, `REVOCATION_INVALID`, and customer scope. “Mandates” appears only in the push headline, without this workflow. **User:** tenant admin. **Specs:** 12, 43.
+
+- **Inspect organization spending and activity:** `GET /v1/buyer/{agents,mandates,spend,orders,approvals,activity}`, plus `GET /v1/tenant/spend` and `/v1/tenant/audit`. Spending separates autonomous spend, pending commitments, human-approved spend, remaining authority and limit source. **User:** kitchen buyer, approver, tenant admin; Valio operator can read buyer views. **Specs:** 28, 43.
+
+- **Apply a buyer-local emergency stop/revocation:** `POST /v1/buyer/agents/{id}/suspend|resume`, `POST /v1/buyer/mandates/{jti}/revoke`. This suspension is separate from governance pause; subsequent commands return `AGENT_SUSPENDED` or merged `AGENT_PAUSED`. Handle `BUYER_ADMIN_REQUIRED`, `AGENT_NOT_FOUND`, and revoked mandates. **User:** tenant admin; operator credentials cannot perform these buyer-admin controls. **Spec:** 28.
+
+- **Finish team lifecycle management:** `DELETE /v1/tenant/users/{id}`, `POST …/{id}/resend-invite|cancel-invite`; equivalent staff management exists under `/v1/operator/users`. Handle `invited`, `active`, `disabled`, `removed`, `ALREADY_ACTIVE`, `EMAIL_EXISTS`, `LINK_EXPIRED`, and `LAST_TENANT_ADMIN`. Removing/disabling owners also affects their agents/connections. **User:** tenant admin, Valio operator. **Specs:** 43–44.
+
+- **Request functionally suitable replacements and clinical review:** `POST /v1/offers` accepts `function` and `substitute_for`; quotes/orders expose `clinical_review`. Handle `CLINICAL_REVIEW`, `SUBSTITUTION_PROFILE`, and `BUYER_APPROVER_REQUIRED`: a platform operator alone cannot approve a clinical order. **User:** kitchen buyer, tenant approver/admin. **Spec:** 31.
+
+- **Purchase from a selected supplier and understand execution:** send `supplier_id` through `POST /v1/offers`; quotes/orders retain it. Handle synthetic Nordfood labeling, supplier minimum quantities, `UNKNOWN_SUPPLIER`, `SUPPLIER_NOT_IN_MANDATE`, `UNSUPPORTED_CURRENCY`, and `PENDING_EXECUTION`. Ambiguous execution retries must retain the same quote/key; distinguish `gateway-simulated` from `supplier-acknowledged`. **User:** kitchen buyer, approver. **Spec:** 25.
+
+- **Manage notification delivery:** `POST/GET /v1/webhook-subscriptions`, `PATCH/DELETE …/{id}`, `GET …/{id}/deliveries`, `POST …/{id}/deliveries/{delivery_id}/redeliver`; tenant/operator aliases exist. Handle destination challenge failures, unsafe URLs, enabled/disabled subscriptions and pending/delivered/failed/skipped delivery states. Delivery failure does not change an order. **User:** tenant admin, authorized approver, Valio operator. **Specs:** 33, 43.
+
+- **Control proposal consent:** `GET/PUT /v1/buyer/proposal-preferences?customer_id=…` manages opted-in categories/interests, channels, cadence, quiet periods and muted campaigns. Empty interests/categories mean no opt-in. Handle `CUSTOMER_REQUIRED`, `CUSTOMER_FORBIDDEN`, `BUYER_ADMIN_REQUIRED`. **User:** tenant admin function, but currently these routes require legacy `buyer_admin` credentials. **Spec:** 36.
+
+- **Submit and monitor supplier campaigns:** `POST /v1/proposals`, `GET /v1/proposals/campaigns/{id}` expose submission and aggregate delivery/action counts, beyond the listed generation endpoint. Handle `PROPOSAL_EXPIRED`, `INVALID_PRICE_EVIDENCE`, campaign deduplication and filtering/quota holds. **User:** Valio operator through a `supplier_agent` credential; an ordinary operator token receives `SUPPLIER_REQUIRED`. **Specs:** 36, 46.
+
+- **Snooze replenishment:** `POST /v1/suggestions/{id}/snooze {days}` hides a suggestion for 1–365 days. Handle persisted `snoozed_until`, `SUGGESTION_NOT_FOUND`, and reviewer permissions. **User:** kitchen buyer/approver. **Spec:** 41. Already called by the console.
+
+- **Read preferences and permanently forget purchase memory:** `GET /v1/buyer/memory-preferences`, `DELETE /v1/buyer/memory?customer_id=…`. Forgetting permanently suppresses suggestions; enabling memory later does not reverse it, and audit/order evidence remains. **User:** tenant admin function; currently legacy `buyer_admin` credentials only. **Spec:** 41.
+
+- **Explicitly approve a new recurring baseline:** `POST /v1/recurring-orders/{id}/baseline {approved_order_id}` increments the baseline revision. Handle `APPROVED_TEMPLATE_REQUIRED`, `RECURRING_FORBIDDEN`, `BUYER_APPROVER_REQUIRED`, and `RECURRING_NOT_FOUND`. **User:** approver/tenant admin via supported buyer credentials. **Spec:** 35. Already called by the console.
+
+- **Keep and verify an independent audit checkpoint:** `GET /v1/audit/head`, `GET /v1/audit/verify?checkpoint_entries=…&checkpoint_hash=…`, optionally `&anchor=latest|<tx_hash>`; historical keys are at `/.well-known/jwks-history.json`. Handle `INVALID_CHECKPOINT`, chain/checkpoint mismatch and anchor verification state. **User:** approver, tenant admin, Valio operator. **Specs:** 10–11, 21, 29.
+
+- **Export the decision response document:** `GET /v1/orders/{id}/ubl?document=response`, alongside the already-listed default Order export. Preserve confirmed/rejected response semantics and simulation labeling. **User:** kitchen buyer, approver. **Spec:** 13.
+
+- **Inspect operational context and recover correctly:** `GET /v1/me`, `/v1/meta`, `/v1/stats?since=…`, `/health` expose scope, limits, remaining tokens, standards, decision metrics, catalog coverage and upstream blocking. Handle `RATE_LIMITED` (429), `Retry-After`, correlation IDs and the full recovery actions, including `REFRESH_QUOTE`, `FIX_REQUEST`, `CONTACT_ADMIN`, and `STOP`. **User:** Valio operator; scoped context is available to other authenticated users. **Specs:** 03, 22–24, 38–39.
+
+- **Pre-register an OAuth client:** `POST /v1/oauth/clients`; the client secret is returned once. Handle OAuth `invalid_client_metadata` errors rather than assuming the business RFC 9457 envelope. **User:** Valio operator. **Spec:** 43. [Route](backend/app/oauth.py:649)
+
+## 10. Already done in the console (verified in frontend/src)
+
+
+Verified in [API calls](frontend/src/api.ts:492), [basket calls](frontend/src/basket.ts:51), [repeat calls](frontend/src/repeat.ts:73) and their page callers:
+
+- **Unorderable offers:** Buyer uses `GET /v1/policy` → `reject.on` to block rejected offers; the default list includes `NOT_AVAILABLE`.
+- **Quantity units:** Buyer offers L, KG and `SALES_UNIT` (“packs”), and clears the example quantity when changing intent. This is unit selection, not automatic per-product unit validation.
+- **OAuth connection flow:** Connect provides OAuth instructions; Consent calls `GET /v1/oauth/requests/{id}` and `POST …/decision`; connection list/revoke calls are wired. This remains the legacy operator flow, not account-based tenant consent.
+- **Anomaly warnings and corrections:** Buyer, approvals and order detail render anomaly data; corrections call `POST /v1/quotes/{quote_id}/anomaly-fixes/{fix_id}`.
+- **Recipe basket:** `POST/GET /v1/basket-lookups`, followed by basket quotation and placement, are wired.
+- **Suggestions:** list, prepare, dismiss and make-recurring are wired; snooze is also implemented.
+- **Recurring reads/run-now:** list, runs and run-now have actual page callers. **Partial:** the operator-only console cannot access the intended owned workflows reliably; do not mark recurring buying fully complete.
+- **Suppliers:** Trust calls `GET /v1/suppliers`.
+- **Trust exports/checks:** UBL download, audit verification and anchors are wired. **Evidence ZIP and dedicated receipt retrieval are not.**
+- **Approval links and changed evidence:** `/approvals/{id}` routes to the approval inbox; approval requests include `evidence_revision`, and `EVIDENCE_CHANGED` reloads evidence. **Partial:** approve/reject omit the required confirmation-token round trip, so current completion is broken. [Caller](frontend/src/pages/Approvals.tsx:17)
+
+## 11. Corrections to the sections above
+
+
+- **Recurring pause:** §6 lists pause under `/v1/recurring-orders/...`, but the REST router has **no pause endpoint**. The implemented operation is MCP `pause_recurring_order`. [REST routes](backend/app/recurring.py:475)
+- **Signed governance report:** the path matches, but a signed result requires `GET /v1/tenant/governance/report?from=…&to=…&signed=true`; `signed` defaults to `false`. [Route](backend/app/governance_api.py:243)
+- **Otherwise:** no renamed concrete REST paths found. Placeholder differences such as `{id}` versus `{agent_id}` are not mismatches.
 
 ## Error codes worth a friendly message
 
