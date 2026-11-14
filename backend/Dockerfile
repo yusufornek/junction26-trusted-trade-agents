@@ -16,6 +16,7 @@ COPY backend/app/ ./backend/app/
 COPY backend/scripts/ ./backend/scripts/
 COPY backend/vendor/ ./backend/vendor/
 COPY backend/policy.yaml ./backend/policy.yaml
+COPY backend/guardrail_presets.yaml ./backend/guardrail_presets.yaml
 COPY data/ ./data/
 COPY contracts/ ./contracts/
 

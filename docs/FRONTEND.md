@@ -127,8 +127,8 @@ paused with an audited reason. Further mutations answer `423 AGENT_PAUSED` with
 available. Velocity fixes expose the buyer-admin suspend/resume `action_url`;
 send the normal `{reason}` body. The scoped `agent.anomaly_alert` event is queued
 in the outbox for buyer administration; tenant ownership/alert screens arrive with
-the later governance work. Current `policy.anomalies` fields are editable policy
-settings; business-profile presets are outside this change. Synthetic reset
+the later governance work. Current `policy.anomalies` fields are editable default policy
+settings; business-profile presets supply per-tenant quantity, velocity and price sensitivity. Synthetic reset
 history is labelled `synthetic: true`; the normal hotel-chain milk demo stays
 confirmed without anomaly warnings.
 
@@ -136,10 +136,9 @@ confirmed without anomaly warnings.
 ## Accounts and connections (spec 43)
 
 This section describes backend data and behaviour; the frontend owner designs the screens.
-Accounts, tenant isolation and REST audiences are implemented, together with operator-consented OAuth
-for the buyer MCP resource. Tenant-account OAuth consent and tenant/operator MCP, A2A, webhook and
-tool-pack audiences remain pending. Read `available` and
-`oauth_available` from the connection catalog rather than assuming that every catalog entry is live.
+Accounts, tenant isolation, REST audiences and all part 2 protocols are implemented. Read `available` and
+`oauth_available` from the connection catalog for deployment-specific availability. Remote MCP and A2A
+support OAuth code/PKCE consent alongside connection keys; tenant/operator credentials bind a human.
 
 **Sign-in and session.** `POST /v1/auth/login` takes `{email,password}` and returns
 `{csrf_token,user,role,tenant_id,tenant,customer_ids,permissions}`. The server sets `vtg_session`
@@ -228,12 +227,67 @@ fresh evidence and starting a new confirmation. `409 CONFIRMATION_INVALID` requi
 Existing `OPERATOR_TOKEN` callers keep their platform-admin identity; human decisions on the existing
 paths also require this confirmation handshake.
 
-**OAuth consent contract.** The operator flow reads
-`GET /v1/oauth/requests/{id}` to show the client name and redirect host, agent choices, allowed
-customers and requested scopes, then calls `POST /v1/oauth/requests/{id}/decision` to approve or deny.
-These endpoints and `FRONTEND_CONSENT_URL` are available for the platform operator. The plain consent
-page also remains available. Tenant-user consent is still pending; catalog availability describes
-the tenant-managed connection subset.
+**OAuth consent contract.** The assistant opens `/oauth/authorize` with `client_id`, exact
+`redirect_uri`, `resource`, `response_type=code`, `code_challenge`, `code_challenge_method=S256`,
+`scope` and `state`. The human must already be signed in through `/v1/auth/login`. The gateway
+serves a plain consent form by default. Set `FRONTEND_CONSENT_URL` to a frontend URL to receive
+`?request_id=...`; use the same credentialed session and CSRF token for the following calls:
+
+| Endpoint | Data |
+|---|---|
+| `GET /v1/oauth/requests/{id}` | `request_id,client_name,redirect_host,resource,scopes[],customer_ids[],agents[{agent_id,name}]` |
+| `POST /v1/oauth/requests/{id}/decision` | `{approve,agent_id?,customer_ids?,scopes?}` → `{redirect_url,connection_id?}` |
+
+Show the client name, redirect host, resource, customers and scopes. Tenant admins pick an existing
+buyer agent or supply a new agent id; its connection starts approval-first. Approvers/viewers may
+consent to their own tenant assistant and retain their live role. Scopes/customers can only be
+narrowed. Denial returns a redirect with `error=access_denied`; approval returns an authorization
+code and an `oauth` connection visible to the admin and revocable through the normal connection API.
+Navigate to `redirect_url` after the decision. The redirect includes `iss` and the original `state`.
+Consent requests last ten minutes, authorization codes five. `/oauth/token` accepts form-encoded
+code/PKCE or refresh grants with the same exact resource. Access tokens last one hour, refresh
+credentials thirty days and rotate on use. Reusing a refresh token revokes its whole family.
+OAuth endpoints return OAuth error objects; business endpoints retain RFC 9457 errors.
+
+**MCP and A2A audiences.** Each resource has its own protected resource metadata at
+`/.well-known/oauth-protected-resource` plus the exact resource path. The root metadata describes
+`/mcp`. A 401 response advertises the corresponding metadata URL in `WWW-Authenticate`.
+Authorization server metadata is at `/.well-known/oauth-authorization-server`.
+
+| Audience | MCP | A2A RPC | Agent Card |
+|---|---|---|---|
+| buyer | `/mcp` | `/a2a` | `/.well-known/agent-card.json` |
+| tenant human | `/mcp/tenant` | `/a2a/tenant` | `/a2a/tenant/.well-known/agent-card.json` |
+| Valio staff | `/mcp/operator` | `/a2a/operator` | `/a2a/operator/.well-known/agent-card.json` |
+
+The cards advertise OAuth authorization-code and HTTP bearer schemes. MCP accepts the 2026-07-28
+and 2025-11-25 protocol envelopes. Human tools include orders, evidence, approvals, confirmed
+decisions, tenant spend/memory/agent/connection management and operator health/stats/audit/tenant
+overview. Roles remain authoritative; a viewer cannot decide. An OAuth token is valid only at its
+exact resource; a connection key is valid only for its audience.
+
+MCP human decisions first return `{resultType:"input_required",inputRequests:{decision:...},requestState}`.
+Show the elicitation's order summary and quote evidence. Retry the identical tool and arguments with
+`requestState` and `inputResponses:{decision:{action:"accept",content:{confirm:true}}}` only after
+human confirmation; decline/cancel makes no decision. State is single-use and expires in five minutes.
+A2A uses a versioned data part `{version:1,command:<skill id>,arguments:{...}}` through `SendMessage`.
+A decision returns an `INPUT_REQUIRED` task whose decision artifact contains the same REST preview.
+After confirmation, send a new message with the same command/arguments plus `confirmation_token`.
+`EVIDENCE_CHANGED` requires a new preview and review on both transports.
+
+**Webhooks and function packs.** Creating `type:webhook` requires `webhook_url` and optionally
+`event_types`; ownership is challenged and its audience-scoped subscription is registered atomically.
+Manage subscriptions under `/v1/tenant/webhook-subscriptions` or `/v1/operator/webhook-subscriptions`
+using the same CRUD/delivery routes as spec 33. Tenant subscriptions receive only that tenant's
+selected customers' events; operator subscriptions receive matching events across every tenant,
+including `platform.upstream_rate_limited`, `platform.audit_anchored`, and `platform.supplier_health`.
+Verify Standard Webhooks signatures with `/.well-known/jwks.json` and preserve raw request bytes.
+`GET /v1/connect/tool-pack?format=openai|anthropic|gemini&audience=buyer|tenant|operator` returns
+`declarations`, `tool_schemas` and a Python `executor`. The executor calls
+`POST /v1/connect/tools/{name}?audience=...` with the connection key. Function inputs derive from
+the selected MCP server's schemas; human decisions use the REST two-step confirmation.
+
+The existing operator consent flow remains available on the same endpoints for operator-flow request ids.
 
 All failures use the existing RFC 9457 problem shape (`code`, `next_action`, `detail`, correlation id).
 Relevant codes: `401 UNAUTHENTICATED`/`WRONG_AUDIENCE`, `403 CSRF_REQUIRED`, `HUMAN_REQUIRED`,
@@ -241,3 +295,155 @@ Relevant codes: `401 UNAUTHENTICATED`/`WRONG_AUDIENCE`, `403 CSRF_REQUIRED`, `HU
 `POLICY_CEILING`; `404 *_NOT_FOUND`; `409 LAST_TENANT_ADMIN`, `EMAIL_EXISTS`, `AGENT_EXISTS`,
 `CUSTOMER_ASSIGNED`, `CONFIRMATION_INVALID`, `EVIDENCE_CHANGED`; `410 LINK_EXPIRED`;
 `429 LOGIN_THROTTLED`/`RATE_LIMITED` with `Retry-After`. Login throttles email and client address.
+
+## Guardrail profiles and anomalies (spec 45)
+
+This contract covers the profile slice (R-1–R-4, R-9). Anomaly warning/fix cards,
+forecast bands and demo history come from the separate R-5–R-8 implementation.
+The frontend owner designs the screens.
+
+**Sign-up.** Public GET /v1/auth/signup/options returns labelled arrays named
+business_types, monthly_purchase_volume_bands and meals_per_day_bands. Each entry
+has value and label; submit the returned value unchanged. POST /v1/auth/signup:
+
+```json
+{
+  "name": "Example kitchen",
+  "email": "admin@example.test",
+  "password": "<human-chosen-password>",
+  "profile": {
+    "business_type": "hospital_or_school_kitchen",
+    "sites": 1,
+    "buyers_and_approvers": 3,
+    "monthly_purchase_volume_band": "5–25k",
+    "meals_per_day_band": "100–500",
+    "required_claims": ["FREE_FROM_LACTOSE"],
+    "exclude_allergens": ["AE"]
+  }
+}
+```
+
+201 returns tenant, user (role tenant_admin), customer_ids and guardrail_profile.
+Sign in using the existing login endpoint afterwards. Duplicate email returns 409
+EMAIL_EXISTS; invalid counts/codes return 422. The server assigns a new customer
+identity; sign-up cannot claim an existing business's wholesaler customer number.
+Use catalog vocabulary for claims/allergens. Hospital/school profiles may finish
+sign-up without constraints, but ordering returns 409 CONSTRAINTS_REQUIRED until
+both lists are nonempty. Error data gives missing_fields and profile_url.
+
+**Profile and presets.** GET /v1/tenant/profile returns the authenticated tenant's
+snapshot, or null for a legacy tenant. PUT takes the profile object above, with the
+standard two-call confirmation_token flow; only tenant_admin may change it.
+The response has tenant_id, profile, preset, guardrails, guardrail_version,
+profile_revision, author_user_id, updated_at and warnings. Each guardrail is
+{value,source}, e.g. four_eyes: {value:true,source:"preset:hotel_chain"}.
+Fields are per_order_ceiling_eur, daily_budget_eur, monthly_budget_eur,
+approver_amount_threshold_eur, four_eyes, substitutes_policy, anomaly_sensitivity
+and starting_autonomy. Groups/chains with sites > 1 also have per_site_budgets.
+Single restaurants default to four-eyes off and show SELF_APPROVAL_ALLOWED in
+warnings. Every new agent starts approval_required; the existing autonomous hotel
+demo agent retains its earned authority.
+
+Editing business details increments profile_revision and preserves active
+guardrail values. Applying a new preset or changing limits belongs to spec 44;
+do not describe a profile edit as a policy change. Removing standing constraints
+returns 409 GUARDRAIL_CHANGE_REQUIRED. Guardrail budgets are initial preset values;
+platform/agent policy and the merged spec 44 effective policy remain authoritative.
+
+The same snapshot appears as tenant.guardrail_profile in session/login,
+guardrail_profile in /v1/me (also MCP get_agent_context), /v1/tenant/policy and
+the operator's tenant list, and context.guardrail_profile on procurement artifacts.
+Customer-scoped tenant.profile_created/tenant.profile_updated webhook events carry
+it too. Dedicated human MCP/A2A management audiences support profiles and governance alongside the spec 43 human tools.
+
+**Approval.** Pending inbox entries now include approval_requirements with
+approver_amount_threshold_eur, required_role, four_eyes,
+eligible_approver_user_ids and conflicted_user_ids. Above the amount threshold,
+only tenant_admin can approve; equality is still allowed for an approver.
+403 APPROVAL_LIMIT returns data.threshold_eur, required_role and who_can_approve.
+403 FOUR_EYES means the authenticated person created a connection, owns the agent,
+or approved its last autonomy/policy loosening; data.who_can_approve identifies
+active independent reviewers. An empty list means no eligible reviewer exists.
+Both refusals happen before a confirmation preview, and can also occur after a
+previous preview when authority changes. Rejection remains available.
+
+With four-eyes off, successful self-approval returns self_approved:true on the
+order; audit records the flag and SELF_APPROVAL_ALLOWED warning. Approval webhook
+payloads include approval_requirements alongside evidence_revision and review_url.
+The existing evidence revision and confirmation-token flow remains required.
+
+## Agent governance (spec 44)
+
+All routes below are relative to the gateway origin. Human sessions use the spec 43 cookie and CSRF token;
+tenant connections use a Bearer key with `audience=tenant`. A `member` owns and manages its agents only;
+`tenant_admin` manages the tenant. An `approver` can also own agents while retaining approval permissions.
+Foreign or another member's agent targets return `404`.
+
+| Endpoint | Data / behaviour |
+|---|---|
+| `GET /v1/tenant/agents?owner_user_id=&status=` | Register: `agent_id`, `owner_user_id`, `status` (`active`, `paused`, `disabled`), connections/clients, autonomy, `budget_use.day_eur/month_eur`, order/approval counts, refusals by code, last activity, effective version |
+| `POST /v1/tenant/agents` | Create an agent owned by the caller; operator-created and seeded agents belong to the tenant's first admin |
+| `GET /v1/tenant/agents/{id}/policy` | Current agent layer version, author, time, reason, diff, policy data |
+| `GET /v1/tenant/agents/{id}/policy/effective` | `version_id` and `fields`: each field has `value`, `source_layer`, `version_id`, `author`, and all contributing `sources` |
+| `PATCH` or `PUT /v1/tenant/agents/{id}/policy` | Partial `{policy, reason}`; tightening applies, loosening becomes a pending request |
+| `POST /v1/tenant/agents/{id}/policy/simulate` | `{policy}` → last 30 days' stored quote/order counts: `passed`, `needed_approval`, `refused`, examples with rule identifiers; no supplier calls |
+| `GET /v1/tenant/agents/{id}/policy/versions[/{version_id}]` | Immutable agent policy versions |
+| `POST /v1/tenant/agents/{id}/policy/versions/{version_id}/rollback` | `{reason}`; same tightening/loosening rules as an edit, creates a new version |
+| `GET /v1/tenant/policy/change-requests?agent_id=` | Visible requests, status, requester, base version, proposed policy, classification, simulation, reviewer/reason/time when decided |
+| `GET /v1/tenant/policy/change-requests/{id}` | One visible request |
+| `POST /v1/tenant/policy/change-requests/{id}/approve` or `/reject` | `{reason}`; tenant admin, never the requester; approval rechecks guardrails and the unchanged base policy |
+| `GET /v1/tenant/agents/{id}/activity` | Audit entries newest first, with `policy_version_id` (historical entries may have no version) |
+| `POST /v1/tenant/agents/{id}/pause` or `/resume` | `{reason}`; owner or admin; pending approvals and quote history remain |
+| `POST /v1/tenant/agents/pause` or `/resume` | `{reason}`; tenant stop is independent of individual pauses |
+| `POST /v1/tenant/agents/{id}/transfer` | `{owner_user_id, reason}`; admin transfers to an active member, preserving all history; transfer does not automatically resume |
+| `GET` / `PUT /v1/tenant/guardrails` | Current guardrail version / `{policy, reason}` change; admin only |
+| `GET /v1/tenant/guardrails/versions[/{id}]` | Guardrail history |
+| `POST /v1/tenant/guardrails/versions/{id}/rollback` | `{reason}`; platform bounds still apply |
+| `GET /v1/tenant/alerts` | Alerts visible to the caller's agents, newest first |
+| `GET /v1/tenant/governance/report?from=<ISO>&to=<ISO>&signed=true` | `{report, signature, jwks_url}`; without signed=true returns the report JSON directly |
+
+Policy fields: `allowed_customers`, `allowed_operations` (`lookup`, `quote`, `order`),
+`per_order_ceiling_eur`, `daily_budget_eur`, `monthly_budget_eur`, `allowed_categories`,
+`blocked_categories`, `required_claims`, `excluded_allergens`, `substitutes_allowed`, `ordering_hours`,
+`delivery_day_window: {min_days,max_days}`, `autonomy_level` (`approval_required` or
+`autonomous_within_limits`), `approval_routing: {approver_user_ids,tenant_admin_above_eur}`.
+Nested fields in the effective response use dotted names, e.g. `approval_routing.tenant_admin_above_eur`.
+Null bounds/allowlists inherit the parent restriction; empty allowlists permit nothing. Clearing a restriction is a loosening and follows change review.
+Ordering hours are UTC integer hours 0..23, delivery days are offsets from the operation's UTC date.
+Governance budgets count confirmed/pending-execution spend for the UTC calendar day/month, including human-approved
+spend; calendar budgets default to unrestricted until explicitly set. The earlier rolling 24-hour autonomous mandate limit remains enforced as well.
+
+Every governance mutation uses the spec 43 two-step confirmation: the first response is
+`{confirmation_required:true, confirmation_token, expires_at, summary}` with no applied change;
+retry the same endpoint and body plus `confirmation_token` after human confirmation. The token is single-use,
+bound to user, target and payload, and valid for five minutes. A loosening then returns
+`{status:"pending", change_request:{...}}`; tightening returns `{status:"applied", version:{...}}`.
+Requests transition `pending` → `approved` or `rejected`. The requester cannot decide their own request, even when
+also an admin. A changed base produces `409 POLICY_CHANGED`; submit a fresh proposal with a new simulation.
+Disabling/removing a user returns `agents_to_transfer` and pauses those agents; resume requires an active owner.
+
+Errors: `422 OUTSIDE_GUARDRAIL` contains `field`, `limit`, `source_layer`, `version_id`, `author`;
+`423 AGENT_PAUSED` contains `agent_id`, `paused_by`, `paused_at`, with `next_action=CONTACT_ADMIN`;
+`403 SELF_APPROVAL_FORBIDDEN`, `403 APPROVAL_ROUTING_REQUIRED` (above the routing threshold, the approver must be a tenant admin and satisfy the named approver list), `409 OWNER_UNAVAILABLE`,
+`409 CONFIRMATION_INVALID`, `409 POLICY_CHANGED`; foreign targets are `404`.
+Paused agents cannot lookup, quote or order, including from existing open quotes; humans can still review pending approvals.
+
+Alerts have `id`, `type`, `agent_id`, `tenant_id`, `created_at` and type-specific data:
+`budget.80` / `budget.100` (`period`, `used_eur`, `limit_eur`, policy version), `refusal.burst`
+(`count`, `window_minutes=10`), `activity.outside_hours`, `connection.new_client` (`connection_id`, `client`),
+`connection.new_address` (`connection_id`, `address`), `policy.change_pending` (`request_id`).
+Threshold alerts are deduplicated per agent, period, threshold and limit.
+Tenant admins create signed subscriptions at `/v1/tenant/webhook-subscriptions` with `audience:"tenant"` and
+`event_types:["governance.alert", ...]`; Standard Webhooks Ed25519 verification/retries are unchanged.
+Other governance event types: `governance.agent_registered`, `governance.policy_changed`, `governance.guardrails_changed`,
+`governance.change_requested`, `governance.request_decided`, `governance.rolled_back`,
+`governance.agent_paused`, `governance.agent_resumed`, `governance.tenant_paused`,
+`governance.tenant_resumed`, `governance.agent_transferred`.
+
+The tenant MCP resource is `/mcp/tenant`, with the `agent_governance(operation, arguments)` tool exposing the
+same operations. Mutations use the MCP 2026-07-28 `input_required` result: echo `requestState` and supply
+`inputResponses.confirmation={action:"accept",content:{confirm:true}}` only after the human's answer.
+The tenant A2A 1.0 card is `/a2a/tenant/agent-card.json` (also `/.well-known/agent-card/tenant.json`),
+endpoint `/a2a/tenant`, `SendMessage` with one JSON data part containing `operation`, `arguments`, and an optional
+`confirmation_token`; the same two-step confirmation applies. Buyer credentials cannot use either tenant surface.
+The frontend owner chooses the screens; this section defines data and behaviour only.

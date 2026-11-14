@@ -115,6 +115,7 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
     elif route == "connections.create":
         from .connections import require_connection_admin
         require_connection_admin(principal or arguments["principal"])
+        gateway.connections.get(saved["value"]["connection_id"], principal or arguments["principal"])
     elif route == "policy.update":
         if principal is not None:
             require_operator(principal)
@@ -270,6 +271,10 @@ def replay_authorization(gateway, route, conn, arguments, principal, saved):
         else:
             authorize_review(gateway.policy.get(), principal, order)
             if route == "orders.approve":
+                from .guardrail_profiles import authorize_approval, require_constraints
+                authorize_approval(conn, principal, order)
+                require_constraints(conn, order.customer_id)
+                gateway.governance.authorize_approval(conn, order, principal)
                 # Rejecting needs no purchasing authority; approving still does.
                 gateway.mandates.authorize(conn, None, order.agent_id, order.customer_id,
                     products=[line.product_id for line in order.lines], bound=("order", order.id), supplier_id=order.supplier_id)
@@ -319,7 +324,14 @@ def fingerprint(scope, route, arguments, *, policy_defaults=False):
     omit_anomaly_defaults(route, values)
     if route == "connections.create":
         body = values.get("body", {})
-        defaults = {"type": "mcp", "audience": "buyer", "scopes": ["*"], "expires_at": None, "tenant_id": None}
+        # Optional webhook fields did not exist in older command records.
+        # Their omission and null must retain the same replay fingerprint for
+        # every connection audience, including non-default REST/tenant records.
+        for field in ("webhook_url", "event_types"):
+            if body.get(field) is None:
+                body.pop(field, None)
+        defaults = {"type": "mcp", "audience": "buyer", "scopes": ["*"], "expires_at": None, "tenant_id": None,
+                    "webhook_url": None, "event_types": None}
         if all(body.get(k) == v for k, v in defaults.items()):
             for k in defaults:
                 body.pop(k, None)
@@ -429,6 +441,7 @@ def install(gateway, target, name, category):
                 if category != "read" and route != "recurring.run" and (principal is None or principal.kind == "agent"):
                     from .buyer import check_suspension
                     check_suspension(gateway.db, identity)
+                    gateway.governance.check_active(identity)
                 if key is not None:
                     if not key.strip():
                         raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)

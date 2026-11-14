@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import asyncio
 from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -92,13 +93,26 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 for host in ("localhost", "127.0.0.1", "[::1]") for port in ("", ":*")] + ([public] if public else []))
         mcp_http = app.state.mcp_server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
         app.state.mcp_http = mcp_http
+        audience_apps = [mcp_http]
+        for audience in ("tenant", "operator"):
+            server = create_server(service, agent_id=None, audience=audience)
+            server.keys = keys
+            http = server.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
+            setattr(app.state, "mcp_"+audience+"_server", server)
+            setattr(app.state, "mcp_"+audience+"_http", http)
+            if audience == "tenant":
+                app.state.tenant_mcp_server = server
+                app.state.tenant_mcp_http = http
+            audience_apps.append(http)
         from .discovery import check_server
         check_server(app.state.mcp_server, http_app=mcp_http,
-                     mounted_paths=[route.path for route in app.router.routes if isinstance(getattr(route, "endpoint", None), MCPTransport)])
+                     mounted_paths=[route.path for route in app.router.routes if isinstance(getattr(route, "endpoint", None), MCPTransport) and route.path == "/mcp"])
         worker = asyncio.create_task(deliver_notifications())
         service.recurring.start()
         try:
-            async with mcp_http.router.lifespan_context(mcp_http):
+            async with AsyncExitStack() as stack:
+                for http in audience_apps:
+                    await stack.enter_async_context(http.router.lifespan_context(http))
                 yield
         finally:
             stop.set()
@@ -114,16 +128,20 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                              for code in (401, 403, 404, 409, 410, 422, 423, 429, 500, 502, 503)})
     app.state.keys = keys
     app.state.mcp_served = serve_mcp
+    from .oauth import install as install_oauth
+    install_oauth(app)
     from .accounts import router as accounts_router
     app.include_router(accounts_router)
+    from .guardrail_profiles import router as profiles_router
+    app.include_router(profiles_router)
     from .connect_catalog import router as connect_router
     app.include_router(connect_router)
     from .tenant_api import router as tenant_router, install_aliases
     app.include_router(tenant_router)
+    from .governance_api import router as governance_router
+    app.include_router(governance_router)
     from .connections import router as connections_router
     app.include_router(connections_router)
-    from .oauth import install as install_oauth
-    install_oauth(app)
     from .webhooks import router as webhook_router
     from .a2a import install_routes
     app.include_router(webhook_router)
@@ -139,6 +157,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     install_developer_docs(app)
     if serve_mcp:
         app.router.routes.append(Route("/mcp", endpoint=MCPTransport(), methods=["GET", "POST", "DELETE"]))
+        for audience in ("tenant", "operator"):
+            app.router.routes.append(Route("/mcp/"+audience, endpoint=MCPTransport(audience), methods=["GET", "POST", "DELETE"]))
     app.include_router(recurring_router)
     app.include_router(proposals_router)
     from .purchase_memory import router as memory_router
@@ -155,7 +175,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         environment_token = ENVIRONMENT.set(settings.environment)
         from .telemetry import CURRENT
         telemetry_token = CURRENT.set(telemetry)
-        transport_token = TRANSPORT.set("a2a" if request.url.path == "/a2a" else "mcp" if request.url.path.startswith("/mcp") else "rest")
+        transport_token = TRANSPORT.set("a2a" if request.url.path.startswith("/a2a") else "mcp" if request.url.path.startswith("/mcp") else "rest")
         token = CORRELATION.set(request.headers.get("X-Correlation-Id") or correlation_id())
         request.state.correlation_id = CORRELATION.get()
         principal_token = PRINCIPAL.set(None)
@@ -169,6 +189,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     response.headers["X-Environment"] = settings.environment
                     return response
             public = request.url.path.startswith("/.well-known/oauth-") or request.url.path in {"/mcp/server-card", "/.well-known/ai-catalog.json", "/.well-known/agent-card.json",
+                "/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json",
                 "/.well-known/jwks.json", "/openapi.json", "/v1/meta", "/developers", "/developers/tools.json", "/llms.txt"}
             response = Response(status_code=204) if public and request.method == "OPTIONS" else await call_next(request)
             if public:
@@ -191,6 +212,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     async def domain_error(request, error):
         content = problem(error, request.url.path)
         headers = {"WWW-Authenticate": "Bearer"} if error.status == 401 else {}
+        if error.status == 401 and request.url.path in {"/a2a", "/a2a/tenant", "/a2a/operator", "/mcp", "/mcp/tenant", "/mcp/operator"}:
+            from .accounts import origin
+            headers["WWW-Authenticate"] = f'Bearer resource_metadata="{origin(request)}/.well-known/oauth-protected-resource{request.url.path}"'
         if content["retry_after_seconds"] is not None:
             headers["Retry-After"] = str(content["retry_after_seconds"])
         return JSONResponse(status_code=error.status, content=content, media_type="application/problem+json", headers=headers)
@@ -295,7 +319,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                      principal: Principal = Depends(resolve_principal)):
         return svc(request).autonomy.track_record(agent_id, principal, window_days)
 
-    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult | DecisionPreview,
+    @app.post("/v1/agents/{agent_id}/autonomy", response_model=AutonomyChangeResult | DecisionPreview | dict,
               description="Operator or this agent's buyer_admin grants or removes autonomy. Requires a reason; audits AUTONOMY_CHANGED with a track-record snapshot. Optional Idempotency-Key binds this target and payload, rechecks current target scope, and replays the first result without changing authority again; changed target or payload returns 409 IDEMPOTENCY_CONFLICT. Runtime policy publication follows the enclosing command commit. Readiness never grants authority automatically. A stricter signed buyer mandate still wins.")
     def change_autonomy(agent_id: str, body: AutonomyChange, request: Request,
                         principal: Principal = Depends(resolve_principal),
@@ -303,6 +327,9 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
         service = svc(request)
         with service.db.connect() as conn:
             service.autonomy._target(conn, agent_id, principal, change=True)
+        if principal.kind == "tenant_user":
+            from .governance_api import invoke
+            return invoke(service, principal, "change_policy", {"agent_id": agent_id, "policy": {"autonomy_level": body.level}, "reason": body.reason}, body.confirmation_token)
         return confirm_rest(service, principal, "autonomy", agent_id, body.model_dump(exclude={"confirmation_token"}), body.confirmation_token,
             lambda: service.autonomy.change(agent_id, body, principal, command_key=idempotency_key), force="/operator/" in request.url.path)
 
@@ -460,11 +487,14 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                 actor="human:" + ("operator" if principal.user_id == "legacy-operator" else principal.user_id or principal.id) if principal.kind in {"tenant_user", "platform_admin"} else f"agent:{principal.agent_id}", reason=body.reason,
                 stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key), force="/operator/" in request.url.path)
 
-    @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
+    @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits",
+        description="Profiled tenants also return approval_requirements: amount threshold, required role, four-eyes and eligible independent approver user IDs. An empty list means another eligible human must join or governance must be reviewed.")
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):
         service = svc(request)
         from .autonomy import buyer_scope
-        return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id)) for o in service.orders.list_orders(True)
+        from .guardrail_profiles import approval_requirements
+        with service.db.connect() as conn:
+            return [ApprovalItem(order=o, quote=service.orders._get_quote(o.quote_id), approval_requirements=approval_requirements(conn, o)) for o in service.orders.list_orders(True)
                 if principal.operator or buyer_scope(service.policy.get(), principal, o.agent_id, [o.customer_id])]
 
     @app.post("/v1/approvals/{order_id}/approve", response_model=Order | DecisionPreview,
@@ -474,7 +504,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                           "data {evidence_revision, changes}. Review the refreshed order before approving again. "
                           "Unchanged evidence confirms. A revoked buyer VC returns 403 MANDATE_INVALID (revoked); a removed policy mandate returns 403 AGENT_NOT_REGISTERED "
                           "with rule hits in data; the order remains pending and can be rejected. Cached approval responses recheck the reviewer's current organisation and customer scope. "
-                          "Refused replay checks record APPROVE_FAILED without repeating approval.")
+                          "Refused replay checks record APPROVE_FAILED without repeating approval. "
+                          "Tenant profile gates apply before the REST preview and on confirmation/replay: "
+                          "403 APPROVAL_LIMIT gives threshold_eur and who_can_approve; 403 FOUR_EYES requires an independent reviewer. "
+                          "With four-eyes off, self-approval records self_approved=true and an audit warning.")
     def approve(order_id: str, body: ApprovalRequest, request: Request, principal: Principal = Depends(require_reviewer),
                 idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None):
         service = svc(request)
@@ -522,14 +555,17 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     original_openapi = app.openapi
     def problem_openapi():
         schema = original_openapi()
-        for path in schema["paths"].values():
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})["OAuth2"] = {
+            "type": "oauth2", "flows": {"authorizationCode": {"authorizationUrl": "/oauth/authorize", "tokenUrl": "/oauth/token",
+                "scopes": {"*": "Consented gateway operations"}}}}
+        for path_name, path in schema["paths"].items():
             for operation in path.values():
                 if not isinstance(operation, dict):
                     continue
                 for status, response in operation.get("responses", {}).items():
                     response.setdefault("headers", {})["X-Environment"] = {"schema": {"type": "string", "enum": ["live", "sandbox"]}, "description": "Isolated gateway environment; sandbox observations are synthetic fixtures."}
                     response.setdefault("headers", {})["X-Correlation-Id"] = {"schema": {"type": "string"}, "description": "Accepted or generated request correlation identifier."}
-                    if status.isdigit() and int(status) >= 400:
+                    if status.isdigit() and int(status) >= 400 and not (path_name.startswith("/oauth/") and status == "400"):
                         response.get("content", {}).pop("application/json", None)
                     if status in {"429", "502", "503"}:
                         response.setdefault("headers", {})["Retry-After"] = {"schema": {"type": "integer", "minimum": 1}, "description": "Seconds before retrying the same command, when retryable."}

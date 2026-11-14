@@ -305,6 +305,7 @@ class PurchaseMemory:
             raise DomainError("VALIDATION_ERROR", "Suggested date or quantity is outside the normal lookup window; prepare nearer the need date", 422) from error
 
     def act(self, id, action, principal, body=None, mandate=None):
+        self.g.limiter.consume(principal.id, "mutation")
         if action in {"prepared", "made_recurring"} and principal.kind == "agent" and principal.tenant_id and not principal.customer_ids and mandate is None:
             with self.g.db.connect() as conn:
                 historical = conn.execute("SELECT 1 FROM purchase_memory WHERE json_extract(data,'$.agent_id')=? LIMIT 1", (principal.id,)).fetchone()

@@ -38,7 +38,14 @@ from .signing import unb64
 EventType = Literal["order.approval_required", "order.evidence_changed", "order.confirmed", "order.rejected",
                     "order.cancelled", "order.expired", "mandate.revoked", "proposal.received",
                     "suggestion.shown", "suggestion.prepared", "suggestion.made_recurring",
-                    "suggestion.dismissed", "suggestion.snoozed"]
+                    "suggestion.dismissed", "suggestion.snoozed",
+                    "platform.upstream_rate_limited", "platform.audit_anchored", "platform.supplier_health",
+                    "tenant.profile_created", "tenant.profile_updated",
+                    "governance.alert", "governance.policy_changed", "governance.guardrails_changed",
+                    "governance.agent_registered",
+                    "governance.change_requested", "governance.request_decided", "governance.rolled_back",
+                    "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
+                    "governance.tenant_resumed", "governance.agent_transferred"]
 EVENT_TYPES = set(EventType.__args__)
 
 
@@ -62,7 +69,7 @@ class SubscriptionCreate(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     customer_ids: InputTexts = Field(min_length=1)
     event_types: list[EventType] = Field(min_length=1)
-    audience: Literal["agent", "approver"] = "agent"
+    audience: Literal["agent", "approver", "buyer", "tenant", "operator"] = "agent"
 
 
 class SubscriptionPatch(BaseModel):
@@ -70,7 +77,7 @@ class SubscriptionPatch(BaseModel):
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     customer_ids: InputTexts | None = Field(default=None, min_length=1)
     event_types: list[EventType] | None = Field(default=None, min_length=1)
-    audience: Literal["agent", "approver"] | None = None
+    audience: Literal["agent", "approver", "buyer", "tenant", "operator"] | None = None
     enabled: bool | None = None
 
 
@@ -117,11 +124,13 @@ class Webhooks:
     def __init__(self, gateway):
         self.gateway, self.db = gateway, gateway.db
         self.lock = threading.Lock()
+        self.dispatch_state = threading.local()
         self.client = httpx.Client(timeout=5, follow_redirects=False, trust_env=False)
         self.resolver = socket.getaddrinfo
         self.jitter = random.random
         self.clock = time.monotonic
         self.prepared = ContextVar("verified_webhook_destination", default=None)
+        self.supplier_health = None
 
     def _destination(self, url):
         try:
@@ -210,10 +219,15 @@ class Webhooks:
 
     @staticmethod
     def _scope(principal, customers, audience="agent"):
+        from .oauth import require_audience
+        if audience in {"buyer", "tenant", "operator"}:
+            require_audience(principal, audience, "/webhooks/"+audience)
         if not principal.operator and not set(customers) <= set(principal.customer_ids):
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Subscription customers exceed principal scope", 403)
         if audience == "approver":
             require_reviewer(principal)
+        if audience == "tenant" and not (principal.kind == "tenant_user" and principal.role == "tenant_admin"):
+            raise DomainError("TENANT_ADMIN_REQUIRED", "Tenant webhooks require a tenant administrator", 403)
 
     def _get(self, subscription_id, principal, conn):
         row = conn.execute("SELECT * FROM webhook_subscriptions WHERE id=?", (subscription_id,)).fetchone()
@@ -225,9 +239,12 @@ class Webhooks:
 
     def create(self, body, principal, *, task_id=None, push_config=None):
         self._scope(principal, body.customer_ids, body.audience)
+        if body.audience != "operator" and any(e.startswith("platform.") for e in body.event_types):
+            raise DomainError("OPERATOR_REQUIRED", "Platform events require an operator subscription", 403)
         self._challenge(body.url, notification_headers(push_config or {}))
         sub = {"id": uuid4().hex, **body.model_dump(), "enabled": True, "verified": True,
                "owner": principal.id, "owner_kind": principal.kind, "operator": principal.operator,
+               "tenant_id": principal.tenant_id, "user_id": principal.user_id, "connection_id": principal.connection_id,
                "created_at": audit.utcnow().isoformat(), "task_id": task_id, "push_config": push_config}
         with self.db.connect(write=True) as conn:
             conn.execute("INSERT INTO webhook_subscriptions VALUES(?,?,?)", (sub["id"], f"{principal.kind}:{principal.id}", json.dumps(sub)))
@@ -253,6 +270,8 @@ class Webhooks:
             raise DomainError("VALIDATION_ERROR", "Subscription fields cannot be null", 422)
         sub.update(changes)
         self._scope(principal, sub["customer_ids"], sub["audience"])
+        if sub["audience"] != "operator" and any(e.startswith("platform.") for e in sub["event_types"]):
+            raise DomainError("OPERATOR_REQUIRED", "Platform events require an operator subscription", 403)
         if "url" in changes or changes.get("enabled"):
             self._challenge(sub["url"])
         with self.db.connect(write=True) as conn:
@@ -300,15 +319,40 @@ class Webhooks:
         if sub["audience"] == "approver" and event_type == "order.approval_required":
             with self.db.connect() as conn:
                 order = self.gateway.orders._order(conn, event["aggregate_id"])
+                from .guardrail_profiles import approval_requirements
+                requirements = approval_requirements(conn, order)
             revision = event["payload"].get("evidence_revision", order.evidence_revision)
             envelope["payload"] = {**event["payload"], "evidence_revision": revision,
+                                   "approval_requirements": requirements,
                                    "review_url": f"/approvals/{order.id}?revision={revision}"}
         return canonical_json(envelope).decode()
 
     def dispatch(self, limit=100):
-        if not self.lock.acquire(blocking=False):
+        from .foundation import PRINCIPAL
+        token = PRINCIPAL.set(None)
+        # Commit callbacks may reenter on this thread; concurrent commits must
+        # wait for a fresh sweep rather than leave their new events behind.
+        if getattr(self.dispatch_state, "active", False):
+            PRINCIPAL.reset(token)
             return
+        self.lock.acquire()
+        self.dispatch_state.active = True
         try:
+            # Publish changes in observed supplier reachability without adding
+            # probes or polling the supplier. Only interested operator consumers
+            # enable this platform event stream.
+            with self.db.connect() as conn:
+                observes_health = conn.execute("SELECT 1 FROM webhook_subscriptions WHERE json_extract(data,'$.enabled')=1 "
+                    "AND json_extract(data,'$.audience')='operator' AND EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.event_types')) WHERE value='platform.supplier_health') LIMIT 1").fetchone()
+            if observes_health:
+                current = self.gateway.valio.health().get("blocked_until")
+                if self.supplier_health != (current,):
+                    previous = self.supplier_health
+                    self.supplier_health = (current,)
+                    if previous is not None:
+                        with self.db.connect(write=True) as conn:
+                            audit.append(conn, "system", "SUPPLIER_HEALTH", "Observed supplier health changed.",
+                                data={"supplier_id": "valio", "blocked_until": current, "available": current is None})
             # Retire disabled backlog left by older releases as well as new disables.
             with self.db.connect(write=True, notify=False) as conn:
                 conn.execute("UPDATE outbox SET status='skipped' WHERE status='pending' AND consumer IN "
@@ -329,14 +373,35 @@ class Webhooks:
                     delivery = conn.execute("SELECT * FROM webhook_deliveries WHERE subscription_id=? AND event_id=?",
                                            (sub["id"], row["event_id"])).fetchone()
                 event["payload"] = json.loads(event["payload"])
-                matches = event["customer_id"] in sub["customer_ids"] and self.event_type(event) in sub["event_types"]
+                matches = (sub["audience"] == "operator" or event["customer_id"] in sub["customer_ids"]) and self.event_type(event) in sub["event_types"]
                 if event["type"] == "proposal.received":
                     prefs = self.gateway.proposals.preferences(event["customer_id"])
                     matches = (matches and "webhook" in event["payload"].get("channels", [])
                                and "webhook" in prefs.channels and bool(prefs.categories or prefs.interests))
                 if sub.get("task_id"):
                     matches = event["customer_id"] in sub["customer_ids"] and self.gateway.a2a.event_matches(event, sub["task_id"])
-                if not sub.get("operator"):
+                connection_valid = True
+                if sub.get("connection_id"):
+                    with self.db.connect() as conn:
+                        connection = conn.execute("SELECT revoked_at,expires_at FROM connections WHERE connection_id=?", (sub["connection_id"],)).fetchone()
+                    connection_valid = connection is not None and not connection[0] and (not connection[1] or connection[1] > audit.utcnow().isoformat())
+                    matches = matches and connection_valid
+                if sub["audience"] in {"tenant", "operator"}:
+                    try:
+                        user = self.gateway.accounts.user(sub.get("user_id") or sub["owner"], active=True)
+                        if sub["audience"] == "operator":
+                            matches = matches and user["role"] == "platform_admin"
+                        else:
+                            # Tenant governance events can have no customer_id.
+                            matches = connection_valid and bool(
+                                user["role"] == "tenant_admin" and user["tenant_id"] == sub["tenant_id"] == event["tenant_id"]
+                                and self.event_type(event) in sub["event_types"]
+                                and not (self.event_type(event) or "").startswith("platform."))
+                    except DomainError:
+                        matches = False
+                elif (self.event_type(event) or "").startswith("governance."):
+                    matches = False
+                elif not sub.get("operator"):
                     policy = self.gateway.policy.get()
                     identity = policy.identities.get(sub["owner"])
                     organisation = policy.organisations.get(identity.organisation_id) if identity else None
@@ -376,7 +441,9 @@ class Webhooks:
                     conn.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt_at=? WHERE event_id=? AND consumer=?",
                                  (status, (audit.utcnow() + timedelta(seconds=delay)).isoformat(), row["event_id"], row["consumer"]))
         finally:
+            self.dispatch_state.active = False
             self.lock.release()
+            PRINCIPAL.reset(token)
 
 
 router = APIRouter()
@@ -386,6 +453,11 @@ router = APIRouter()
              description="Verify ownership by echoing the signed webhook.challenge, then enable customer-scoped delivery. Optional Idempotency-Key.")
 def create_subscription(body: SubscriptionCreate, request: Request, principal: Principal = Depends(resolve_principal),
                         idempotency_key: str | None = Header(default=None, min_length=1)):
+    if "/tenant/" in request.url.path or "/operator/" in request.url.path:
+        audience = "operator" if "/operator/" in request.url.path else "tenant"
+        if body.audience not in {"agent", audience}:
+            raise DomainError("WRONG_AUDIENCE", "Subscription must match its resource audience", 401)
+        body = body.model_copy(update={"audience": audience})
     return request.app.state.gateway.webhooks.create(body, principal, command_key=idempotency_key)
 
 
@@ -397,6 +469,8 @@ def subscriptions(request: Request, principal: Principal = Depends(resolve_princ
 @router.patch("/v1/webhook-subscriptions/{subscription_id}", response_model=dict)
 def update_subscription(subscription_id: str, body: SubscriptionPatch, request: Request,
                         principal: Principal = Depends(resolve_principal), idempotency_key: str | None = Header(default=None, min_length=1)):
+    if principal.connection_id and body.audience and body.audience != principal.audience:
+        raise DomainError("WRONG_AUDIENCE", "Subscription must match its credential audience", 401)
     return request.app.state.gateway.webhooks.update(subscription_id, body, principal, command_key=idempotency_key)
 
 

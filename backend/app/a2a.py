@@ -23,7 +23,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from pydantic import ValidationError
 
 from . import audit
-from .auth import admit_credential
+from .auth import check_source, admit_credential
 from .canonical import canonical_json
 from .db import DomainError
 from .foundation import CAUSATION, CORRELATION, PRINCIPAL, TASK, correlation_id
@@ -507,7 +507,8 @@ class ProcurementA2A:
             if previous:
                 if json.loads(previous["data"]) == MessageToDict(config):
                     return config
-        body = SubscriptionCreate(url=config.url, customer_ids=[customer], event_types=sorted(EVENT_TYPES))
+        body = SubscriptionCreate(url=config.url, customer_ids=[customer],
+            event_types=sorted(e for e in EVENT_TYPES if not e.startswith("platform.")))
         from .commands import ADMISSION
         self.gateway.limiter.consume(principal.id, "mutation")
         prepared = self.gateway.webhooks.prepare("webhooks.create", {"body": body, "push_config": MessageToDict(config)}, principal)
@@ -571,6 +572,9 @@ class ContextBuilder(DefaultServerCallContextBuilder):
 
 
 class Handler(RequestHandler):
+    def __init__(self, audience="buyer"):
+        self.audience = audience
+
     @contextmanager
     def authenticated(self, context, params=None):
         gateway = context.state["gateway"]
@@ -580,6 +584,8 @@ class Handler(RequestHandler):
             if scheme.lower() != "bearer" or not secret:
                 raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
             principal = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret)
+            from .oauth import require_audience
+            require_audience(principal, self.audience, "/a2a" + ("" if self.audience == "buyer" else "/"+self.audience))
             meta = MessageToDict(params).get("metadata", {}) if params is not None else {}
             if params is not None and isinstance(params, t.SendMessageRequest):
                 meta = {**MessageToDict(params.message).get("metadata", {}), **meta}
@@ -600,6 +606,8 @@ class Handler(RequestHandler):
 
     async def on_message_send(self, params, context):
         with self.authenticated(context, params) as (gateway, principal, mandate):
+            if self.audience != "buyer":
+                return await run_in_threadpool(human_send, gateway, principal, self.audience, params)
             if not params.configuration.return_immediately:
                 return await run_in_threadpool(gateway.a2a.send, params, principal, mandate)
             job = asyncio.create_task(run_in_threadpool(gateway.a2a.send, params, principal, mandate))
@@ -648,6 +656,19 @@ class Handler(RequestHandler):
             if task.status.state in TERMINAL:
                 from a2a.utils.errors import TaskNotCancelableError
                 raise TaskNotCancelableError("Terminal task cannot be canceled; send a new cancel command against the confirmed order")
+            if self.audience != "buyer":
+                from .accounts import digest
+                with gateway.db.connect(write=True) as conn:
+                    for item in task.artifacts:
+                        for part in item.parts:
+                            value = MessageToDict(part).get("data", {})
+                            if value.get("confirmation_token"):
+                                conn.execute("UPDATE decision_confirmations SET used_at=? WHERE digest=? AND user_id=? AND used_at IS NULL",
+                                    (audit.utcnow().isoformat(), digest(value["confirmation_token"]), principal.user_id))
+                    task.status.CopyFrom(t.TaskStatus(state=t.TaskState.TASK_STATE_CANCELED))
+                    task.status.timestamp.FromDatetime(audit.utcnow())
+                    gateway.a2a._save(conn, task, principal.id)
+                return task
             request = t.SendMessageRequest(message=t.Message(message_id="cancel-task:" + task.id,
                 task_id=task.id, role=t.Role.ROLE_USER, parts=[data_part({"version": 1, "command": "cancel"})]))
             return await run_in_threadpool(gateway.a2a.send, request, principal, mandate)
@@ -772,7 +793,7 @@ class Handler(RequestHandler):
         raise UnsupportedOperationError("The public card contains all supported capabilities")
 
 
-async def agent_card(gateway=None, base_url="http://localhost:8000"):
+async def agent_card(gateway=None, base_url="http://localhost:8000", audience="buyer"):
     tools = {}
     if gateway is not None:
         from .mcp_server import create_server
@@ -803,17 +824,104 @@ async def agent_card(gateway=None, base_url="http://localhost:8000"):
         ParseDict({"schemes": {"BearerAuth": []}}, card.security_requirements.add())
     if schemas:
         card.capabilities.extensions.add(uri="urn:trusted-trade:procurement-command:v1", description="Shared MCP input/output schemas; command data part version=1", params={"schemas": schemas})
+    ParseDict({"oauth2SecurityScheme": {"oauth2MetadataUrl": base_url+"/.well-known/oauth-authorization-server",
+        "flows": {"authorizationCode": {"authorizationUrl": base_url+"/oauth/authorize", "tokenUrl": base_url+"/oauth/token", "scopes": {"*": "Consented gateway operations"}}}}}, card.security_schemes["OAuth2"])
+    ParseDict({"schemes": {"OAuth2": {"list": ["*"]}}}, card.security_requirements.add())
+    if audience != "buyer":
+        from .human_tools import available
+        del card.skills[:]
+        card.name += " — " + audience
+        card.supported_interfaces[0].url = base_url+"/a2a/"+audience
+        card.capabilities.streaming = False
+        card.capabilities.push_notifications = False
+        del card.capabilities.extensions[:]
+        for name, (model, _, _, description, _) in available(audience).items():
+            card.skills.add(id=name, name=name.replace("_", " "), description=description, tags=[audience], input_modes=["application/json"], output_modes=["application/json"])
+        if audience == "tenant":
+            from .governance_api import Operation
+            for operation in Operation.__args__:
+                card.skills.add(id=operation, name=operation.replace("_", " "), description="Tenant governance operation; mutations require human confirmation.", tags=["tenant", "governance"])
+        card.capabilities.extensions.add(uri="urn:trusted-trade:human-command:v1", description="Data part: version=1, command=skill id, arguments=object. Decisions return a five-minute single-use confirmation_token; retry with it.",
+            params={"schemas": {name: model.model_json_schema() for name, (model, *_) in available(audience).items()}})
     return card
 
 
 def install_routes(app):
+    @app.middleware("http")
+    async def resource_auth(request, call_next):
+        path = request.url.path
+        if path in {"/a2a", "/a2a/tenant", "/a2a/operator"}:
+            from .accounts import origin
+            from .oauth import require_audience
+            from fastapi.responses import JSONResponse
+            scheme, _, secret = request.headers.get("authorization", "").partition(" ")
+            try:
+                p = admit_credential(request.app.state.gateway, request.app.state.keys,
+                    request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
+                require_audience(p, path.split("/")[-1] if path != "/a2a" else "buyer", path, origin(request))
+            except DomainError as error:
+                headers = {"WWW-Authenticate": f'Bearer resource_metadata="{origin(request)}/.well-known/oauth-protected-resource{path}"'} if error.status == 401 else {}
+                return JSONResponse(problem(error, path), status_code=error.status, headers=headers, media_type="application/problem+json")
+        return await call_next(request)
+
     @app.get("/.well-known/agent-card.json", response_model=dict, summary="A2A 1.0 Agent Card generated from shared MCP schemas")
     async def card(request: Request):
         return MessageToDict(await agent_card(request.app.state.gateway, str(request.base_url).rstrip("/")))
 
     add_a2a_routes_to_fastapi(app, jsonrpc_routes=create_jsonrpc_routes(Handler(), rpc_url="/a2a", context_builder=ContextBuilder()))
+    for audience in ("tenant", "operator"):
+        def card_endpoint(selected):
+            async def get(request: Request):
+                return MessageToDict(await agent_card(request.app.state.gateway, str(request.base_url).rstrip("/"), selected))
+            return get
+        app.add_api_route("/a2a/"+audience+"/.well-known/agent-card.json", card_endpoint(audience), methods=["GET"], response_model=dict, tags=["a2a"])
+        if audience == "tenant":
+            for alias in ("/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json"):
+                app.add_api_route(alias, card_endpoint(audience), methods=["GET"], response_model=dict, tags=["a2a"])
+        add_a2a_routes_to_fastapi(app, jsonrpc_routes=create_jsonrpc_routes(Handler(audience), rpc_url="/a2a/"+audience, context_builder=ContextBuilder()))
     for route in app.routes:
-        if getattr(route, "path", None) == "/a2a":
-            route.openapi_extra["security"] = [{"BearerAuth": []}]
+        if getattr(route, "path", None) in {"/a2a", "/a2a/tenant", "/a2a/operator"}:
+            route.openapi_extra["security"] = [{"BearerAuth": []}, {"OAuth2": ["*"]}]
             route.openapi_extra["responses"] = {"200": {"description": "A2A 1.0 JSON-RPC response, or SSE StreamResponse events.",
                 "content": {"application/json": {"schema": {"type": "object"}}, "text/event-stream": {"schema": {"type": "string"}}}}}
+
+
+def human_send(gateway, principal, audience, params):
+    """A2A human commands use REST's two-step decision and the existing task store."""
+    from .human_tools import execute
+    from .commands import json_value
+    from .tenant_api import DecisionPreview
+    parts = [MessageToDict(part)["data"] for part in params.message.parts if part.WhichOneof("content") == "data"]
+    if len(parts) == 1 and audience == "tenant" and "operation" in parts[0]:
+        from .governance_api import invoke
+        command = command_data(parts[0])
+        value = invoke(gateway, principal, command.get("operation"), command.get("arguments", {}), command.get("confirmation_token"))
+        result = json_value(value)
+        return t.Message(message_id=uuid4().hex, role=t.Role.ROLE_AGENT,
+                         parts=[data_part(result if isinstance(result, dict) else {"items": result})])
+    if len(parts) != 1 or parts[0].get("version") != 1:
+        raise DomainError("VALIDATION_ERROR", "Supply one version=1 command data part", 422)
+    command = parts[0]
+    task_id = params.message.task_id or uuid4().hex
+    if params.message.task_id:
+        with gateway.db.connect() as conn:
+            task = gateway.a2a._load(conn, task_id, principal)
+        if metadata(task).get("audience") != audience:
+            raise DomainError("TASK_NOT_FOUND", "Task was not found", 404)
+    else:
+        task = t.Task(id=task_id, context_id=params.message.context_id or uuid4().hex)
+    # Do not surround confirm_rest with another transaction: evidence refresh
+    # must commit even when a decision returns EVIDENCE_CHANGED.
+    try:
+        value = execute(gateway, principal, audience, command.get("command"), command.get("arguments", {}))
+    except ValidationError as error:
+        raise validation_problem(error) from None
+    preview = isinstance(value, DecisionPreview)
+    task.metadata.update({"owner": principal.id, "owner_scope": f"{principal.kind}:{principal.id}", "audience": audience})
+    task.status.CopyFrom(t.TaskStatus(state=t.TaskState.TASK_STATE_INPUT_REQUIRED if preview else t.TaskState.TASK_STATE_COMPLETED,
+        message=status_message(task_id, "Confirm the human decision" if preview else "Command completed", json_value(value))))
+    task.status.timestamp.FromDatetime(audit.utcnow())
+    artifact(task, "decision" if preview else "result", json_value(value))
+    with gateway.db.connect(write=True) as conn:
+        gateway.a2a._save(conn, task, principal.id)
+    return task

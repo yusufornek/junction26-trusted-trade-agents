@@ -111,5 +111,9 @@ def install_routes(app):
 
 class MCPTransport:
     """Forward the exact /mcp URI without Mount's slash redirect or path rewriting."""
+    def __init__(self, audience="buyer"):
+        self.audience = audience
+
     async def __call__(self, scope, receive, send):
-        await scope["app"].state.mcp_http(scope, receive, send)
+        app = getattr(scope["app"].state, "mcp_http" if self.audience == "buyer" else "mcp_"+self.audience+"_http")
+        await app({**scope, "path": "/mcp", "raw_path": b"/mcp"}, receive, send)

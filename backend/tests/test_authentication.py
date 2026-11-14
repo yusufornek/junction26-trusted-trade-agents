@@ -85,14 +85,19 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
         assert (response.status_code, response.json()["code"]) == (401, "UNAUTHENTICATED")
     for path, methods in client.app.openapi()["paths"].items():
         for method, operation in methods.items():
-            if path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
+            if path.startswith("/.well-known/oauth-protected-resource") or path in {"/health", "/.well-known/jwks.json", "/.well-known/agent-card.json",
+                        "/a2a/tenant/agent-card.json", "/.well-known/agent-card/tenant.json",
                         "/.well-known/jwks-history.json", "/v1/meta",
-                        "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt",
-                        "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
-                        "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/register", "/v1/connect/catalog", "/v1/auth/login",
-                        "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept"}:
+                        "/mcp/server-card", "/.well-known/ai-catalog.json", "/developers", "/developers/tools.json", "/llms.txt", "/v1/connect/catalog", "/v1/auth/login",
+                        "/v1/auth/signup", "/v1/auth/signup/options",
+                        "/v1/auth/invites/{token}/accept", "/v1/auth/password-resets/{token}/accept",
+                        "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/oauth/authorize",
+                        "/oauth/register", "/oauth/token", "/.well-known/oauth-authorization-server",
+                        "/a2a/tenant/.well-known/agent-card.json", "/a2a/operator/.well-known/agent-card.json",
+                        "/v1/connect/tool-pack"}:
                 continue
-            assert {"BearerAuth": []} in operation["security"]
+            expected = {"SessionCookie": []} if path.startswith("/oauth/") else {"BearerAuth": []}
+            assert expected in operation["security"]
             url = path.replace("{id}", "missing").replace("{order_id}", "missing").replace("{lookup_id}", "missing")
             for headers in ({}, {"Authorization": "Bearer unknown"}, {"X-Agent-Id": "agent-a"},
                             {"Authorization": "Basic unknown"}):
@@ -100,7 +105,10 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
                     response = client.request(method, url, **({"headers": headers} | payload))
                     assert response.status_code == 401, (method, path, response.text)
                     assert response.json()["code"] == "UNAUTHENTICATED"
-                    assert response.headers["www-authenticate"] == "Bearer"
+                    if path.startswith("/a2a"):
+                        assert response.headers["www-authenticate"].startswith('Bearer resource_metadata="')
+                    else:
+                        assert response.headers["www-authenticate"] == "Bearer"
     for url in ("/health", "/docs", "/openapi.json", "/.well-known/jwks.json"):
         assert client.get(url).status_code == 200
     cors = client.options("/v1/offers", headers={"Origin": "http://localhost:5173",
@@ -185,9 +193,11 @@ def test_ac_4_object_ownership(client, gateway, need, upstream):
     assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
     # A customer's scope must not disclose another agent's lookup through a different error.
     policy = gateway.policy.get().model_dump(mode="json")
-    policy["agents"]["agent-b"]["customer_ids"].append("2")
+    with gateway.db.connect(write=True) as conn:
+        conn.execute("INSERT INTO tenant_customers VALUES('3','hotel-aurora')")
+    policy["agents"]["agent-b"]["customer_ids"].append("3")
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))
-    other_need = need.model_copy(update={"customer_id": "2"})
+    other_need = need.model_copy(update={"customer_id": "3"})
     foreign = gateway.find_offers(other_need, "agent:agent-b")
     response = client.post("/v1/quotes", headers=agent_headers("agent-a"),
                            json=quote_request(other_need, qty=1, need_ref=foreign.lookup_id).model_dump(mode="json"))

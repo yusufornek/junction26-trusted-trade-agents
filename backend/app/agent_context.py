@@ -4,6 +4,8 @@ from pydantic import Field
 
 
 class AgentContext(Model):
+    guardrail_profile: dict | None = Field(default=None, exclude_if=lambda v: v is None,
+        description="This tenant's business profile and initial guardrail values with per-field preset source; absent on legacy demo tenants.")
     fixture_clock: str | None = Field(default=None, exclude_if=lambda v: v is None)
     principal: dict
     customer_ids: list[str]
@@ -17,19 +19,23 @@ class AgentContext(Model):
 
 
 def agent_context(service, principal, mandate=None):
+    from .guardrail_profiles import read_profile
+    with service.db.connect() as conn:
+        guardrail_profile = read_profile(conn, principal.tenant_id) if principal.tenant_id else None
     if principal.kind in {"tenant_user", "platform_admin"} and principal.user_id != "legacy-operator":
         from .accounts import ROLES
         customers = list(principal.customer_ids)
         if principal.operator:
             with service.db.connect() as conn:
                 customers = [r[0] for r in conn.execute("SELECT customer_id FROM tenant_customers ORDER BY customer_id")]
-        return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+        return AgentContext(guardrail_profile=guardrail_profile, fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
             principal=principal.public(), customer_ids=customers,
             mandate={"source": "human_role", "role": principal.role, "registered": True},
             effective_limits={}, remaining_budget={}, environment=service.settings.environment,
             rate_limits=service.limiter.snapshot(principal.id), supported_operations=ROLES.get(principal.role, []),
             standing_constraints={})
     policy = service.policy.get()
+    policy = service.governance.project(principal.id, None, policy)
     customers = list(principal.customer_ids)
     if mandate:
         # The credential's customer is verified before it is exposed as scope.
@@ -65,7 +71,7 @@ def agent_context(service, principal, mandate=None):
     operations = ["get_agent_context", "search_products", "get_order_status", "get_order_ubl", "get_order_evidence", "cancel_order"]
     if row and customers:
         operations += ["find_offers", "create_quote", "place_order"]
-    return AgentContext(fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
+    return AgentContext(guardrail_profile=guardrail_profile, fixture_clock=service.sandbox.now().isoformat() if service.sandbox else None,
         principal=principal.public(), customer_ids=customers, mandate=summary,
         effective_limits={"per_order_eur": per_order, "rolling_24h_eur": daily},
         remaining_budget={"currency": "EUR", "window": "rolling_24h", "spent": spent, "remaining": max(0, daily - spent)},

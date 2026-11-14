@@ -22,7 +22,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import audit
-from .auth import Principal, admit_credential, require_operator
+from .auth import Principal, admit_credential, require_operator, resolve_principal
+from .oauth_audiences import require_audience, ConsentDecision as AudienceConsentDecision, SCOPES
+
+AUDIENCE_SCOPES = [scope for scope in SCOPES if scope != "offline_access"]
 from .db import DomainError
 
 SCHEMA = """
@@ -245,7 +248,9 @@ class OAuth:
         except OAuthError:
             return "Bearer"
 
-    def register(self, value, *, client_id=None):
+    def register(self, value, metadata=None, *, client_id=None):
+        if metadata is not None:
+            return self.gateway.audience_oauth.register(value, metadata)
         metadata = validate_metadata(value, dcr=True)
         client_id = client_id or "cli_" + token_urlsafe(24)
         secret = None if metadata["token_endpoint_auth_method"] == "none" else token_urlsafe(32)
@@ -256,6 +261,9 @@ class OAuth:
                 client_id, json.dumps(metadata), digest(secret) if secret else None, now().isoformat()))
         return {**metadata, "client_id": client_id, "client_id_issued_at": int(now().timestamp()),
                 "client_secret": secret, "client_secret_expires_at": 0 if secret else None}
+
+    async def verify_token(self, token):
+        return await self.gateway.audience_oauth.verify_token(token)
 
     def fetch_metadata(self, client_id):
         """Bounded HTTPS fetch, no redirects/proxies/caller credentials; pin validated DNS."""
@@ -459,6 +467,7 @@ class OAuth:
                          data={"connection_id": family["connection_id"]})
 
     def revoke_connection(self, conn, connection_id):
+        conn.execute("UPDATE audience_oauth_tokens SET revoked_at=? WHERE connection_id=?", (now().isoformat(), connection_id))
         for row in conn.execute("SELECT id FROM oauth_families WHERE connection_id=?", (connection_id,)).fetchall():
             self.revoke_family(conn, row[0])
 
@@ -596,19 +605,22 @@ def intro(oauth, request_id):
 @router.get("/.well-known/oauth-protected-resource/mcp", response_model=ResourceMetadata, responses=OAUTH_RESPONSES, summary="RFC 9728 path-specific MCP resource metadata")
 def protected_resource(request: Request):
     oauth = request.app.state.gateway.oauth
-    return {"resource": oauth.resource, "authorization_servers": [oauth.issuer],
-            "scopes_supported": ["mcp"], "bearer_methods_supported": ["header"]}
+    from .accounts import origin
+    base = origin(request)
+    return {"resource": base + "/mcp", "authorization_servers": [base],
+            "scopes_supported": ["mcp", *AUDIENCE_SCOPES], "bearer_methods_supported": ["header"]}
 
 
 @router.get("/.well-known/oauth-authorization-server", response_model=AuthorizationMetadata, responses=OAUTH_RESPONSES, summary="RFC 8414 OAuth authorization server metadata")
 def authorization_server(request: Request):
     oauth = request.app.state.gateway.oauth
-    issuer = oauth.issuer
+    from .accounts import origin
+    issuer = origin(request)
     return {"issuer": issuer, "authorization_endpoint": issuer + "/oauth/authorize", "token_endpoint": issuer + "/oauth/token",
             "registration_endpoint": issuer + "/oauth/register", "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"], "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp", "offline_access"], "client_id_metadata_document_supported": True,
+            "scopes_supported": ["mcp", *AUDIENCE_SCOPES, "offline_access"], "client_id_metadata_document_supported": True,
             "authorization_response_iss_parameter_supported": True}
 
 
@@ -629,6 +641,8 @@ async def register(request: Request):
     except (ValueError, UnicodeError):
         raise OAuthError("invalid_client_metadata") from None
     result = request.app.state.gateway.oauth.register(value)
+    if value.get("token_endpoint_auth_method", "none") == "none":
+        request.app.state.gateway.audience_oauth.register(result["client_id"], value, dynamic=True)
     return JSONResponse({k: v for k, v in result.items() if v is not None}, status_code=201, headers=SAFE_HEADERS)
 
 
@@ -643,7 +657,24 @@ def preregister(body: PreRegistration, request: Request, principal: Principal = 
             openapi_extra={"parameters": [{"name": name, "in": "query", "required": name not in {"scope", "state"},
                 "schema": {"type": "string"}} for name in ["client_id", "redirect_uri", "response_type", "resource",
                     "code_challenge", "code_challenge_method", "scope", "state"]]})
-def authorize(request: Request):
+async def authorize(request: Request):
+    params = unique(request.query_params.multi_items())
+    # Existing operator requests use the mcp scope. Signed-in humans and the
+    # additional resource audiences use their independent consent registry.
+    scopes = params.get("scope", "").split()
+    try:
+        resource_path = urlsplit(params.get("resource", "")).path
+    except ValueError:
+        resource_path = ""
+    human_resource = resource_path in {"/mcp/tenant", "/mcp/operator", "/a2a/tenant", "/a2a/operator"}
+    if "mcp" not in scopes and (request.cookies.get("vtg_session") or scopes or human_resource):
+        from . import oauth_audiences
+        p = oauth_audiences.human(request)
+        required = ("client_id", "redirect_uri", "resource", "code_challenge", "code_challenge_method")
+        if any(not params.get(key) for key in required):
+            raise OAuthError()
+        return await oauth_audiences.authorize(request, **{key: params[key] for key in required},
+            response_type=params.get("response_type", "code"), scope=params.get("scope", "*"), state=params.get("state"), p=p)
     oauth = request.app.state.gateway.oauth
     oauth.gateway.source_limiter.check(request.client.host if request.client else "unknown")
     request_id = oauth.authorize(unique(request.query_params.multi_items()))
@@ -705,15 +736,34 @@ async def browser_decision(request: Request):
     return response
 
 
-@router.get("/v1/oauth/requests/{request_id}", response_model=ConsentRequest,
+def consent_principal(request_id: str, request: Request, principal: Principal = Depends(resolve_principal)):
+    if request_id.startswith("oar_"):
+        require_operator(principal)
+    else:
+        request.app.state.gateway.audience_oauth.request(request_id, principal)
+    return principal
+
+
+@router.get("/v1/oauth/requests/{request_id}", response_model=ConsentRequest | dict,
             summary="Operator-only consent details and available agent/customer choices; no credentials")
-def consent_request(request_id: str, request: Request, principal: Principal = Depends(require_operator)):
+def consent_request(request_id: str, request: Request, principal: Principal = Depends(consent_principal)):
+    if not request_id.startswith("oar_"):
+        from .oauth_audiences import get_request
+        return JSONResponse(get_request(request_id, request, principal), headers=SAFE_HEADERS)
+    require_operator(principal)
     return JSONResponse(request.app.state.gateway.oauth.view(request_id), headers=SAFE_HEADERS)
 
 
-@router.post("/v1/oauth/requests/{request_id}/decision", response_model=ConsentResult,
+@router.post("/v1/oauth/requests/{request_id}/decision", response_model=ConsentResult | dict,
              summary="Approve/deny once; return a one-time client redirect with code or access_denied")
-def consent_decision(request_id: str, body: ConsentDecision, request: Request, principal: Principal = Depends(require_operator)):
+def consent_decision(request_id: str, body: ConsentDecision | AudienceConsentDecision, request: Request, principal: Principal = Depends(consent_principal)):
+    if not request_id.startswith("oar_"):
+        if not isinstance(body, AudienceConsentDecision):
+            raise DomainError("VALIDATION_ERROR", "Use approve for human consent", 422)
+        return JSONResponse(request.app.state.gateway.audience_oauth.decide(request_id, principal, body), headers=SAFE_HEADERS)
+    require_operator(principal)
+    if not isinstance(body, ConsentDecision):
+        raise DomainError("VALIDATION_ERROR", "Use decision for operator consent", 422)
     return JSONResponse(request.app.state.gateway.oauth.decide(request_id, body, principal), headers=SAFE_HEADERS)
 
 
@@ -721,12 +771,38 @@ def consent_decision(request_id: str, body: ConsentDecision, request: Request, p
              summary="Exchange code + verifier or rotate refresh token; resource is required")
 async def token(request: Request):
     request.app.state.gateway.source_limiter.check(request.client.host if request.client else "unknown")
-    return JSONResponse(request.app.state.gateway.oauth.token(unique(await form(request)), request.headers.get("authorization")),
-                        headers=SAFE_HEADERS)
+    values = unique(await form(request))
+    if values.get("code", "").startswith("vtg_code_") or values.get("refresh_token", "").startswith("vtg_oauth_"):
+        from .oauth_audiences import secure_origin
+        secure_origin(request)
+        result = request.app.state.gateway.audience_oauth.token(values)
+    else:
+        result = request.app.state.gateway.oauth.token(values, request.headers.get("authorization"))
+    return JSONResponse(result, headers=SAFE_HEADERS)
 
 
 def install(app):
     app.include_router(router)
+    from . import oauth_audiences
+    shared = {(route.path, method) for route in router.routes for method in route.methods}
+    for route in oauth_audiences.router.routes:
+        if not any((route.path, method) in shared for method in route.methods):
+            app.router.routes.append(route)
+    from .accounts import origin
+    def resource_metadata(resource_path):
+        def metadata(request: Request):
+            base = origin(request)
+            return {"resource": base + resource_path, "authorization_servers": [base],
+                "scopes_supported": AUDIENCE_SCOPES, "bearer_methods_supported": ["header"]}
+        return metadata
+
+    for resource_path in oauth_audiences.RESOURCE_PATHS:
+        if resource_path != "/mcp":
+            app.add_api_route("/.well-known/oauth-protected-resource" + resource_path, resource_metadata(resource_path), methods=["GET"], response_model=ResourceMetadata)
+
+    @app.exception_handler(oauth_audiences.OAuthError)
+    async def audience_error(request, error):
+        return JSONResponse({"error": error.code, "error_description": error.description}, status_code=error.status, headers=SAFE_HEADERS)
 
     @app.exception_handler(OAuthError)
     async def oauth_error(request, error):

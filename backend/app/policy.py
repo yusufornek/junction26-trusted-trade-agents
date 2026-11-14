@@ -55,6 +55,23 @@ class Policy:
         content = self.db.file_content(self.runtime_path) if self.db is not None else None
         resource = self._load(self.runtime_path, defaults, content=content) if content is not None or self.runtime_path.exists() else defaults
         resource.known_warning_codes = sorted(WARNING_TEXT)
+        if self.db:
+            # Customer standing constraints bind even platform-side approvals.
+            # These values are a projection, never a rewrite of global policy.
+            import json
+            from .models import CustomerConstraints
+            with self.db.connect() as conn:
+                profiles = conn.execute("SELECT tenant_id,data FROM tenant_guardrail_profiles").fetchall()
+                customers = conn.execute("SELECT customer_id,tenant_id FROM tenant_customers").fetchall()
+            for row in profiles:
+                snapshot = json.loads(row["data"])
+                resource.tenant_anomaly_settings[row["tenant_id"]] = snapshot["guardrails"]["anomaly_sensitivity"]["value"]
+                for customer in customers:
+                    if not tenant_overlay or customer["tenant_id"] != row["tenant_id"]:
+                        continue
+                    constraints = resource.customers.setdefault(customer["customer_id"], CustomerConstraints())
+                    for field in ("required_claims", "exclude_allergens"):
+                        setattr(constraints, field, sorted(set(getattr(constraints, field)) | set(snapshot["profile"][field])))
         if tenant_overlay and self.db:
             from .tenancy import principal, TARGET_TENANT
             p = principal()
@@ -134,6 +151,12 @@ class Policy:
                     audit.append(conn, actor, audit_action, "Changed verifiable-mandate agent autonomy.", data=audit_data)
                     return self.get()
             before = self._editable(self.get(tenant_overlay=False))
+            governed_before = None
+            if hasattr(self, "governance"):
+                agent_id = (audit_data or {}).get("agent_id") if audit_action == "AUTONOMY_CHANGED" else None
+                layer, target = ("agent", agent_id) if agent_id else ("platform", "platform")
+                agent = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (agent_id,)).fetchone() if agent_id else None
+                governed_before = self.governance.layer(conn, layer, target, self.get(tenant_overlay=False), agent)
             after = self._editable(self._load(self.path) if reset else request.policy)
             if not reset and "live_max" not in request.policy.shortlist.model_fields_set:
                 after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
@@ -146,11 +169,45 @@ class Policy:
                 for field in ("required_claims", "exclude_allergens"):
                     customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
             resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
+            self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes", "tenant_anomaly_settings"}), sort_keys=False))
+            governed_version = None
+            if governed_before:
+                from .auth import Principal
+                from .foundation import PRINCIPAL
+                principal = PRINCIPAL.get() or Principal(request.updated_by, operator=True, kind="platform_admin", user_id=request.updated_by, role="platform_admin")
+                proposed = dict(governed_before["data"])
+                if agent_id:
+                    proposed["autonomy_level"] = audit_data["level"]
+                    tid = agent["tenant_id"] if agent else self.governance.db_tenant(conn, agent_id)
+                else:
+                    proposed["per_order_ceiling_eur"] = resource.approval.max_auto_total_eur
+                    tid = "platform"
+                governed_version = self.governance._write_version(conn, layer, target, tid, governed_before, proposed, principal,
+                    getattr(request, "comment", None) or (audit_data or {}).get("reason") or "Legacy policy update",
+                    action="POLICY_CHANGED" if agent_id else "GUARDRAILS_CHANGED", agent_id=agent_id, emit_audit=False)
+                # The legacy operator policy editor remains authoritative for its
+                # explicitly changed agent fields. Do not let a historical
+                # governance snapshot restore a revoked customer or autonomy.
+                if not agent_id:
+                    for aid, mandate in after["agents"].items():
+                        old = before["agents"].get(aid, {})
+                        if not conn.execute("SELECT 1 FROM governance_heads WHERE layer='agent' AND target=?", (aid,)).fetchone():
+                            continue
+                        agent_row = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (aid,)).fetchone()
+                        current = self.governance.layer(conn, "agent", aid, resource, agent_row)
+                        updated = dict(current["data"])
+                        for legacy, field in (("customer_ids", "allowed_customers"), ("max_auto_total_eur", "per_order_ceiling_eur"), ("autonomy", "autonomy_level")):
+                            if old.get(legacy) != mandate.get(legacy):
+                                updated[field] = mandate.get(legacy) if legacy != "autonomy" else mandate.get(legacy) or resource.autonomy.default
+                        if updated != current["data"]:
+                            self.governance._write_version(conn, "agent", aid, agent_row["tenant_id"] if agent_row else self.governance.db_tenant(conn, aid),
+                                current, updated, principal, getattr(request, "comment", None) or "Operator changed legacy agent authority",
+                                agent_id=aid, emit_audit=False)
             audit.append(conn, actor or f"human:{request.updated_by}", audit_action,
                          "Restored default policy." if reset else "Updated procurement policy.",
                          data={"diff": self._diff(before, after), "comment": getattr(request, "comment", None),
-                               "reset": reset, "stated_name": request.updated_by, **(audit_data or {})})
-            self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
+                               "reset": reset, "stated_name": request.updated_by, **(audit_data or {}),
+                               **({"version_id": governed_version["id"]} if governed_version else {})})
 
         return self.get()
 
@@ -207,13 +264,17 @@ class Policy:
     def evaluate_order(self, conn, total, lines, hard_violations=(), *, agent_id, customer_id=None,
                        policy=None, warnings=()):
         """Shared read-only placement/preview evaluation, under the caller's SQLite snapshot/lock."""
+        policy = policy or self.get()
+        if hasattr(self, "governance") and policy._governance is None:
+            policy = self.governance.project(agent_id, customer_id, policy, conn=conn)
         return self.evaluate(total, lines, hard_violations, agent_id=agent_id,
                              customer_id=customer_id, autonomous_total=self.autonomous_total(conn, agent_id),
                              policy=policy, warnings=warnings)
 
     @traced("policy.evaluate")
     def evaluate(self, total, lines, hard_violations=(), *, agent_id=None, customer_id=None,
-                 autonomous_total=Decimal(0), policy=None, warnings=()):
+                 autonomous_total=Decimal(0), policy=None, warnings=(), governance_spent=None,
+                 governance_at=None, governance_operation="order", deliver_by=None):
         policy = policy or self.get()
         for line in lines:
             self.check_supplier(agent_id, line.supplier_id, policy)
@@ -272,4 +333,15 @@ class Policy:
                     hits.append(RuleHit(rule=warning.code, detail=f"{product_id}: {warning.text}"))
                     rejected |= warning.code in reject_codes
                     approval |= warning.code not in reject_codes
-        return PolicyResult(outcome="REJECTED" if rejected else "PENDING_APPROVAL" if approval else "CONFIRMED", hits=hits)
+        result = PolicyResult(outcome="REJECTED" if rejected else "PENDING_APPROVAL" if approval else "CONFIRMED", hits=hits)
+        if hasattr(self, "governance") and policy._governance is not None:
+            with self.db.connect() as conn:
+                extra = self.governance.evaluate(conn, policy._governance, total, lines, spent=governance_spent,
+                    at=governance_at, operation=governance_operation, deliver_by=deliver_by)
+            outcomes = {result.outcome, extra.outcome}
+            result.outcome = "REJECTED" if "REJECTED" in outcomes else "PENDING_APPROVAL" if "PENDING_APPROVAL" in outcomes else "CONFIRMED"
+            known = {h.rule for h in result.hits}
+            # Preserve established mandate rule identifiers for the same limit.
+            aliases = {"per_order_ceiling_eur": "max_auto_total_eur", "daily_budget_eur": "max_auto_daily_total_eur"}
+            result.hits.extend(h for h in extra.hits if h.rule not in known and aliases.get(h.rule) not in known)
+        return result

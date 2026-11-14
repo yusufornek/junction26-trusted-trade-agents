@@ -28,10 +28,18 @@ def trace_id():
 def procurement_context(policy, customer_id, request_ref, constraints, mandate=None, *, supplier_id="valio", snapshot=None):
     from .runtime import ENVIRONMENT
     document = policy._editable(snapshot if snapshot is not None else policy.get())
-    return {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
+    context = {"customer_id": customer_id, "supplier_id": "valio-aimo" if supplier_id == "valio" else supplier_id, "request_ref": request_ref,
             "effective_constraints": constraints.model_dump(mode="json"),
             "mandate_ref": mandate.id if mandate else None,
             "policy_version": sha256(canonical_json(document)).hexdigest(), "environment": ENVIRONMENT.get()}
+    if policy.db:
+        from .guardrail_profiles import read_profile
+        with policy.db.connect() as conn:
+            row = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (customer_id,)).fetchone()
+            profile = read_profile(conn, row[0]) if row else None
+        if profile:
+            context["guardrail_profile"] = profile
+    return context
 
 
 def forward_links(conn, *, request_id=None, quote_id=None, agent_id=None):
@@ -76,6 +84,15 @@ EVENT_ACTIONS.update(AUTONOMY_CHANGED="autonomy.changed", AUTONOMY_REVIEW_SUGGES
 EVENT_ACTIONS.update(AGENT_SUSPENDED="agent.suspended", AGENT_RESUMED="agent.resumed")
 EVENT_ACTIONS.update(AGENT_ANOMALY_ALERT="agent.anomaly_alert", ANOMALY_FIX_APPLIED="quote.anomaly_fixed",
                      ANOMALY_DETECTED="quote.anomaly_detected")
+EVENT_ACTIONS.update(UPSTREAM_RATE_LIMITED="platform.upstream_rate_limited", AUDIT_ANCHORED="platform.audit_anchored", SUPPLIER_HEALTH="platform.supplier_health")
+EVENT_ACTIONS.update(TENANT_PROFILE_CREATED="tenant.profile_created", TENANT_PROFILE_UPDATED="tenant.profile_updated")
+EVENT_ACTIONS.update(GOVERNANCE_ALERT="governance.alert", POLICY_CHANGED="governance.policy_changed",
+    AGENT_CREATED="governance.agent_registered",
+    GUARDRAILS_CHANGED="governance.guardrails_changed", POLICY_CHANGE_REQUESTED="governance.change_requested",
+    POLICY_REQUEST_DECIDED="governance.request_decided", POLICY_ROLLED_BACK="governance.rolled_back",
+    GOVERNANCE_AGENT_PAUSED="governance.agent_paused", GOVERNANCE_AGENT_RESUMED="governance.agent_resumed",
+    GOVERNANCE_TENANT_PAUSED="governance.tenant_paused", GOVERNANCE_TENANT_RESUMED="governance.tenant_resumed",
+    AGENT_TRANSFERRED="governance.agent_transferred")
 EVENT_ACTIONS.update(RECURRING_CREATED="recurring.created", RECURRING_STOPPED="recurring.stopped", RECURRING_RUN="recurring.executed",
                      RECURRING_BASELINE="recurring.baseline_updated", PROPOSAL_RECEIVED="proposal.received",
                      PROPOSAL_ACTION="proposal.action")
@@ -84,6 +101,10 @@ EVENT_ACTIONS.update({"SUGGESTION_" + action.upper(): "suggestion." + action
 
 
 def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
+    if action in {"TENANT_PROFILE_CREATED", "TENANT_PROFILE_UPDATED"} and not data.get("customer_id"):
+        for row in conn.execute("SELECT customer_id FROM tenant_customers WHERE tenant_id=?", (data["tenant_id"],)).fetchall():
+            emit(conn, action, actor, ts, audit_id, {**data, "customer_id": row[0]})
+        return
     if action == "MANDATE_REVOKED" and data.get("customer_ids") and not data.get("customer_id"):
         scoped_data = {key: value for key, value in data.items() if key != "customer_ids"}
         for customer in data["customer_ids"]:
@@ -103,6 +124,8 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
             event_type = "order.execution_pending" if row[0] == "PENDING_EXECUTION" else "order.rejected"
     kind = event_type.split(".")[0]
     aggregate_id = order_id if kind == "order" else quote_id if kind == "quote" else data.get("lookup_id", kind)
+    if kind == "governance":
+        aggregate_id = data.get("alert_id") or data.get("agent_id") or data.get("tenant_id")
     if kind == "mandate":
         aggregate_id = f"{data.get('customer_id')}:{data.get('issuer')}:{data.get('mandate_id')}"
     if kind == "proposal":
@@ -111,18 +134,24 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         aggregate_id = data["id"]
     if kind in {"autonomy", "agent"}:
         aggregate_id = data["agent_id"]
+    if kind == "tenant":
+        aggregate_id = data["tenant_id"]
     if aggregate_id is None:
         return  # Historical/imported audit notes do not themselves change an aggregate.
     table = {"order": "orders", "quote": "quotes", "request": "lookups"}.get(kind)
     row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (aggregate_id,)).fetchone() if table else None
     obj = json.loads(row[0]) if row else {}
     context = obj.get("context") or {}
+    if kind == "tenant":
+        context = {"tenant_id": data["tenant_id"], "guardrail_profile": data["guardrail_profile"],
+                   "environment": data.get("environment", "live")}
     if kind in {"proposal", "recurring", "suggestion"}:
         context = {"customer_id": data["customer_id"], "environment": data.get("environment", ENVIRONMENT.get())}
     if kind in {"autonomy", "agent", "mandate"}:
         context = {"customer_id": data.get("customer_id"), "customer_ids": data.get("customer_ids", []),
                    "organisation_id": data.get("organisation_id")}
-    revision = conn.execute("SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM events WHERE aggregate_type=? AND aggregate_id=?",
+    event_table = "main.events" if kind == "platform" else "events"
+    revision = conn.execute(f"SELECT COALESCE(MAX(aggregate_revision),0)+1 FROM {event_table} WHERE aggregate_type=? AND aggregate_id=?",
                             (kind, aggregate_id)).fetchone()[0]
     event_id = obj.get("links", {}).get("event_id") if action in {"LOOKUP", "CREATE_QUOTE"} else None
     event_id = event_id or str(uuid4())
@@ -135,12 +164,17 @@ def emit(conn, action, actor, ts, audit_id, data, order_id=None, quote_id=None):
         links["placement_span"] = placement
     payload = {**data, "links": links, "status": obj.get("status"), "context": context,
                "evidence_revision": obj.get("evidence_revision")}
-    conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                 (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
+    values = (event_id, 1, event_type, obj.get("customer_id") or context.get("customer_id") or data.get("customer_id"),
                   context.get("environment", ENVIRONMENT.get()), kind, aggregate_id, revision, actor, ts,
-                  correlation, CAUSATION.get(), json.dumps(payload), audit_id))
-    conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
-                 "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))
+                  correlation, CAUSATION.get(), json.dumps(payload), audit_id)
+    if kind == "platform":
+        conn.execute("INSERT INTO events(id,schema_version,type,customer_id,environment,aggregate_type,aggregate_id,aggregate_revision,actor,ts,correlation_id,causation_id,payload,audit_id,tenant_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (*values, "platform"))
+        conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at,tenant_id) "
+                     "SELECT ?,name,'pending',0,?,'platform' FROM event_consumers WHERE enabled=1", (event_id, ts))
+    else:
+        conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        conn.execute("INSERT INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
+                     "SELECT ?,name,'pending',0,? FROM event_consumers WHERE enabled=1", (event_id, ts))
     trace = conn.execute("SELECT links FROM trace_links WHERE id=?", (links["trace_id"],)).fetchone()
     trace_links = json.loads(trace[0]) if trace else {}
     for name, value in links.items():

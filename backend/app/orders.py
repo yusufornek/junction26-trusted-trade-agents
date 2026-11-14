@@ -266,7 +266,10 @@ class Orders:
                                for line in plan.lines]
         products = {line.product_id: adapter.catalog.get(line.product_id) for line in requested_lines}
         with self.db.connect() as conn:
-            self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products, supplier_id=supplier_id)
+            policy, _, _ = self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products, supplier_id=supplier_id)
+            if governance := getattr(self.policy, "governance", None):
+                governance.check_operation(conn, agent_id, "quote", request.customer_id, request.deliver_by,
+                    products=products.values(), effective=policy._governance)
         for line in requested_lines:
             p = products[line.product_id]
             step = sales_step(p)
@@ -288,11 +291,14 @@ class Orders:
         with self.db.connect(write=True) as conn:
             # Recheck after taking the same lock used by policy updates.
             policy, record, mandate = self.mandates.authorize(conn, mandate, agent_id, request.customer_id, products=products, supplier_id=supplier_id)
-            need, effective = self.policy.effective_need(lookup.need)
+            governance = getattr(self.policy, "governance", None)
+            if governance:
+                governance.check_operation(conn, agent_id, "quote", request.customer_id, request.deliver_by, products=products.values(), effective=policy._governance)
+            need, effective = self.policy.effective_need(lookup.need, policy)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in requested_lines:
                 p = products[line.product_id]
-                need, effective = self.policy.effective_need(bound_need(conn, lookup, p.id))
+                need, effective = self.policy.effective_need(bound_need(conn, lookup, p.id), policy)
                 offer = offer_for(p, need, price[p.id], stock[p.id], fit_by_id.get(p.id),
                                   sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id, supplier_id=supplier_id), sources=effective)
                 from .substitution import annotate, functional_categories
@@ -323,9 +329,14 @@ class Orders:
                           hard_constraint_violations=violations, live_calls=counter.live())
             if quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Price validity ended during quote creation; re-quote")
+            if governance:
+                governance.snapshot(conn, policy._governance)
+                quote.policy_version_id = policy._governance.version_id
             quote.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=supplier_id)
             if (lookup.context or {}).get("proposal_ref"):
                 quote.context["proposal_ref"] = lookup.context["proposal_ref"]
+            if quote.policy_version_id:
+                quote.context["governance_policy_version_id"] = quote.policy_version_id
             # Preserve the exact catalog evidence approved with this signed quote.
             quote.context["product_evidence"] = {p.id: {
                 "brand": p.brand, "claims": sorted(p.claims), "allergens": p.allergen_status,
@@ -403,8 +414,16 @@ class Orders:
                     products=[o.product_id for o in quote.lines], bound=("quote", quote_id), policy=policy, supplier_id=quote.supplier_id)
             else:
                 record = None
+            governance = getattr(self.policy, "governance", None)
+            if governance:
+                if policy._governance is None:
+                    policy = governance.project(agent_id, quote.customer_id, policy, conn=conn)
+                governance.check_operation(conn, agent_id, "order", quote.customer_id, quote.deliver_by,
+                    products=[self.suppliers.get(quote.supplier_id).catalog.get(o.product_id) for o in quote.lines], effective=policy._governance)
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             self.policy.check_supplier(agent_id, quote.supplier_id, policy)
+            from .guardrail_profiles import require_constraints
+            require_constraints(conn, quote.customer_id)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired: " + (quote.expiration_reason or "validity ended") + "; create a new quote before ordering", data={"reason": quote.expiration_reason or "validity_ended"})
             if quote.status != "OPEN":
@@ -455,6 +474,9 @@ class Orders:
                           total=quote.total, currency=quote.currency, lines=lines, warnings=warnings, anomalies=checks,
                           policy=result, live_calls=counter.live())
             order.context = dict(quote.context) if quote.context else None
+            if governance:
+                governance.snapshot(conn, policy._governance)
+                order.policy_version_id = policy._governance.version_id
             if order.context and quote.need_ref:
                 _, effective = self.policy.effective_need(self.lookup_need(conn, quote.need_ref).need)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective, record, supplier_id=quote.supplier_id)
@@ -463,6 +485,8 @@ class Orders:
             if comparison:
                 order.context["recurring_comparison"] = comparison
             order.correlation_id = CORRELATION.get() or quote.correlation_id
+            if order.context and order.policy_version_id:
+                order.context["governance_policy_version_id"] = order.policy_version_id
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
             from .models import Execution
@@ -810,6 +834,13 @@ class Orders:
             from .foundation import PRINCIPAL
             principal = PRINCIPAL.get()
             authorize_review(self.policy.get(), principal, order)
+            from .guardrail_profiles import authorize_approval, require_constraints
+            self_approval = False
+            if approve:
+                self_approval = authorize_approval(conn, principal, order)
+                require_constraints(conn, order.customer_id)
+            if approve and hasattr(self.policy, "governance"):
+                self.policy.governance.authorize_approval(conn, order, principal)
             profile = self.policy.get().customers.get(order.customer_id)
             if approve and (order.clinical_review == "required" or (profile and profile.clinical_review == "required")):
                 if not principal or principal.kind not in {"buyer_user", "tenant_user"} or principal.role not in {"buyer_approver", "approver", "tenant_admin"}:
@@ -887,6 +918,7 @@ class Orders:
                 order.status = "CONFIRMED" if approve else "REJECTED"
                 order.approver, order.comment = approver, comment
                 order.approver_user_id = principal.user_id if principal else None
+                order.self_approved = bool(approve and self_approval)
                 order.approver_role = principal.role if principal else None
                 order.approval_side = "buyer" if principal and principal.kind in {"buyer_user", "tenant_user"} else "valio_operator"
                 if approve and self.suppliers.get(order.supplier_id).execution.mode == "supplier_backed":
@@ -897,6 +929,8 @@ class Orders:
             if approve and order.mandate is not None:
                 self.mandates.used(conn, self.mandates.stored(conn, "order", order_id))
             data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
+                    "self_approved": order.self_approved,
+                    "approval_warnings": ["SELF_APPROVAL_ALLOWED"] if order.self_approved else [],
                     "organisation_id": principal.organisation_id if principal else None,
                     "evidence_revision": order.evidence_revision, "approval_side": order.approval_side, "user_id": principal.user_id if principal else None, "role": principal.role if principal else None,
                     **mandate_evidence(order.mandate),

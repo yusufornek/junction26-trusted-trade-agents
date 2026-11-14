@@ -31,6 +31,7 @@ def test_ac_1_all_domain_codes_have_explicit_mapping():
     codes = set()
     dynamic_sources = {("auth.py", "check_owner", "code"),
                        ("a2a.py", "invoke", "code")}
+    dynamic_sources.add(("governance.py", "check_operation", "code"))
     observed = set()
     for file in (Path(__file__).parents[1] / "app").glob("*.py"):
         tree = ast.parse(file.read_text())

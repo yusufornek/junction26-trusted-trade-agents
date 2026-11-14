@@ -25,7 +25,11 @@ from .anomaly_service import FixResult
 
 PRESENTED_MANDATE = ContextVar("presented_mandate", default=None)
 
-MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. The buyer MCP resource remains /mcp; OAuth and human MCP audiences are part 2. tenant_admin may grant autonomy to its own agents within platform ceilings. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
+MANDATE_HELP = (" Accounts: the credential binds a tenant, connection and allowed customers. GET /v1/connect/catalog lists client setup and available audiences; humans sign in at /v1/auth/login and manage their own tenant at /v1/tenant. "
+                "Sign-up at /v1/auth/signup stores a business profile and sourced guardrail preset; get_agent_context and transaction context expose that tenant's snapshot. "
+                "Hospital/school orders require claims and allergen exclusions (409 CONSTRAINTS_REQUIRED). Human approvals enforce tenant thresholds (403 APPROVAL_LIMIT) and independent reviewers (403 FOUR_EYES); four-eyes-off self-approvals are flagged and audited. "
+                "Remote MCP supports OAuth 2.1 code/PKCE consent at /oauth/authorize; buyer agents use /mcp, tenant humans use /mcp/tenant and Valio staff use /mcp/operator, each an isolated audience. "
+                "Tenant governance resolves platform, tenant and owned-agent policy with source/version/author at /v1/tenant/agents/{id}/policy/effective. Lookups, quotes and orders record policy_version_id. Paused buyers receive 423 AGENT_PAUSED (CONTACT_ADMIN). Tenant autonomy promotions require policy change requests; requesters cannot approve their own loosening. Buyer authority: stdio --mandate FILE or HTTP Agent-Mandate plus the agent credential. "
                 "EdDSA VC-JWT issuer/signature/nbf/exp/revocation/sub/customer/category checks run on every step; "
                 "MANDATE_INVALID names the failed check. Buyer authority works without a policy agent row; "
                 "policy only tightens its per-order and daily limits and autonomy. Levels: approval_required "
@@ -71,11 +75,12 @@ class GatewayMCPServer(MCPServer):
         return tools
 
     def streamable_http_app(self, **kwargs):
-        if self.agent_id is not None and not self.keys.has_agent(self.agent_id):
+        if self.audience == "buyer" and self.agent_id is not None and not self.keys.has_agent(self.agent_id):
             raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
         app = super().streamable_http_app(**kwargs)
-        check_server(self, http_app=app)
-        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway)
+        if self.audience == "buyer":
+            check_server(self, http_app=app)
+        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id, gateway=self.gateway, audience=self.audience)
         return app
 
     async def call_tool(self, name, arguments, context=None):
@@ -104,7 +109,7 @@ class GatewayMCPServer(MCPServer):
                 correlation = metadata.get("correlation_id") or metadata.get("correlationId") or correlation
         token = PRESENTED_MANDATE.set(mandate)
         correlation_token = CORRELATION.set(correlation or correlation_id())
-        active_agent = self.agent_id or (PRINCIPAL.get().id if PRINCIPAL.get() else None)
+        active_agent = self.agent_id or (PRINCIPAL.get().id if PRINCIPAL.get() else "mcp-agent" if getattr(self, "local_credential", None) else None)
         if active_agent is None:
             raise RuntimeError("Remote MCP requires an authenticated principal")
         policy = self.gateway.policy.get()
@@ -115,10 +120,33 @@ class GatewayMCPServer(MCPServer):
         local_principal = Principal(active_agent, kind=identity.kind if identity else "agent",
             organisation_id=org, customer_ids=tuple(customers), role=identity.role if identity else "agent",
             credential_ref="stdio:" + active_agent)
-        principal_token = PRINCIPAL.set(PRINCIPAL.get() or self.gateway.accounts.bind(local_principal))
+        principal_token = PRINCIPAL.set(PRINCIPAL.get())
         try:
+            if getattr(self, "local_credential", None):
+                from .auth import resolve_credential
+                from .oauth import require_audience
+                PRINCIPAL.set(resolve_credential(self.keys, self.local_credential, self.gateway))
+                require_audience(PRINCIPAL.get(), self.audience, "/mcp"+("" if self.audience == "buyer" else "/"+self.audience))
+            elif PRINCIPAL.get() is None:
+                PRINCIPAL.set(self.gateway.accounts.bind(local_principal))
+            if self.audience != "buyer" and name != "agent_governance":
+                from .oauth import require_audience
+                from .human_tools import execute, confirm_mcp
+                from .commands import json_value
+                require_audience(PRINCIPAL.get(), self.audience, "/mcp/"+self.audience)
+                if name in {"approve_order", "reject_order", "cancel_order", "set_policy"}:
+                    result = await confirm_mcp(self, name, arguments, context)
+                    from mcp.types import InputRequiredResult
+                    if isinstance(result, InputRequiredResult):
+                        return result
+                else:
+                    result = execute(self.gateway, PRINCIPAL.get(), self.audience, name, arguments)
+                value = json_value(result)
+                return CallToolResult(content=[TextContent(type="text", text=json.dumps(value))], structured_content=value if isinstance(value, dict) else {"items": value})
+            if self.audience == "buyer":
+                self.gateway.governance.check_active(PRINCIPAL.get().agent_id)
             from .auth import check_scope
-            if name != "get_agent_context":
+            if name not in {"get_agent_context", "agent_governance"}:
                 resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name or name == "apply_anomaly_fix" else "orders" if "order" in name else "read"
                 permission = "write" if name == "apply_anomaly_fix" or name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_")) else "read"
                 check_scope(PRINCIPAL.get(), resource, permission, name)
@@ -130,6 +158,8 @@ class GatewayMCPServer(MCPServer):
             cause = error
             while cause is not None:
                 if isinstance(cause, DomainError):
+                    if cause.code == "AGENT_PAUSED":
+                        self.gateway.governance.note_refusal(active_agent, cause)
                     payload = problem(cause)
                     return CallToolResult(is_error=True, structured_content=payload,
                                           content=[TextContent(type="text", text=json.dumps(payload))])
@@ -148,12 +178,27 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer"):
+    if audience != "buyer":
+        server = GatewayMCPServer(NAME+"-"+audience, title=TITLE+" — "+audience, version=VERSION,
+            instructions="Human " + audience + " assistant. Credentials bind the consenting human and audience. "
+            "Roles and tenant scope are checked on every call. Read orders, evidence, approval inbox and governance data. "
+            "Approve, reject, cancel and policy changes return input_required: show the summary and evidence to the human, "
+            "then retry the same tool/arguments with requestState and inputResponses.decision from the user's answer (agent_governance uses inputResponses.confirmation). "
+            "State is single use, valid five minutes and bound to this human, decision and evidence revision. "
+            "EVIDENCE_CHANGED requires reviewing fresh evidence and a new confirmation. Never invent confirmation answers.")
+        server.keys, server.gateway, server.agent_id = gateway.settings.keys or Credentials(), gateway, agent_id
+        server.mandate, server.audience = mandate, audience
+        from .human_tools import register_tools
+        register_tools(server, audience)
+        if audience == "tenant":
+            from .governance_transports import register_tenant_tools
+            register_tenant_tools(server)
+        return server
     # Stdio/standalone HTTP bind an issued identity; the main HTTP gateway uses its verified Bearer principal.
     server = GatewayMCPServer(NAME, title=TITLE, description=DESCRIPTION, version=VERSION, instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
-        "Remote /mcp accepts agent keys or OAuth access tokens for this exact MCP resource. ChatGPT and claude.ai use OAuth discovery and operator consent; consent limits customers without expanding the agent mandate. Revoked/expired credentials require reconnecting to the gateway issuer. "
-        "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
+        "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Human approvals use the tenant/operator REST, MCP or A2A audiences: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
         "A2A 1.0 clients discover /.well-known/agent-card.json and use /a2a over the same authenticated core. Signed customer-scoped webhook subscriptions are managed through /v1/webhook-subscriptions; delivery status is separate from purchasing approval. "
         "Domain failures return isError=true and RFC 9457 structured content with code/message, recovery_version=1, retryable, next_action, retry_after_seconds and violations. Follow next_action, not prose. Pending orders return WAIT_FOR_APPROVAL and poll_after_seconds. "
         "Per-principal lookup/mutation/read buckets are shared with REST. RATE_LIMITED, UPSTREAM_BUSY and UPSTREAM_RATE_LIMITED require RETRY_SAME_COMMAND after the supplied interval. Valio calls share a process-wide 5/s bucket; a 429 blocks uncached calls for Retry-After seconds (default 30), returning 503 UPSTREAM_RATE_LIMITED. Cached lookups keep flowing. /health exposes upstream blocked_until and calls_last_minute; stats count upstream_rate_limits, one audit entry per block. Exact idempotent replays use read tokens. Quote and cancel accept optional idempotency_key; same principal/key and changed payload returns IDEMPOTENCY_CONFLICT. Correlation metadata: _meta.correlation_id or HTTP X-Correlation-Id. "
@@ -175,12 +220,13 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
     server.gateway = gateway
     server.agent_id = agent_id
     server.mandate = mandate
+    server.audience = audience
 
     def current_agent():
         principal = PRINCIPAL.get()
         return principal.id if principal is not None else agent_id
 
-    @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
+    @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
     def get_agent_context() -> AgentContext:
         principal = PRINCIPAL.get()
         gateway.limiter.consume(principal.id, "read")
@@ -269,7 +315,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None):
         return gateway.anomalies.apply_fix(quote_id, fix_id, current_agent(), mandate=PRESENTED_MANDATE.get(),
                                           principal=PRINCIPAL.get())
 
-    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the saved first response, even after cancellation, after ownership and identity checks (PENDING_EXECUTION resumes ambiguous supplier execution per spec 25), even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision and use a new approval idempotency key before approving again. No upstream order endpoint exists." + MANDATE_HELP)
+    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the saved first response, even after cancellation, after ownership and identity checks (PENDING_EXECUTION resumes ambiguous supplier execution per spec 25), even for legacy quotes or retired signing keys; an order-bound buyer mandate is always revalidated, including on headerless retries. EXPIRED_QUOTE requires a new quote. Human approval uses the tenant/operator REST, MCP or A2A inbox tools, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision and use a new approval idempotency key before approving again. No upstream order endpoint exists." + MANDATE_HELP)
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
             return gateway.orders.place_order(quote_id, idempotency_key, agent_id=current_agent(), mandate=PRESENTED_MANDATE.get())
@@ -312,11 +358,17 @@ def main():
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--agent-id", default="mcp-agent", help="Buyer agent identity recorded in the audit log")
     parser.add_argument("--mandate", type=Path, help="Buyer-issued VC-JWT file (stdio); HTTP uses Agent-Mandate header")
+    parser.add_argument("--audience", choices=["buyer", "tenant", "operator"], default="buyer")
     args = parser.parse_args()
     gateway = Gateway()
     gateway.recurring.start()
     try:
-        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None)
+        server = create_server(gateway, args.agent_id, mandate=args.mandate.read_text().strip() if args.mandate else None, audience=args.audience)
+        import os
+        server.local_credential = os.environ.get("VTG_CONNECTION_KEY")
+        if args.audience != "buyer":
+            if not args.http and not server.local_credential:
+                parser.error("Tenant/operator stdio needs a human connection key in VTG_CONNECTION_KEY")
         if args.http:
             server.run(transport="streamable-http", host=args.host, port=args.port)
         else:

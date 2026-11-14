@@ -11,11 +11,11 @@ from .config import Settings
 from .discovery import BACKEND, cached, base_url
 
 
-async def tool_schemas(server=None):
+async def tool_schemas(server=None, *, audience="buyer"):
     if server is None:
         from .mcp_server import create_server
         # Tool registration and schema generation require no database or runtime keys.
-        server = create_server(SimpleNamespace(settings=Settings()))
+        server = create_server(SimpleNamespace(settings=Settings()), audience=audience)
     return {tool.name: {"description": tool.description, "inputSchema": tool.input_schema,
                         "outputSchema": tool.output_schema} for tool in await server.list_tools()}
 

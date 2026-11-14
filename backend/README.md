@@ -89,8 +89,7 @@ request hosts receive `mcp_url: null` and use REST until a public origin is conf
 `create_app(..., serve_mcp=False)` disables MCP, returns `mcp_url: null`, and removes
 the MCP catalog entry and server-card route.
 Run one gateway process per database; do not start a second MCP process on its database.
-The `chatgpt` client value on an API-key connection records a preference only. For OAuth
-sign-in, use the authorization flow described above. Tests run offline against isolated databases and in-process MCP:
+The `chatgpt` client supports OAuth sign-in through `/oauth/authorize` (spec 43); API-key issuance remains available for other clients. Tests run offline against isolated databases and in-process MCP:
 `.venv/bin/python -m pytest tests/test_spec42_agent_connections.py -q`.
 
 ## Buyer view and portable evidence (specs 28–29)
@@ -626,7 +625,7 @@ MCP stdio is unchanged: launch `python -m app.mcp_server --agent-id hotel-chain-
 `demo/run_buyer_agent.sh` continues to provision this identity). For `--http`, configure that agent
 in `AGENT_KEYS` and send `Authorization: Bearer <that agent's secret>` on **every** HTTP request,
 including initialization, GET and DELETE. Another agent's key or the operator token is refused.
-Remote MCP supports the operator-consented OAuth flow described above; named operator accounts remain a follow-up.
+Remote MCP OAuth and named tenant/platform accounts are implemented in spec 43 below.
 
 ## UBL 2.1 / Peppol BIS Ordering 3 mapping
 
@@ -1806,8 +1805,8 @@ velocity also counts pending/rejected placement attempts. Quote retries and read
 do not count as new orders.
 
 `policy.yaml` owns `anomalies.sensitivity`, `sensitivity_k`, `history_days`,
-`price_increase_pct` and `velocity_min_upper`. Future tenant profile presets can
-fill these settings. Quantity uses unscaled median ± k·MAD; a weekday bucket wins
+`price_increase_pct` and `velocity_min_upper`. Tenant profile presets provide per-tenant sensitivity through
+`Policy.get().tenant_anomaly_settings`; unprofiled tenants retain these defaults. Quantity uses unscaled median ± k·MAD; a weekday bucket wins
 when it contains at least four points, otherwise the entire history window is
 used. Category fallback uses a matching physical unit. A constant series has a
 zero-width quantity band. Price warns at **>= 20%** above the last paid sales-unit
@@ -1815,8 +1814,7 @@ price by default. Velocity uses completed occupied hourly buckets with a default
 minimum upper band of five orders/hour; above the band requires approval, and at
 twice the band the agent is paused in the same transaction as the pending order.
 The pause reason and `agent.anomaly_alert` are audited and delivered to the durable
-outbox, scoped to the affected customer, with `recipient: buyer_admin` until the
-later tenant/owner governance layer supplies ownership. Subsequent mutations return
+outbox, scoped to the affected customer, alongside the merged tenant/owner governance controls. Subsequent mutations return
 `423 AGENT_PAUSED` with the actor, time and reason. Pending orders remain readable.
 
 The four warning codes `QUANTITY_ANOMALY`, `PRICE_ANOMALY`, `VELOCITY_ANOMALY`,
@@ -1885,11 +1883,197 @@ Human REST decisions use a summary and single-use five-minute confirmation token
 identical retry including confirmation_token. Approval records approver_user_id and approver_role.
 Tokens bind the user, tenant, action, payload and evidence revision. Existing OPERATOR_TOKEN paths
 also use confirmation for human decisions; the token retains platform-admin authority. Agent purchases
-keep their existing autonomous mandate flow. Operator-consented OAuth for the buyer MCP resource
-is available through the discovery, registration, authorization and token endpoints documented above.
-Tenant-account OAuth consent and tenant/operator MCP, A2A, webhook and tool-pack audiences remain
-pending; catalog availability describes the tenant-managed connection subset.
+keep their existing autonomous mandate flow. Part 2 below implements OAuth and tenant/operator MCP, A2A, webhook and
+tool-pack audiences; catalog availability identifies what the deployment serves.
 The frontend data contract is docs/FRONTEND.md, Accounts and connections (spec 43).
 
 Verify offline from backend/: .venv/bin/python -m pytest tests -q, then
 .venv/bin/python scripts/export_openapi.py. No startup/schema-generation command needs demo state.
+
+
+## OAuth and protocol audiences (spec 43, part 2)
+
+`app/oauth.py` preserves the operator-consented buyer MCP flow and dispatches shared endpoints to
+`app/oauth_audiences.py` for signed-in human consent. The latter uses independent
+`audience_oauth_clients`, `audience_oauth_requests`, `audience_oauth_codes` and
+`audience_oauth_tokens` tables; existing `oauth_*` operator grants remain intact.
+The gateway implements the vendored MCP authorization revision 2026-07-28,
+with MCP 2025-11-25 clients accepted. A single authorization server serves six
+exact OAuth resources: `/mcp`, `/mcp/tenant`, `/mcp/operator`, `/a2a`, `/a2a/tenant`,
+`/a2a/operator`. The root protected-resource metadata describes `/mcp`; each
+resource also has `/.well-known/oauth-protected-resource<resource-path>`.
+401 responses advertise the resource-specific metadata URL. Authorization server
+discovery is at `/.well-known/oauth-authorization-server`.
+
+For the human audience flow, first sign in with `/v1/auth/login`. `/oauth/authorize` requires that
+session and an exact registered redirect URI, resource indicator, and S256 PKCE.
+Client IDs can be HTTPS Client ID Metadata Document URLs (HTTPX, no redirects,
+64 KiB and five-second limits), pre-registered IDs via `gateway.oauth.register(id,
+metadata)`, or IDs returned by `POST /oauth/register`. Dynamic registration requires
+`application_type:native|web`; this implementation supports public PKCE clients
+(`token_endpoint_auth_method:none`). Redirects are HTTPS or loopback HTTP; web
+clients require HTTPS redirects. Client documents must match their client_id URL.
+
+The plain consent form displays the client and redirect host, lets a tenant admin
+select/create a buyer agent, and narrow customers/scopes. Tenant humans can consent
+to their own assistant with their current role; platform staff consent to the
+operator audience. `FRONTEND_CONSENT_URL` selects a custom consent screen receiving
+`request_id`; read `/v1/oauth/requests/{id}` and POST its `/decision` with CSRF.
+Approval returns `redirect_url` plus an `oauth` connection id; denial returns an
+`access_denied` redirect. The redirect includes issuer and state. Codes live five
+minutes, consent requests ten. `/oauth/token` takes form-encoded code/PKCE or refresh
+grants and the same resource. Only code/access/refresh digests are stored. Access
+tokens live one hour; refresh tokens thirty days and rotate on every use. Refresh
+reuse revokes the entire family. Revoking the connection or disabling its creator
+makes grants unusable on the next request. Tokens are never sent to suppliers.
+
+The three SDK MCP servers share procurement commands with REST. Human tools expose
+orders/evidence, approval inbox, confirmed approve/reject/cancel, and policy changes.
+Tenant tools additionally expose spend, memory suggestions, agents and connections;
+operator tools expose every tenant, exceptions, upstream/supplier health, stats,
+audit verification and anchors. Human tools enforce live role and scope checks.
+MCP decisions return `InputRequiredResult` with an elicitation and opaque
+`requestState`; retry the same request with the human's `inputResponses.decision`.
+The state is single use, human/tenant/operation/body/evidence bound, expires in five
+minutes and reuses REST's `confirm_rest`. Evidence changes return `EVIDENCE_CHANGED`.
+For local stdio, run `.venv/bin/python -m app.mcp_server --audience tenant` (or
+`operator`) with a human connection key in `VTG_CONNECTION_KEY`; stdio revalidates
+that key on every call. HTTP uses the corresponding remote resource instead.
+
+A2A tenant/operator cards are at `/a2a/<audience>/.well-known/agent-card.json`;
+the buyer card remains at `/.well-known/agent-card.json`. Each advertises OAuth
+code/PKCE and HTTP bearer security. Human `SendMessage` data parts are
+`{version:1,command:<skill-id>,arguments:{...}}`. Decisions return an `INPUT_REQUIRED`
+task with REST's summary and `confirmation_token`, then execute on a new message
+carrying the confirmed token. Task access and business objects retain tenant scope.
+
+`type:webhook` connections require `webhook_url` and optionally `event_types`;
+creation challenges the destination and registers a signed spec 33 subscription.
+Tenant/operator subscriptions use `/v1/<audience>/webhook-subscriptions` with the
+same delivery/retry controls. Buyer subscriptions see own orders; tenant
+subscriptions see selected customers within their tenant; operator subscriptions
+see every tenant and platform upstream-rate-limit, audit-anchor and supplier-health
+events. Revoked connection subscriptions stop receiving deliveries.
+
+`GET /v1/connect/tool-pack?format=openai|anthropic|gemini&audience=buyer|tenant|operator`
+returns declarations derived from that MCP audience's input schemas and a Python
+executor using `VTG_CONNECTION_KEY`. The executor calls REST
+`POST /v1/connect/tools/{name}?audience=...`; no second business implementation is
+maintained. Human tool-pack decisions use the REST preview/confirmation handshake.
+The schema endpoint is public; supplied credentials must match the audience and
+execution always requires credentials. OAuth tokens only work at their exact
+MCP/A2A resource; connection keys work within their audience.
+
+Validation (isolated fixtures; no live demo state or network):
+`.venv/bin/python -m pytest -q tests/test_spec43_oauth_audiences.py`.
+The frontend consent and protocol contracts are in `docs/FRONTEND.md`,
+"Accounts and connections (spec 43)".
+
+## Guardrail profiles and anomalies (spec 45, profile slice)
+
+Profile presets (R-1–R-4/R-9) and the anomaly checks, optional local forecasting and
+synthetic demo history (R-5–R-8) are integrated. Forecasting remains optional and off by default.
+
+Public GET /v1/auth/signup/options returns labelled business, volume and meals/day
+choices. POST /v1/auth/signup takes name, email, password and profile (business_type,
+sites, buyers_and_approvers, monthly_purchase_volume_band, meals_per_day_band,
+required_claims?, exclude_allergens?). It atomically creates the tenant, its first
+active tenant_admin, a new customer identity and its issuer, plus an initial sourced
+guardrail snapshot. It does not assign an existing tenant's customer or sign in;
+use /v1/auth/login next. Passwords use the existing scrypt implementation; sign-up
+uses the authentication source limiter. No password or credential enters audit.
+
+Presets live only in guardrail_presets.yaml; app/guardrail_presets.py loads them.
+The snapshot uses these spec 44 tenant-layer fields: per_order_ceiling_eur,
+daily_budget_eur, monthly_budget_eur, approver_amount_threshold_eur, four_eyes,
+substitutes_policy, anomaly_sensitivity and starting_autonomy. Every field is
+{value, source: "preset:<business_type>"}. Groups/chains with multiple sites also
+get per_site_budgets (equal allocations, rounded down). The volume bands seed
+monthly budgets of 5k/25k/100k/200k EUR; catering multiplies these by 1.5. Daily
+budget is monthly/30, rounded to cents. The final open band uses an explicit 200k
+starting assumption, not an inferred spending entitlement. All new connections
+retain approval_required; the established hotel demo mandate is unchanged.
+
+Tenant storage is tenant_guardrail_profiles, keyed by tenant_id, and append-only
+tenant_profile_versions, including profile_revision, guardrail_version and author.
+GET /v1/tenant/profile reads it (null for a legacy unprofiled tenant). PUT accepts
+the profile fields and the existing REST confirmation handshake; only tenant_admin
+can edit. Profile edits preserve the initial active guardrails. Applying another
+preset, arbitrary guardrail changes and constraint removal go through spec 44;
+this lane refuses constraint removal with 409 GUARDRAIL_CHANGE_REQUIRED. No edit
+silently reapplies a preset or widens limits. Hospital/school orders require both
+nonempty required_claims and exclude_allergens (409 CONSTRAINTS_REQUIRED, including
+missing_fields and profile_url); these standing constraints bind every customer
+of the tenant and cannot be dropped by a request or a business-type edit.
+
+Approval gates run before the REST preview, inside the shared approval transaction
+and on keyed command replay. Above the threshold (strictly >), only tenant_admin
+may approve: 403 APPROVAL_LIMIT includes threshold_eur, required_role and
+who_can_approve. With four-eyes on, connection creators (including revoked keys),
+the owner and the last autonomy/policy-loosening approvers receive 403 FOUR_EYES.
+The pending inbox adds approval_requirements, including eligible approver user IDs;
+an empty list means no currently active eligible human exists. Rejection is still
+available. Four-eyes-off self-approval sets order.self_approved=true and the APPROVE
+audit entry records self_approved plus approval_warnings=[SELF_APPROVAL_ALLOWED].
+Both refusal codes are audited without supplier calls. Display names never supply
+authority. The amount gate also applies to platform staff on profiled tenants.
+
+Merge hooks for spec 44: load_preset returns the initial tenant-layer values;
+read_profile reads that snapshot; register_owner records ownership on creation;
+conflicted_users prefers the spec 44 tenant_agents.owner_user_id column when present.
+record_policy_loosening(conn, agent_id, user_id, tenant_id) is called within the
+spec 44 successful change-approval transaction so its reviewer is subject to four-eyes. Current autonomy grants already
+record the authenticated user ID. The governance layer should update the active
+tenant snapshot when its guardrail values change; it owns policy change control,
+version resolution and budget/substitute enforcement. This profile lane directly
+enforces the constraints gate, amount threshold and four-eyes rule.
+
+The anomaly lane reads Policy.get().tenant_anomaly_settings[tenant_id]:
+{quantity_k, velocity_k, price_increase_pct}. Hospital quantity/velocity k=2;
+catering velocity k=2; other k=3. The price threshold is 20 percent.
+The settings are derived from tenant snapshots and never saved as global YAML.
+
+Profiles appear in session.tenant.guardrail_profile, /v1/me (and MCP
+get_agent_context), /v1/tenant/policy, the operator tenant list and transaction
+context.guardrail_profile. Transaction context also travels through A2A and signed
+order webhooks. Customer-scoped tenant.profile_created/tenant.profile_updated
+events carry guardrail_profile and are supported subscription event_types. Approval
+webhook payloads include approval_requirements. Dedicated tenant MCP/A2A management
+audiences are implemented by spec 43 part 2, as advertised by the connect catalog
+and described in "OAuth and protocol audiences" above.
+
+Offline acceptance checks from backend/: .venv/bin/python -m pytest -q
+tests/test_spec45_guardrail_profiles_anomalies.py. AC-1–4 and AC-10 are in that file;
+AC-5–9 remain the anomaly lane's acceptance checks. Finish contract updates with
+.venv/bin/python scripts/export_openapi.py; it does not start a gateway or touch var/.
+### Agent governance (spec 44)
+
+`app/governance.py` resolves platform → tenant guardrails → owned-agent policy, with the most restrictive
+value per field and immutable source versions/authors. Procurement consumes that resolution via the existing
+mandate and policy evaluator; new lookups, quotes and orders include `policy_version_id` and retain their
+immutable effective snapshot. Existing signed quote evidence remains readable. Members manage their own agents;
+admins review loosening requests (never their own), transfer ownership, set guardrails and stop the tenant.
+
+REST: `/v1/tenant/agents` (register/filter), `/{id}/policy/effective`, `/{id}/policy` (GET/PATCH/PUT),
+`/{id}/policy/simulate`, `/{id}/policy/versions`, `/{id}/policy/versions/{version}/rollback`,
+`/{id}/activity`, `/{id}/pause`, `/{id}/resume`, `/{id}/transfer`; `/v1/tenant/policy/change-requests`
+and `/{request}/approve|reject`; `/v1/tenant/guardrails` and its versions/rollback;
+`/v1/tenant/agents/pause|resume`, `/v1/tenant/alerts`, `/v1/tenant/governance/report?from=&to=&signed=true`.
+Platform policy is `/v1/operator/governance/policy`; platform tenant stop is
+`/v1/operator/tenants/{id}/pause|resume`. All governance mutations require the spec 43 five-minute, single-use
+human confirmation handshake. Report signatures use the spec 10 detached JWS signer and public JWKS.
+
+MCP: `/mcp/tenant` advertises `agent_governance(operation, arguments)` with the same core operations and
+2026-07-28 `input_required` confirmation. A2A: `/a2a/tenant` (`SendMessage` data part with `operation`,
+`arguments`, optional `confirmation_token`), discovered through `/a2a/tenant/agent-card.json`.
+Tenant webhook subscriptions use `/v1/tenant/webhook-subscriptions`, `audience=tenant`, and
+`governance.alert` / `governance.*` policy/status event types, delivered through the existing durable outbox
+and Standard Webhooks signer. Live user role, tenant and active status are rechecked before delivery.
+
+Policy allowlists and bounds accept null for unrestricted and empty allowlists for no permission. Ordering hours
+are UTC hours 0..23, delivery windows are UTC date offsets, and governance budgets count UTC calendar day/month
+spend including approved purchases. Calendar budgets default to unrestricted; the existing autonomous rolling-24-hour limit also applies. Simulations replay
+stored last-30-day quote/order evidence without upstream calls or writes. A paused buyer gets
+`423 AGENT_PAUSED` (`CONTACT_ADMIN`); `422 OUTSIDE_GUARDRAIL` includes the governing field/limit/source/version/author.
+
+Offline acceptance: `.venv/bin/python -m pytest -q tests/test_spec44_agent_governance.py`.

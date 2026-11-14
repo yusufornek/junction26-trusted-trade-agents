@@ -24,6 +24,7 @@ AUDIENCES = {
     "operator": {"rest": "/v1/operator", "human_required": True},
 }
 ROLES = {
+    "member": ["agents:manage:own", "connections:manage:own", "policy:manage:own", "activity:read:own"],
     "viewer": ["orders:read", "evidence:read", "audit:read", "spend:read", "suggestions:read"],
     "approver": ["orders:read", "evidence:read", "audit:read", "spend:read", "suggestions:read", "approvals:decide", "orders:cancel"],
     "tenant_admin": ["orders:read", "evidence:read", "audit:read", "spend:read", "suggestions:read", "approvals:decide",
@@ -45,6 +46,7 @@ class SecretLinkFilter(logging.Filter):
         text = record.getMessage()
         safe = re.sub(r"(/v1/auth/(?:invites|password-resets)/)[^/\s]+", r"\1[redacted]", text)
         safe = re.sub(r"vtg_(?:live|sbx)_con_[a-z0-9]+_[A-Za-z0-9_-]+", "[connection-key]", safe)
+        safe = re.sub(r"vtg_(?:oauth_(?:access|refresh)|code)_[A-Za-z0-9_-]+", "[oauth-credential]", safe)
         if safe != text:
             record.msg, record.args = safe, ()
         return True
@@ -88,7 +90,7 @@ def seed_demo(db):
             if encoded:
                 conn.execute("UPDATE users SET password_hash=? WHERE id=? AND password_hash IS NULL", (encoded, uid))
         for agent, tid in [("hotel-chain-agent", HOTEL), ("web-console", HOTEL), ("hospital-kitchen-agent", HOSPITAL)]:
-            conn.execute("INSERT OR IGNORE INTO tenant_agents VALUES(?,?,?,NULL)", (agent, tid, agent))
+            conn.execute("INSERT OR IGNORE INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)", (agent, tid, agent))
         from .tenant_api import issuer_key
         for row in conn.execute("SELECT id FROM tenants"):
             issuer_key(conn, row[0])
@@ -106,9 +108,12 @@ class Accounts:
             for agent in set(gateway.policy.get().agents) | set(gateway.settings.keys.agent_ids if gateway.settings.keys else ()):
                 mandate = policy.agents.get(agent)
                 tid = HOSPITAL if agent == "hospital-kitchen-agent" or mandate and set(mandate.customer_ids) == {"2"} else HOTEL
-                conn.execute("INSERT OR IGNORE INTO tenant_agents VALUES(?,?,?,NULL)",
+                conn.execute("INSERT OR IGNORE INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)",
                              (agent, tid, agent))
-            conn.execute("INSERT OR IGNORE INTO tenant_agents VALUES(?,?,?,NULL)", ("hospital-kitchen-agent", HOSPITAL, "Hospital kitchen"))
+            conn.execute("INSERT OR IGNORE INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)", ("hospital-kitchen-agent", HOSPITAL, "Hospital kitchen"))
+            from .guardrail_profiles import register_owner
+            for agent in conn.execute("SELECT agent_id,tenant_id FROM tenant_agents").fetchall():
+                register_owner(conn, agent["agent_id"], agent["tenant_id"])
 
     def customers(self, tid):
         with self.db.connect() as conn:
@@ -139,9 +144,17 @@ class Accounts:
                 return replace(p, tenant_id=None, organisation_id=None, customer_ids=())
         allowed = set(p.customer_ids) if p.connection_id or p.kind in {"agent", "buyer_user"} else set(self.customers(tid))
         allowed &= set(self.customers(tid))
-        mandate = self.gateway.policy.get().agents.get(p.id)
+        authority = self.gateway.policy.get()
+        mandate = authority.agents.get(p.id)
         if p.kind == "agent" and mandate:
-            allowed &= set(mandate.customer_ids)
+            scope = mandate.customer_ids
+            if hasattr(self.gateway, "governance"):
+                scope = self.gateway.governance.resolve(p.id).fields["allowed_customers"].value
+            # Connection scopes remain fixed. Legacy env keys follow the current
+            # agent policy, including independently approved customer additions.
+            allowed = allowed & set(scope) if p.connection_id else set(scope)
+            if not p.connection_id and p.organisation_id in authority.organisations:
+                allowed &= set(authority.organisations[p.organisation_id].customer_ids)
         elif p.kind == "agent" and p.connection_id:
             from .mandates import decode
             with self.db.connect() as conn:
@@ -215,7 +228,7 @@ class Accounts:
         return secret, csrf, self.user_principal(row)
 
     def guard(self, p, path, method):
-        target = "tenant" if path.startswith("/v1/tenant") else "operator" if path.startswith("/v1/operator") else "buyer"
+        target = "tenant" if path.startswith(("/v1/tenant", "/a2a/tenant")) else "operator" if path.startswith("/v1/operator") else "buyer"
         if path.startswith("/v1/auth") or path == "/v1/me":
             return
         if target != "buyer":
@@ -227,7 +240,7 @@ class Accounts:
                 raise DomainError("OPERATOR_REQUIRED", "Platform administrator required", 403)
         elif p.connection_id and p.audience != "buyer":
             raise DomainError("WRONG_AUDIENCE", "Credential is bound to another audience", 401)
-        if p.connection_id and "*" not in p.scopes:
+        if p.connection_id and "*" not in p.scopes and path != "/a2a/tenant":
             permission = "read" if method in {"GET", "HEAD"} else "write"
             segments = path.split("/")
             resource = next((name for name in ("mandates", "approvals", "connections", "orders", "quotes", "lookups", "basket-lookups", "agents", "users", "policy", "tenants", "audit", "suggestions", "spend") if name in segments), segments[-1])
@@ -292,7 +305,7 @@ class Accounts:
     def invite(self, email, role, p, origin, *, tenant_id=None, platform=False):
         self.manage(p, platform=platform)
         tid = None if platform else tenant_id or p.tenant_id
-        allowed = {"platform_admin"} if platform else {"tenant_admin", "approver", "viewer"}
+        allowed = {"platform_admin"} if platform else {"tenant_admin", "member", "approver", "viewer"}
         if role not in allowed:
             raise DomainError("VALIDATION_ERROR", "Role is not valid for this team", 422)
         if tid:
@@ -325,7 +338,7 @@ class Accounts:
         with self.db.connect(write=True) as conn:
             row = self.target_user(uid, p, platform)
             role = changes.get("role", row["role"])
-            if role not in ({"platform_admin"} if platform else {"tenant_admin", "approver", "viewer"}):
+            if role not in ({"platform_admin"} if platform else {"tenant_admin", "member", "approver", "viewer"}):
                 raise DomainError("VALIDATION_ERROR", "Role is not valid for this team", 422)
             if row["role"] == "tenant_admin" and row["password_hash"] and not row["disabled_at"] and (role != "tenant_admin" or changes.get("disabled") or changes.get("remove")):
                 count = conn.execute("SELECT COUNT(*) FROM users WHERE tenant_id=? AND role='tenant_admin' AND password_hash IS NOT NULL AND disabled_at IS NULL AND removed_at IS NULL", (row["tenant_id"],)).fetchone()[0]
@@ -334,12 +347,16 @@ class Accounts:
             disabled = (audit.utcnow().isoformat() if changes["disabled"] else None) if "disabled" in changes else row["disabled_at"]
             conn.execute("UPDATE users SET role=?,disabled_at=?,removed_at=? WHERE id=?", (role, disabled, audit.utcnow().isoformat() if changes.get("remove") else None, uid))
             if disabled or changes.get("remove"):
+                owned_agents = self.gateway.governance.user_leaving(conn, uid, p)
                 conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
                 conn.execute("UPDATE connections SET revoked_at=? WHERE created_by=? AND revoked_at IS NULL", (audit.utcnow().isoformat(), uid))
                 conn.execute("UPDATE account_links SET used_at=? WHERE user_id=? AND used_at IS NULL", (audit.utcnow().isoformat(), uid))
             audit.append(conn, p.user_id or p.id, "ROLE_CHANGED" if role != row["role"] else "USER_CHANGED", "Changed team membership.",
                          data={"user_id": uid, "tenant_id": row["tenant_id"], "role": role, "disabled": bool(disabled), "removed": bool(changes.get("remove"))})
-            return public_user(conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+            result = public_user(conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+            if disabled or changes.get("remove"):
+                result["agents_to_transfer"] = owned_agents
+            return result
 
 
 class Login(BaseModel):
@@ -373,6 +390,7 @@ class TenantChange(BaseModel):
 
 
 class PublicUser(BaseModel):
+    agents_to_transfer: list[dict] | None = Field(default=None, exclude_if=lambda v: v is None)
     id: str
     tenant_id: str | None
     email: str
@@ -409,7 +427,9 @@ def tenant_data(a, tid):
         return None
     with a.db.connect() as conn:
         row = conn.execute("SELECT * FROM tenants WHERE id=?", (tid,)).fetchone()
-    return dict(row) if row else None
+        from .guardrail_profiles import read_profile
+        profile = read_profile(conn, tid)
+    return {**dict(row), "guardrail_profile": profile} if row else None
 
 
 def accounts(request):
@@ -528,7 +548,7 @@ def tenants(request: Request, p: Principal = Depends(resolve_principal)):
     a = accounts(request)
     a.manage(p, platform=True)
     with a.db.connect() as conn:
-        return [{**dict(r), "customer_ids": a.customers(r["id"])} for r in conn.execute("SELECT * FROM tenants ORDER BY name")]
+        return [{**tenant_data(a, r["id"]), "customer_ids": a.customers(r["id"])} for r in conn.execute("SELECT * FROM tenants ORDER BY name")]
 
 
 @router.post("/v1/operator/tenants", status_code=201, response_model=dict)
@@ -537,7 +557,7 @@ def create_tenant(body: TenantRequest, request: Request, p: Principal = Depends(
     a.manage(p, platform=True)
     tid = "ten_" + token_urlsafe(12)
     with a.db.connect(write=True) as conn:
-        conn.execute("INSERT INTO tenants VALUES(?,?,?,NULL)", (tid, body.name, audit.utcnow().isoformat()))
+        conn.execute("INSERT INTO tenants(id,name,created_at,disabled_at) VALUES(?,?,?,NULL)", (tid, body.name, audit.utcnow().isoformat()))
         from .tenant_api import issuer_key
         issuer_key(conn, tid)
         for customer in body.customer_ids:

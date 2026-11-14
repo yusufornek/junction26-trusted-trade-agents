@@ -30,11 +30,11 @@ def confirm_rest(service, p, operation, target, payload, token, apply, *, force=
     try:
         return _confirm_rest(service, p, operation, target, payload, token, apply, force=force)
     except DomainError as error:
-        if operation in {"approve", "reject", "cancel"} and error.code == "ORDER_NOT_FOUND" and not getattr(error, "audited", False):
+        if operation in {"approve", "reject", "cancel"} and error.code in {"ORDER_NOT_FOUND", "FOUR_EYES", "APPROVAL_LIMIT", "CONSTRAINTS_REQUIRED"} and not getattr(error, "audited", False):
             actor = "human:operator" if p.user_id == "legacy-operator" else "human:" + (p.user_id or p.id)
             with service.db.connect(write=True) as conn:
                 audit.append(conn, actor, operation.upper()+"_FAILED", error.message, order_id=target,
-                    data={"error": error.code, "inputs": {"order_id": target, **payload}, "live_calls": {"price": 0, "availability": 0}})
+                    data={"error": error.code, **error.data, "user_id": p.user_id, "inputs": {"order_id": target, **payload}, "live_calls": {"price": 0, "availability": 0}})
             error.audited = True
         raise
 
@@ -51,6 +51,11 @@ def _confirm_rest(service, p, operation, target, payload, token, apply, *, force
         if operation in {"approve", "reject", "cancel"}:
             order = service.orders._order(conn, target)
             authorize_review(service.policy.get(), p, order)
+            if operation == "approve":
+                from .guardrail_profiles import authorize_approval, require_constraints
+                authorize_approval(conn, p, order)
+                require_constraints(conn, order.customer_id)
+                service.governance.authorize_approval(conn, order, p)
         revision = order.evidence_revision if order else None
         if token is None:
             secret = token_urlsafe(32)
@@ -58,7 +63,9 @@ def _confirm_rest(service, p, operation, target, payload, token, apply, *, force
             conn.execute("INSERT INTO decision_confirmations VALUES(?,?,?,?,?,?,?,?,NULL)",
                          (digest(secret), user, p.tenant_id, operation, target, encoded, revision, expires.isoformat()))
             return DecisionPreview(confirmation_token=secret, expires_at=expires.isoformat(),
-                summary={"operation": operation, "target": target, "order": order.model_dump(mode="json") if order else None, "changes": payload})
+                summary={"operation": operation, "target": target, "order": order.model_dump(mode="json") if order else None,
+                         "evidence": {"evidence_revision": revision, "quote": service.orders._get_quote(order.quote_id).model_dump(mode="json")} if order else None,
+                         "changes": payload})
         row = conn.execute("SELECT * FROM decision_confirmations WHERE digest=?", (digest(token),)).fetchone()
         if (not row or row["used_at"] or row["expires_at"] <= audit.utcnow().isoformat() or
                 row["user_id"] != user or row["tenant_id"] != p.tenant_id or row["operation"] != operation or
@@ -88,31 +95,32 @@ class AgentChange(BaseModel):
 
 
 def target_agent(service, agent_id, p):
-    service.accounts.manage(p)
     with service.db.connect() as conn:
-        row = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (agent_id,)).fetchone()
-    if not row or not p.operator and row["tenant_id"] != p.tenant_id:
-        raise DomainError("AGENT_NOT_FOUND", "Agent was not found", 404)
-    return row
+        return service.governance.target(conn, agent_id, p)
 
 
 @router.get("/v1/tenant/agents", response_model=list[dict])
-def agents(request: Request, p: Principal = Depends(resolve_principal)):
-    a = accounts(request)
-    a.manage(p)
-    with a.db.connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM tenant_agents WHERE tenant_id=? ORDER BY agent_id", (p.tenant_id,))]
+def agents(request: Request, owner_user_id: str | None = None, status: str | None = None, p: Principal = Depends(resolve_principal)):
+    return request.app.state.gateway.governance.register(p, owner_user_id, status)
 
 
 @router.post("/v1/tenant/agents", status_code=201, response_model=dict)
 def create_agent(body: AgentCreate, request: Request, p: Principal = Depends(resolve_principal)):
     a = accounts(request)
-    a.manage(p)
+    request.app.state.gateway.governance.member(p)
     with a.db.connect(write=True) as conn:
         if conn.execute("SELECT 1 FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone():
             raise DomainError("AGENT_EXISTS", "Agent identifier is already registered", 409)
-        conn.execute("INSERT INTO tenant_agents VALUES(?,?,?,NULL)", (body.agent_id, p.tenant_id, body.name))
-        audit.append(conn, p.user_id or p.id, "AGENT_CREATED", "Created a tenant agent.", data={"agent_id": body.agent_id, "tenant_id": p.tenant_id})
+        conn.execute("INSERT INTO tenant_agents(agent_id,tenant_id,name,disabled_at) VALUES(?,?,?,NULL)", (body.agent_id, p.tenant_id, body.name))
+        request.app.state.gateway.governance.own_new_agent(conn, body.agent_id, p.tenant_id, p)
+        governance = request.app.state.gateway.governance
+        created = governance.target(conn, body.agent_id, p)
+        before = governance.layer(conn, "agent", body.agent_id, request.app.state.gateway.policy.get(tenant_overlay=False), created)
+        governance._write_version(conn, "agent", body.agent_id, p.tenant_id, before,
+            {**before["data"], "autonomy_level": "approval_required"}, p, "New agents start with human approval",
+            agent_id=body.agent_id, emit_audit=False)
+        owner = conn.execute("SELECT owner_user_id FROM tenant_agents WHERE agent_id=?", (body.agent_id,)).fetchone()[0]
+        audit.append(conn, p.user_id or p.id, "AGENT_CREATED", "Created a tenant agent.", data={"agent_id": body.agent_id, "tenant_id": p.tenant_id, "owner_user_id": owner, "status": "active"})
     return {"agent_id": body.agent_id, "tenant_id": p.tenant_id, "name": body.name, "autonomy": "approval_required"}
 
 
@@ -221,6 +229,9 @@ def tenant_policy(service, p):
     policy["agents"] = {k: v for k, v in policy["agents"].items() if set(v["customer_ids"]) <= customers}
     policy["customers"] = {k: v for k, v in policy["customers"].items() if k in customers}
     policy["identities"], policy["organisations"] = {}, {}
+    from .guardrail_profiles import read_profile
+    with service.db.connect() as conn:
+        policy["guardrail_profile"] = read_profile(conn, p.tenant_id)
     return policy
 
 
@@ -258,8 +269,13 @@ def set_policy(body: Overlay, request: Request, p: Principal = Depends(resolve_p
     payload = body.model_dump(exclude={"confirmation_token"})
     def apply():
         with service.db.connect(write=True) as conn:
+            before = service.governance.layer(conn, "tenant", p.tenant_id, service.policy.get(tenant_overlay=False))
             conn.execute("INSERT INTO tenant_policy_overlays(id,data,tenant_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (p.tenant_id, json.dumps(payload), p.tenant_id))
-            audit.append(conn, p.user_id or p.id, "TENANT_POLICY_UPDATED", "Updated tenant policy overlay.", data={"tenant_id": p.tenant_id, "changes": payload})
+            proposed = dict(before["data"])
+            for key, field in (("max_auto_total_eur", "per_order_ceiling_eur"), ("max_auto_daily_total_eur", "daily_budget_eur")):
+                proposed[field] = body.approval.get(key)
+            version = service.governance._write_version(conn, "tenant", p.tenant_id, p.tenant_id, before, proposed, p, "Tenant policy overlay update", emit_audit=False)
+            audit.append(conn, p.user_id or p.id, "TENANT_POLICY_UPDATED", "Updated tenant policy overlay.", data={"tenant_id": p.tenant_id, "changes": payload, "version_id": version["id"]})
         return tenant_policy(service, p)
     return confirm_rest(service, p, "policy", p.tenant_id, payload, body.confirmation_token, apply, force=True)
 
@@ -267,11 +283,12 @@ def set_policy(body: Overlay, request: Request, p: Principal = Depends(resolve_p
 def install_aliases(app):
     """REST audience endpoints reuse the existing operations and validation models."""
     from .evidence import router as evidence_router
+    from .webhooks import router as webhook_router
     # Included routers are lazy in current FastAPI; use their registered routes
     # directly when creating aliases for an included endpoint.
-    for route in [*app.routes, *evidence_router.routes]:
+    for route in [*app.routes, *evidence_router.routes, *webhook_router.routes]:
         src = getattr(route, "path", "")
-        if src in {"/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/orders/{id}/ubl", "/v1/orders/{order_id}/timeline", "/v1/orders/{order_id}/evidence",
+        if src.startswith("/v1/webhook-subscriptions") or src in {"/v1/orders", "/v1/orders/{id}", "/v1/orders/{id}/receipt", "/v1/orders/{id}/ubl", "/v1/orders/{order_id}/timeline", "/v1/orders/{order_id}/evidence",
                    "/v1/approvals", "/v1/approvals/{order_id}/approve", "/v1/approvals/{order_id}/reject", "/v1/orders/{order_id}/cancel",
                    "/v1/agents/{agent_id}/autonomy", "/v1/agents/{agent_id}/track-record"}:
             for audience in ("tenant", "operator"):

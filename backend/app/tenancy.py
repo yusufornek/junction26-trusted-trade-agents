@@ -16,7 +16,8 @@ HOSPITAL = "kaari-hospital"
 SHARED = {"products", "products_fts", "catalog_metadata", "supplier_products", "workspace",
           "runtime_files", "event_consumers", "audit_anchors", "tenants", "tenant_customers",
           "users", "sessions", "account_links", "login_attempts", "tenant_agents",
-          "tenant_issuers", "connection_secrets", "decision_confirmations"}
+          "tenant_issuers", "connection_secrets", "decision_confirmations",
+          "audience_oauth_clients", "audience_oauth_requests", "audience_oauth_codes", "audience_oauth_tokens"}
 
 
 def principal():
@@ -44,10 +45,22 @@ def migrate(conn):
     CREATE TABLE IF NOT EXISTS decision_confirmations(digest TEXT PRIMARY KEY,user_id TEXT NOT NULL,tenant_id TEXT,
         operation TEXT NOT NULL,target TEXT NOT NULL,payload TEXT NOT NULL,revision INTEGER,expires_at TEXT NOT NULL,used_at TEXT);
     CREATE TABLE IF NOT EXISTS tenant_policy_overlays(id TEXT PRIMARY KEY,data TEXT NOT NULL,tenant_id TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audience_oauth_clients(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audience_oauth_requests(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT);
+    CREATE TABLE IF NOT EXISTS audience_oauth_codes(digest TEXT PRIMARY KEY,connection_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT);
+    CREATE TABLE IF NOT EXISTS audience_oauth_tokens(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,family TEXT NOT NULL,
+        connection_id TEXT NOT NULL,data TEXT NOT NULL,expires_at TEXT NOT NULL,used_at TEXT,revoked_at TEXT);
+    CREATE TABLE IF NOT EXISTS tenant_guardrail_profiles(tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tenant_profile_versions(tenant_id TEXT NOT NULL REFERENCES tenants(id),version INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(tenant_id,version));
+    CREATE TABLE IF NOT EXISTS profile_agent_owners(agent_id TEXT PRIMARY KEY,owner_user_id TEXT NOT NULL,tenant_id TEXT NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS tenant_profile_versions_no_update BEFORE UPDATE ON tenant_profile_versions
+        BEGIN SELECT RAISE(ABORT, 'profile versions are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS tenant_profile_versions_no_delete BEFORE DELETE ON tenant_profile_versions
+        BEGIN SELECT RAISE(ABORT, 'profile versions are immutable'); END;
     """)
     from .audit import utcnow
     for tid, name, customer in [(HOTEL, "Hotel Aurora chain", "1"), (HOSPITAL, "Kaari Hospital Kitchen", "2")]:
-        conn.execute("INSERT OR IGNORE INTO tenants VALUES(?,?,?,NULL)", (tid, name, utcnow().isoformat()))
+        conn.execute("INSERT OR IGNORE INTO tenants(id,name,created_at,disabled_at) VALUES(?,?,?,NULL)", (tid, name, utcnow().isoformat()))
         conn.execute("INSERT OR IGNORE INTO tenant_customers VALUES(?,?)", (customer, tid))
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     # Audit is append-only except for this additive, non-hash-changing backfill.
@@ -98,11 +111,15 @@ def migrate(conn):
                        "scopes": "TEXT NOT NULL DEFAULT '[\"*\"]'", "created_by": "TEXT", "expires_at": "TEXT"}.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE connections ADD COLUMN {name} {decl}")
+    from .governance import migrate as migrate_governance
+    migrate_governance(conn)
 
 
 class TenantConnection(sqlite3.Connection):
     def install_scope(self, columns=None):
         self.create_function("caller_tenant", 0, tenant)
+        self.create_function("caller_user", 0, lambda: principal().user_id if principal() else None)
+        self.create_function("caller_member", 0, lambda: int(bool(principal() and principal().kind == "tenant_user" and principal().role == "member")))
         self.create_function("global_audit", 0, lambda: int(GLOBAL_AUDIT.get()))
         self.create_function("write_tenant", 0, lambda: self.inserting_tenant)
         self.business_columns = columns or {}
@@ -118,8 +135,24 @@ class TenantConnection(sqlite3.Connection):
                 # Pre-customer revocations are global denials, never purchasing
                 # grants. Scoping must not silently restore revoked authority.
                 extra = " OR customer_id=''"
+            owned_agents = "SELECT agent_id FROM main.tenant_agents WHERE owner_user_id=caller_user()"
+            owned_orders = f"SELECT id FROM main.orders WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            owned_quotes = f"SELECT id FROM main.quotes WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            owned_lookups = f"SELECT id FROM main.lookups WHERE json_extract(data,'$.agent_id') IN ({owned_agents})"
+            ownership = {
+                "lookups": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "quotes": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "orders": f"json_extract(data,'$.agent_id') IN ({owned_agents})",
+                "connections": f"agent_id IN ({owned_agents})",
+                "lookup_offers": f"lookup_id IN ({owned_lookups})",
+                "basket_lookups": f"id IN ({owned_lookups})",
+                "reservations": f"order_id IN ({owned_orders})",
+                "evidence_snapshots": f"order_id IN ({owned_orders})",
+                "audit": f"global_audit()=1 OR actor IN (SELECT 'agent:'||agent_id FROM main.tenant_agents WHERE owner_user_id=caller_user()) OR json_extract(data,'$.agent_id') IN ({owned_agents}) OR order_id IN ({owned_orders}) OR quote_id IN ({owned_quotes})",
+            }.get(name)
+            member_filter = f" AND (caller_member()=0 OR ({ownership}))" if ownership else ""
             super().execute(f'CREATE TEMP VIEW IF NOT EXISTS "{name}" AS SELECT *,rowid AS rowid FROM main."{name}" '
-                            f'WHERE caller_tenant() IS NULL OR tenant_id=caller_tenant(){extra}')
+                            f'WHERE (caller_tenant() IS NULL OR tenant_id=caller_tenant(){extra}){member_filter}')
             self.scoped_views.add(name)
 
     def execute(self, sql, parameters=(), /):

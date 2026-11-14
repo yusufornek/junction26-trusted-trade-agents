@@ -101,8 +101,12 @@ finally:
                 process.kill()
                 process.communicate()
     result = audit.verify(gateway.db)
-    assert result["valid"] and result["entries"] == 40
-    assert all(e.action == "PLACE_ORDER_FAILED" for e in gateway.audit())
+    entries = gateway.audit()
+    alerts = [e for e in entries if e.action == "GOVERNANCE_ALERT"]
+    assert result["valid"] and result["entries"] == 40 + len(alerts)
+    assert len([e for e in entries if e.action == "PLACE_ORDER_FAILED"]) == 40
+    assert all(e.action in {"PLACE_ORDER_FAILED", "GOVERNANCE_ALERT"} for e in entries)
+    assert all(e.data["type"] == "refusal.burst" for e in alerts)
 
 
 def test_ac_3_earlier_checkpoint_survives_appends(gateway):

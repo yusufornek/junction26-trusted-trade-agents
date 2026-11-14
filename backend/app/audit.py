@@ -111,6 +111,24 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
         data = bounded_summary(data)
         summary = summary[:2000]
         actor = actor[:256]
+    governance = getattr(conn, "governance", None)
+    agent_id = data.get("agent_id") or (actor.removeprefix("agent:") if actor.startswith("agent:") else None)
+    for table, ref in (("orders", order_id), ("quotes", quote_id), ("lookups", data.get("lookup_id"))):
+        if ref:
+            owned = conn.execute(f"SELECT data FROM {table} WHERE id=?", (ref,)).fetchone()
+            if owned:
+                obj = json.loads(owned[0])
+                agent_id = obj.get("agent_id") or agent_id
+                data.setdefault("policy_version_id", obj.get("policy_version_id"))
+    if governance and agent_id and action != "GOVERNANCE_ALERT":
+        data["agent_id"] = agent_id
+        if not data.get("policy_version_id"):
+            effective = governance.resolve(agent_id, conn=conn)
+            governance.snapshot(conn, effective)
+            data["policy_version_id"] = effective.version_id
+        agent = conn.execute("SELECT tenant_id FROM main.tenant_agents WHERE agent_id=?", (agent_id,)).fetchone()
+        if agent:
+            data.setdefault("tenant_id", agent[0])
     from .tenancy import principal, HOTEL, TARGET_TENANT
     p = principal()
     tenant_id = data.get("tenant_id") or (p.tenant_id if p and not p.operator else None) or TARGET_TENANT.get()
@@ -149,6 +167,8 @@ def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=N
         values += (tenant_id,)
     conn.execute(f"INSERT INTO audit({columns}) VALUES({','.join('?' for _ in values)})", values)
     emit(conn, action, actor, ts, seq, data, order_id, quote_id)
+    if governance and agent_id and action != "GOVERNANCE_ALERT":
+        governance.observe(conn, agent_id, action, data)
 
 
 @global_chain

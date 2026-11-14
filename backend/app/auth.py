@@ -107,7 +107,7 @@ class Credentials:
                          user_id=principal.user_id)
 
 
-bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key, operator token or human session. OAuth access tokens are accepted only on /mcp.")
+bearer = HTTPBearer(auto_error=False, scheme_name="BearerAuth", description="Operator-issued agent key, operator token or human session. OAuth access tokens are accepted only at their exact MCP or A2A resource.")
 session_cookie = APIKeyCookie(name="vtg_session", auto_error=False, scheme_name="SessionCookie",
     description="Human session from POST /v1/auth/login. Mutations also require X-CSRF-Token from that response.")
 
@@ -124,6 +124,8 @@ def resolve_credential(keys, secret, service, resource=None):
         from dataclasses import replace
         principal = service.oauth.resolve(secret, resource)
         return service.accounts.bind(replace(principal, connection_id=principal.credential_ref, audience="buyer"))
+    if secret.startswith("vtg_oauth_"):
+        return service.audience_oauth.resolve(secret)
     return service.accounts.bind(service.connections.resolve(secret))
 
 
@@ -144,6 +146,14 @@ def admit_credential(service, keys, source, secret, resource=None):
     if not known:
         check_source(service, source)
     principal = resolve_credential(keys, secret, service, resource)
+    if principal.kind == "agent" and hasattr(service, "governance"):
+        try:
+            service.governance.check_active(principal.agent_id)
+        except DomainError as error:
+            service.governance.note_refusal(principal.agent_id, error)
+            raise
+        if principal.connection_id:
+            service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
     if not known:
         service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
@@ -167,7 +177,21 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
             service.accounts.csrf(request.cookies["vtg_session"], request.headers.get("X-CSRF-Token", ""))
     else:
         principal = admit_credential(service, request.app.state.keys, source, secret, resource)
-    service.accounts.guard(principal, request.url.path, request.method)
+    if principal.resource:
+        from .accounts import origin
+        from .oauth import require_audience
+        if path not in {"/mcp", "/a2a", "/a2a/tenant", "/a2a/operator"}:
+            raise DomainError("WRONG_AUDIENCE", "OAuth token is bound to its MCP or A2A resource", 401)
+        audience = "tenant" if path.endswith("/tenant") else "operator" if path.endswith("/operator") else "buyer"
+        require_audience(principal, audience, path, origin(request))
+    if request.url.path.startswith("/v1/connect/tools/"):
+        from .oauth import require_audience
+        audience = request.query_params.get("audience", "buyer")
+        require_audience(principal, audience, "/tool-pack/"+audience)
+    else:
+        service.accounts.guard(principal, request.url.path, request.method)
+    if principal.kind == "agent":
+        service.governance.check_active(principal.agent_id)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)
@@ -229,8 +253,9 @@ def check_scope(principal, resource, permission, action=None):
 
 class MCPBearerMiddleware:
     """Guard every HTTP request, including initialization, GET and DELETE."""
-    def __init__(self, app, keys, agent_id, gateway):
+    def __init__(self, app, keys, agent_id, gateway, audience="buyer"):
         self.app, self.keys, self.agent_id, self.gateway = app, keys, agent_id, gateway
+        self.audience = audience
 
     async def __call__(self, scope, receive, send):
         from .foundation import CORRELATION, PRINCIPAL, correlation_id
@@ -247,19 +272,22 @@ class MCPBearerMiddleware:
                 secret = token if scheme.lower() == "bearer" else ""
                 from .oauth import OAuthError
                 try:
-                    resource = self.gateway.oauth.resource if scope.get("path") == "/mcp" else None
+                    resource = self.gateway.oauth.resource if self.audience == "buyer" and scope.get("path") == "/mcp" else None
                 except OAuthError:
                     resource = None
                 principal = admit_credential(self.gateway, self.keys, source, secret, resource)
-                if principal.connection_id and principal.audience != "buyer":
-                    raise DomainError("WRONG_AUDIENCE", "This key is bound to a different resource audience", 401)
-                if principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id):
+                from .oauth import require_audience
+                base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
+                require_audience(principal, self.audience, "/mcp" + ("" if self.audience == "buyer" else "/" + self.audience), base)
+                if self.audience == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
                 if error.status == 401:
-                    response_headers["WWW-Authenticate"] = self.gateway.oauth.www_authenticate()
+                    base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
+                    suffix = "/mcp" + ("" if self.audience == "buyer" else "/" + self.audience)
+                    response_headers["WWW-Authenticate"] = f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource{suffix}"'
                 elif error.data.get("retry_after_seconds"):
                     response_headers["Retry-After"] = str(error.data["retry_after_seconds"])
                 await JSONResponse(problem(error, scope.get("path")), status_code=error.status,

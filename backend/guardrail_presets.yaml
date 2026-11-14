@@ -1,0 +1,62 @@
+# Initial tenant-layer values. EUR amounts are net; platform limits still apply.
+volume_bands:
+  '<5k': {label: 'Under €5,000', monthly_eur: 5000}
+  '5–25k': {label: '€5,000–25,000', monthly_eur: 25000}
+  '25–100k': {label: '€25,000–100,000', monthly_eur: 100000}
+  '>100k': {label: 'Over €100,000', monthly_eur: 200000}
+meals_per_day_bands:
+  '<100': 'Under 100'
+  '100–500': '100–500'
+  '500–2000': '500–2,000'
+  '>2000': 'Over 2,000'
+presets:
+  single_restaurant:
+    label: Single restaurant
+    per_order_ceiling_eur: 500
+    approver_amount_threshold_eur: 250
+    four_eyes: false
+    substitutes_policy: approval_required
+    anomaly_sensitivity: {quantity_k: 3, velocity_k: 3, price_increase_pct: 20}
+    starting_autonomy: approval_required
+    budget_multiplier: 1
+    per_site_budgets: false
+  restaurant_group:
+    label: Restaurant group
+    per_order_ceiling_eur: 2500
+    approver_amount_threshold_eur: 1000
+    four_eyes: true
+    substitutes_policy: approval_required
+    anomaly_sensitivity: {quantity_k: 3, velocity_k: 3, price_increase_pct: 20}
+    starting_autonomy: approval_required
+    budget_multiplier: 1
+    per_site_budgets: true
+  hotel_chain:
+    label: Hotel chain
+    per_order_ceiling_eur: 5000
+    approver_amount_threshold_eur: 2500
+    four_eyes: true
+    substitutes_policy: approval_required
+    anomaly_sensitivity: {quantity_k: 3, velocity_k: 3, price_increase_pct: 20}
+    starting_autonomy: approval_required
+    budget_multiplier: 1
+    per_site_budgets: true
+  hospital_or_school_kitchen:
+    label: Hospital or school kitchen
+    per_order_ceiling_eur: 1500
+    approver_amount_threshold_eur: 500
+    four_eyes: true
+    substitutes_policy: approval_required
+    anomaly_sensitivity: {quantity_k: 2, velocity_k: 2, price_increase_pct: 20}
+    starting_autonomy: approval_required
+    budget_multiplier: 1
+    per_site_budgets: false
+  catering:
+    label: Catering
+    per_order_ceiling_eur: 7500
+    approver_amount_threshold_eur: 3000
+    four_eyes: true
+    substitutes_policy: approval_required
+    anomaly_sensitivity: {quantity_k: 3, velocity_k: 2, price_increase_pct: 20}
+    starting_autonomy: approval_required
+    budget_multiplier: 1.5
+    per_site_budgets: false

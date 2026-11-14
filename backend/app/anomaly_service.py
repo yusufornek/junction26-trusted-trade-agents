@@ -73,8 +73,13 @@ class Anomalies:
 
     def checks(self, conn, quote, *, placement=False):
         now = audit.utcnow()
-        settings = self.g.policy.get().anomalies
-        k = settings.sensitivity_k[settings.sensitivity]
+        policy = self.g.policy.get()
+        settings = policy.anomalies
+        tenant = conn.execute("SELECT tenant_id FROM tenant_customers WHERE customer_id=?", (quote.customer_id,)).fetchone()
+        preset = policy.tenant_anomaly_settings.get(tenant[0], {}) if tenant else {}
+        k = preset.get("quantity_k", settings.sensitivity_k[settings.sensitivity])
+        velocity_k = preset.get("velocity_k", settings.sensitivity_k[settings.sensitivity])
+        price_increase_pct = preset.get("price_increase_pct", settings.price_increase_pct)
         history = self.history(conn, quote.agent_id, quote.customer_id, quote.supplier_id, now, settings.history_days)
         catalog = self.g.suppliers.get(quote.supplier_id).catalog
         def category(item):
@@ -113,7 +118,7 @@ class Anomalies:
                         description="Quote the usual quantity now and hold the remainder for human approval."))
             checks.append(AnomalyCheck(code="QUANTITY_ANOMALY", product_id=line.product_id,
                 observed=line.units_needed * factor, unit=unit, fixes=fixes, **result))
-            result = price_check([Point(h["at"], h["unit_price"]) for h in same], line.unit_price, now, settings.price_increase_pct)
+            result = price_check([Point(h["at"], h["unit_price"]) for h in same], line.unit_price, now, price_increase_pct)
             fixes = []
             if result["status"] == "anomaly" and quote.need_ref:
                 lookup = self.g.orders.lookup_need(conn, quote.need_ref)
@@ -143,7 +148,7 @@ class Anomalies:
                 if now - timedelta(days=settings.history_days) <= at <= now:
                     times[order["id"]] = at
         observed = 1 + sum(now - timedelta(hours=1) < t <= now for t in times.values())
-        result = velocity_check(times.values(), observed, now, k, settings.velocity_min_upper)
+        result = velocity_check(times.values(), observed, now, velocity_k, settings.velocity_min_upper)
         pause = result.pop("pause")
         fixes = [AnomalyFix(id="velocity:pause", kind="pause", description="Ask the buyer administrator to pause this agent.",
                            action_url=f"/v1/buyer/agents/{quote.agent_id}/suspend"),

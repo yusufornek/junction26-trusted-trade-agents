@@ -360,6 +360,7 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used by this lookup.")
     supplier_id: str = "valio"
     environment: Literal["live", "sandbox"] = "live"
     synthetic: bool = False
@@ -461,6 +462,7 @@ class BasketPlan(Model):
 
 
 class BasketLookupResult(Model):
+    policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Effective governance policy used for this basket lookup.")
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     basket_lookup_id: str
     agent_id: str
@@ -514,6 +516,7 @@ class QuoteRequest(RequestScope):
 
 class Quote(Model):
     anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Spec 45 checks, including insufficient_history and one-step proposed fixes.")
+    policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used by this quote.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     supplier_id: str = "valio"
@@ -557,6 +560,7 @@ class Execution(Model):
 
 class Order(Model):
     anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Anomaly evidence rechecked under the placement lock; warnings require human approval.")
+    policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used at placement.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
     clinical_review: Literal["required"] | None = Field(default=None, exclude_if=lambda v: v is None)
     atomicity: str | None = Field(default=None, exclude_if=lambda v: v is None,
@@ -594,6 +598,7 @@ class Order(Model):
     live_calls: LiveCalls
     approver: str | None = None
     approver_user_id: str | None = None
+    self_approved: bool = Field(default=False, description="Authenticated reviewer is an agent owner, connection creator or last autonomy/policy loosening approver; allowed only with four-eyes off and audited with a warning.")
     approver_role: str | None = None
     approval_side: Literal["buyer", "valio_operator"] | None = Field(default=None, description="Organisation side that signed the human decision; null before review or on legacy orders.")
     comment: str | None = None
@@ -662,6 +667,7 @@ class ApprovalRequest(Model):
 class ApprovalItem(Model):
     order: Order
     quote: Quote
+    approval_requirements: dict | None = Field(default=None, description="Tenant threshold, four-eyes rule and eligible independent approver user IDs; null for legacy tenants without a profile.")
 
 
 class AuditEntry(Model):
@@ -863,6 +869,8 @@ class ConnectionRequest(Model):
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     expires_at: AwareDatetime | None = None
     tenant_id: str | None = None
+    webhook_url: str | None = Field(default=None, max_length=2048, description="Required for webhook connections; ownership is challenged before registration.")
+    event_types: list[str] | None = None
 
 
 class Connection(Model):
@@ -1041,6 +1049,8 @@ class PolicyDocument(Model):
 
 
 class PolicyResource(PolicyDocument):
+    tenant_anomaly_settings: dict[str, dict] = Field(default_factory=dict, description="Tenant-keyed preset sensitivity (quantity_k, velocity_k, price_increase_pct), for the spec 45 anomaly lane.")
+    _governance: object = PrivateAttr(default=None)
     _tenant_daily_ceiling: float | None = PrivateAttr(default=None)
     updated_at: datetime | None = Field(default=None, description="Last runtime update in UTC; null for committed defaults.")
     updated_by: str | None = Field(default=None, description="Human responsible for the last runtime update.")

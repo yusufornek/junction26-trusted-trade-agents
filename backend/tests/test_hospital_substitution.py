@@ -53,6 +53,7 @@ def test_AC_1_stockout_offers_functional_substitute_with_allergen_evidence(hospi
     hospital.decisions = hospital.lookup.decisions = OpenAIDecisions("synthetic", httpx.Client(transport=httpx.MockTransport(respond)))
     result = lookup(hospital)
     assert outgoing and all("hospital kitchen cooking" in q["instructions"] for q in outgoing)
+    assert result.policy_version_id == hospital.governance.resolve("sandbox-agent").version_id
     assert [o.product_id for o in result.offers] == ["approved-oat"]
     best = result.offers[0]
     assert best.rank_label == "best"

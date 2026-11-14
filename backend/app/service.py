@@ -90,6 +90,8 @@ class Gateway:
         self.connections = Connections(self)
         from .oauth import OAuth
         self.oauth = OAuth(self)
+        from .oauth_audiences import OAuth as AudienceOAuth
+        self.audience_oauth = AudienceOAuth(self)
         for name in ("create", "baseline", "pause", "run"):
             install(self, self.recurring, name, "mutation")
         for name in ("put_preferences", "submit", "action"):
@@ -97,6 +99,10 @@ class Gateway:
 
         from .accounts import Accounts
         self.accounts = Accounts(self)
+        from .governance import Governance
+        self.governance = Governance(self)
+        self.policy.governance = self.governance
+        self.db.governance = self.governance
         install(self, self.connections, "create", "mutation")
         for name in ("create_quote", "place_order", "cancel", "approve", "reject"):
             install(self, self.orders, name, "mutation")

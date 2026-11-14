@@ -54,6 +54,8 @@ class Autonomy:
         self.db, self.policy = gateway.db, gateway.policy
 
     def _target(self, conn, agent_id, principal, *, change=False):
+        if principal.kind == "tenant_user" and principal.role in {"member", "tenant_admin"}:
+            self.gateway.governance.target(conn, agent_id, principal)
         policy = self.policy.get(tenant_overlay=False)
         row = policy.agents.get(agent_id)
         if row is None:
@@ -166,6 +168,8 @@ class Autonomy:
         def prepare():
             with self.db.connect() as conn:
                 policy, row = self._target(conn, agent_id, principal, change=True)
+                agent = conn.execute("SELECT * FROM tenant_agents WHERE agent_id=?", (agent_id,)).fetchone()
+                governed_before = self.gateway.governance.layer(conn, "agent", agent_id, policy, agent)
                 record = self._record(conn, agent_id, policy)
                 grant = conn.execute("SELECT level FROM agent_autonomy WHERE agent_id=?", (agent_id,)).fetchone()
             before = (grant[0] if agent_id not in policy.agents and grant else row.autonomy) or policy.autonomy.default
@@ -174,13 +178,18 @@ class Autonomy:
             body["agents"][agent_id] = row.model_dump(mode="json")
             result = AutonomyChangeResult(agent_id=agent_id, level=request.level, reason=request.reason, track_record=record)
             data = {
-                "agent_id": agent_id, "before": before, "level": request.level, "reason": request.reason,
+                "agent_id": agent_id, "before": before, "level": request.level, "reason": request.reason, "user_id": principal.user_id or principal.id,
                 "track_record": record.model_dump(mode="json"), "customer_ids": row.customer_ids,
                 "customer_id": row.customer_ids[0] if len(row.customer_ids) == 1 else None}
             if agent_id not in policy.agents:
                 with self.db.connect(write=True) as conn:
                     conn.execute("INSERT INTO agent_autonomy VALUES(?,?) ON CONFLICT(agent_id) DO UPDATE SET level=excluded.level",
                                  (agent_id, request.level))
+                    proposed = {**governed_before["data"], "autonomy_level": request.level}
+                    version = self.gateway.governance._write_version(conn, "agent", agent_id,
+                        agent["tenant_id"] if agent else self.gateway.governance.db_tenant(conn, agent_id),
+                        governed_before, proposed, principal, request.reason, emit_audit=False, agent_id=agent_id)
+                    data["version_id"] = version["id"]
                 return None, data, result
             return PolicyUpdateRequest(policy=body, updated_by=principal.id, comment=request.reason), data, result
         return self.policy.change_autonomy(prepare, principal)
