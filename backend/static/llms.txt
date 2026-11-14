@@ -1,0 +1,16 @@
+# Valio Aimo Trusted Trade Agents
+
+> Governed procurement at fixed prices. All orders are gateway-simulated.
+
+- [Developer connection guide and rules]({{BASE_URL}}/developers#rules)
+- [OpenAPI]({{BASE_URL}}/openapi.json)
+- [Tool descriptions and executable schemas]({{BASE_URL}}/developers/tools.json)
+- [MCP server card (draft)]({{BASE_URL}}/mcp/server-card)
+- [AI catalog]({{BASE_URL}}/.well-known/ai-catalog.json)
+- [A2A agent card]({{BASE_URL}}/.well-known/agent-card.json)
+- [Receipt verification keys]({{BASE_URL}}/.well-known/jwks.json)
+
+Use authenticated GET /v1/me or MCP get_agent_context for your own scope and budget.
+List tools over MCP at /mcp. Follow next_action in structured responses, retain command
+idempotency keys on retries, and wait for a human when WAIT_FOR_APPROVAL is returned.
+This file is navigation. Executable constraints live in tool schemas and current policy.

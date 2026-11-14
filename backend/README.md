@@ -223,8 +223,9 @@ Omitted autonomy uses `policy.autonomy.default: approval_required`: otherwise ac
 `PENDING_APPROVAL` with rule hit `autonomy_level`. The two demo mandates explicitly have
 `autonomous_within_limits`, granted after the pilot's approved orders (demo setting), preserving the
 1,010 EUR demo confirmation. Other policy limits and hard constraints still apply.
-REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. MCP fixes
-identity using `--agent-id` at launch; tools cannot change it per call. The console uses the operator token
+REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. Standalone MCP fixes
+identity using `--agent-id` at launch; the gateway's `/mcp` resolves each request's Bearer credential.
+Tools cannot choose another identity. The console uses the operator token
 and its buyer actions run as `OPERATOR_AGENT_ID` (default `web-console`).
 
 Lookup, quote and order require a mandate. Unregistered agents receive
@@ -974,11 +975,11 @@ kind, ID, organisation, customers, role and a digest credential reference. Polic
 maps IDs to `{customer_ids: [...]}`; `identities` maps credential IDs to `{kind, role, organisation_id}`.
 Buyer roles are `buyer_admin`, `buyer_approver`, `buyer_viewer`; suppliers use `supplier_agent`.
 `scripts/gen_keys.py --write` provisions every ID in `agents` and `identities`, with the same secret
-format and without printing secrets. These identity labels grant no new operations by themselves.
-The existing operator-only guards remain in force until the buyer/supplier feature specs add scope.
+format and without printing secrets. Buyer roles authorize the customer-scoped `/v1/buyer` operations
+described above; global administrative operations retain their operator-only guards.
 
 Public `GET /v1/meta` separates specification versions from installed packages and states limiter
-scope. A2A 1.0 and Standard Webhooks v1a are implemented; the MCP server card remains planned.
+scope. A2A 1.0, Standard Webhooks v1a and the draft MCP server card are implemented.
 The server-card draft is pinned to vendored commit `526201bbc80231daa40ffcdecfc9da4e54e5dc93`;
 Standard Webhooks is pinned to vendored commit `36afae792227eae8a182a7a1a5711dbdc08a4334`.
 
@@ -1182,3 +1183,67 @@ Reference split-order client (no operator credential, approval remains external)
 # Add --mandate /path/to/buyer-vc.jwt when using a buyer-issued mandate.
 .venv/bin/python -m pytest tests/test_webhooks.py tests/test_a2a_service.py tests/test_cross_interface.py -q
 ```
+
+
+## MCP discovery and connect kit (specs 37–38)
+
+Start the API from `backend/` with `.venv/bin/python -m uvicorn app.api:app --port 8000`.
+The same process now serves authenticated, stateless Streamable HTTP at `/mcp`, sharing the
+REST gateway, principal, budgets and idempotency state. Standalone MCP stdio and port 8001
+remain available. The machine identity is `fi.valioaimo/trusted-trade-agents`, version `0.1.0`;
+the display title remains Valio Aimo Trusted Trade Agents. Tools are listed at runtime,
+including `get_agent_context` (the same advisory snapshot as authenticated `GET /v1/me`) and
+`get_order_evidence` (the portable evidence manifest and authenticated download links).
+
+A client starting with only the base address follows `/.well-known/ai-catalog.json` to
+`/mcp/server-card` and then `/mcp`. The card follows the vendored draft schema at commit
+`526201bbc80231daa40ffcdecfc9da4e54e5dc93`, also recorded in `/v1/meta` and the namespaced
+card extension. Startup validates the schema and compares runtime identity/transport.
+Public discovery is read-only, has wildcard CORS, cache validators and no customer authority.
+In production set `GATEWAY_PUBLIC_URL` to the HTTPS public origin; MCP's Host/Origin
+protection otherwise accepts only loopback addresses. Never disable that protection to
+work around a proxy configuration.
+
+`/developers` contains the connection guide, configurations, executable REST walkthrough,
+recovery and approval rules. `/llms.txt` links agents to it, OpenAPI and
+`/developers/tools.json`. Author the prose in `backend/docs/developers.html.in` and
+`backend/docs/llms.txt.in`; regenerate the committed static artifacts after tool changes:
+
+```bash
+.venv/bin/python scripts/build_developer_docs.py
+.venv/bin/python scripts/export_openapi.py
+.venv/bin/python -m pytest tests -q
+```
+
+Generation imports and registers tool schemas without opening a database or signing keys.
+The divergence acceptance test compares complete runtime schemas and generated HTML.
+
+The independent buyer is `clients/python/reference_buyer.py`, with pinned dependencies
+and environment names in that directory. From the repo root, install its requirements,
+export `GATEWAY_URL`, `AGENT_TOKEN`, optionally `AGENT_MANDATE` (VC-JWT), then run:
+
+```bash
+python clients/python/reference_buyer.py --scenario full_stock
+python clients/python/reference_buyer.py --scenario split_stock
+```
+
+The client requires context environment `sandbox`. An operator must prepare the fixture
+supplier/catalog and policy beforehand: full_stock covers 10 L autonomously; split_stock
+covers 400 L with a split plan and requires human approval. It follows `next_action`, polls
+pending orders, retains mutation keys on retries and verifies the Ed25519 receipt against
+public JWKS. It cannot approve its own order. This kit does not implement sandbox reset
+or credential issuance: use a separate deployment/storage/credentials and set
+`GATEWAY_ENVIRONMENT=sandbox`; that label alone does not provision or isolate data.
+Opaque credentials are expired by issuer removal/rotation; a refused key returns 401 with
+replacement guidance. Offline verification of a saved order is also available:
+
+```bash
+python clients/python/verify_receipt.py order.json --jwks jwks.json --customer ID --agent AGENT_ID
+```
+
+Tests use only temporary storage, mocked supplier calls and in-process ASGI, including the
+real MCP SDK connection and a shell walkthrough whose HTTP transport is bridged to TestClient.
+Claude Code configuration syntax is checked, Desktop stdio executes as a subprocess in the
+MCP transport suite, and the installed generic CLI loader checks `app/mcp_entry.py` without
+launching the optional inspector UI. To use that UI, install `mcp[cli]==2.3.0` and run
+`MCP_AGENT_ID=issued-agent .venv/bin/mcp dev app/mcp_entry.py` on the gateway host.

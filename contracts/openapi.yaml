@@ -3215,6 +3215,1243 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
+  /mcp/server-card:
+    get:
+      summary: Draft MCP connection card; tools are listed at runtime
+      operationId: card_mcp_server_card_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/mcp-server-card+json:
+              schema:
+                properties:
+                  $schema:
+                    type: string
+                    pattern: ^https://static\.modelcontextprotocol\.io/schemas/v1/server-card\.schema\.json$
+                    format: uri
+                    description: 'The Server Card JSON Schema URI that this document
+                      conforms to. Required.
+
+
+                      Must be the `/v1/` Server Card schema URL under
+
+                      `static.modelcontextprotocol.io/schemas/` (i.e.,
+
+                      `https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json`).
+
+                      Schema URLs are versioned by the `vN` segment rather than by
+                      date; a
+
+                      breaking revision of the Server Card shape publishes a new `vN`
+                      family.'
+                  _meta:
+                    additionalProperties: {}
+                    type: object
+                    description: 'Extension metadata using reverse-DNS namespacing
+                      for vendor-specific data.
+
+
+                      Follows the protocol''s standard `_meta` definition.'
+                  description:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                    description: 'Clear human-readable explanation of server functionality.
+                      Should focus on
+
+                      capabilities, not implementation details.'
+                  icons:
+                    items:
+                      properties:
+                        mimeType:
+                          type: string
+                          description: 'Optional MIME type override if the source
+                            MIME type is missing or generic.
+
+                            For example: `"image/png"`, `"image/jpeg"`, or `"image/svg+xml"`.'
+                        sizes:
+                          items:
+                            type: string
+                          type: array
+                          description: 'Optional array of strings that specify sizes
+                            at which the icon can be used.
+
+                            Each string should be in WxH format (e.g., `"48x48"`,
+                            `"96x96"`) or `"any"` for scalable formats like SVG.
+
+
+                            If not provided, the client should assume that the icon
+                            can be used at any size.'
+                        src:
+                          type: string
+                          format: uri
+                          description: 'A standard URI pointing to an icon resource.
+                            May be an HTTP/HTTPS URL or a
+
+                            `data:` URI with Base64-encoded image data.
+
+
+                            Consumers SHOULD take steps to ensure URLs serving icons
+                            are from the
+
+                            same domain as the client/server or a trusted domain.
+
+
+                            Consumers SHOULD take appropriate precautions when consuming
+                            SVGs as they can contain
+
+                            executable JavaScript.'
+                        theme:
+                          type: string
+                          enum:
+                          - dark
+                          - light
+                          description: 'Optional specifier for the theme this icon
+                            is designed for. `"light"` indicates
+
+                            the icon is designed to be used with a light background,
+                            and `"dark"` indicates
+
+                            the icon is designed to be used with a dark background.
+
+
+                            If not provided, the client should assume the icon can
+                            be used with any theme.'
+                      type: object
+                      required:
+                      - src
+                      description: An optionally-sized icon that can be displayed
+                        in a user interface.
+                    type: array
+                    description: 'Optional set of sized icons that the client can
+                      display in a user interface.
+
+
+                      Clients that support rendering icons MUST support at least the
+                      following
+
+                      MIME types: `image/png` and `image/jpeg` (safe, universal compatibility).
+
+                      Clients SHOULD also support: `image/svg+xml` (scalable but requires
+                      security
+
+                      precautions) and `image/webp` (modern, efficient format).'
+                  name:
+                    type: string
+                    maxLength: 200
+                    minLength: 3
+                    pattern: ^[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+$
+                    description: 'Server name in reverse-DNS format. Must contain
+                      exactly one forward slash
+
+                      separating namespace from server name.'
+                  remotes:
+                    items:
+                      properties:
+                        headers:
+                          items:
+                            properties:
+                              choices:
+                                items:
+                                  type: string
+                                type: array
+                                description: Allowed values for the input. If provided,
+                                  the user must select one.
+                              default:
+                                type: string
+                                description: Default value for the input. SHOULD be
+                                  a valid value for the input.
+                              description:
+                                type: string
+                                description: 'Human-readable explanation of the input.
+                                  Clients can use this to provide
+
+                                  context to the user.'
+                              format:
+                                type: string
+                                enum:
+                                - boolean
+                                - filepath
+                                - number
+                                - string
+                                description: 'Specifies the input format. `"filepath"`
+                                  should be interpreted as a file
+
+                                  on the user''s filesystem. When the input is converted
+                                  to a string,
+
+                                  booleans should be represented by `"true"`/`"false"`,
+                                  and numbers by
+
+                                  decimal values.'
+                              isRequired:
+                                type: boolean
+                                description: Whether the input must be supplied for
+                                  the connection to succeed.
+                              isSecret:
+                                type: boolean
+                                description: 'Whether the input is a secret value
+                                  (e.g., password, token). If true,
+
+                                  clients should handle the value securely.'
+                              name:
+                                type: string
+                                description: Name of the header.
+                              placeholder:
+                                type: string
+                                description: 'Placeholder displayed during configuration
+                                  to provide examples or
+
+                                  guidance about the expected form of the input.'
+                              value:
+                                type: string
+                                description: 'Pre-set value for the input. If set,
+                                  the value should not be configurable
+
+                                  by end users. Identifiers wrapped in `{curly_braces}`
+                                  will be replaced
+
+                                  with the corresponding entries from the input''s
+                                  `variables` map (if any).'
+                              variables:
+                                additionalProperties:
+                                  properties:
+                                    choices:
+                                      items:
+                                        type: string
+                                      type: array
+                                      description: Allowed values for the input. If
+                                        provided, the user must select one.
+                                    default:
+                                      type: string
+                                      description: Default value for the input. SHOULD
+                                        be a valid value for the input.
+                                    description:
+                                      type: string
+                                      description: 'Human-readable explanation of
+                                        the input. Clients can use this to provide
+
+                                        context to the user.'
+                                    format:
+                                      type: string
+                                      enum:
+                                      - boolean
+                                      - filepath
+                                      - number
+                                      - string
+                                      description: 'Specifies the input format. `"filepath"`
+                                        should be interpreted as a file
+
+                                        on the user''s filesystem. When the input
+                                        is converted to a string,
+
+                                        booleans should be represented by `"true"`/`"false"`,
+                                        and numbers by
+
+                                        decimal values.'
+                                    isRequired:
+                                      type: boolean
+                                      description: Whether the input must be supplied
+                                        for the connection to succeed.
+                                    isSecret:
+                                      type: boolean
+                                      description: 'Whether the input is a secret
+                                        value (e.g., password, token). If true,
+
+                                        clients should handle the value securely.'
+                                    placeholder:
+                                      type: string
+                                      description: 'Placeholder displayed during configuration
+                                        to provide examples or
+
+                                        guidance about the expected form of the input.'
+                                    value:
+                                      type: string
+                                      description: 'Pre-set value for the input. If
+                                        set, the value should not be configurable
+
+                                        by end users. Identifiers wrapped in `{curly_braces}`
+                                        will be replaced
+
+                                        with the corresponding entries from the input''s
+                                        `variables` map (if any).'
+                                  type: object
+                                  description: 'A user-supplied or pre-set input value,
+                                    used for {@link Remote} URL
+
+                                    variables and header values.'
+                                type: object
+                                description: 'Variables referenced by `{curly_braces}`
+                                  identifiers in `value`. The map
+
+                                  key is the variable name; the value defines the
+                                  variable''s properties.'
+                            type: object
+                            required:
+                            - name
+                            description: 'A named {@link Input} — used for HTTP headers
+                              — whose `value` may reference
+
+                              variables for substitution.'
+                          type: array
+                          description: 'HTTP headers required or accepted when connecting
+                            to this remote
+
+                            endpoint. Each header is described as a {@link KeyValueInput}
+                            so that
+
+                            clients can prompt users for required values, mark secrets,
+                            surface
+
+                            defaults, and constrain to a list of choices.'
+                        supportedProtocolVersions:
+                          items:
+                            type: string
+                          type: array
+                          description: 'MCP protocol versions actively supported by
+                            this remote endpoint. Allows
+
+                            clients to select a compatible protocol version before
+                            connecting.'
+                        type:
+                          type: string
+                          enum:
+                          - sse
+                          - streamable-http
+                          description: The transport type for this remote endpoint.
+                        url:
+                          type: string
+                          pattern: ^(https?://[^\s]+|\{[a-zA-Z_][a-zA-Z0-9_]*\}[^\s]*)$
+                          description: 'URL template for the remote endpoint. Must
+                            start with `http://`,
+
+                            `https://`, or a `{template-variable}`. Variables in `{curly_braces}`
+
+                            are substituted from the {@link Remote.variables} map
+                            before the
+
+                            client connects.'
+                        variables:
+                          additionalProperties:
+                            properties:
+                              choices:
+                                items:
+                                  type: string
+                                type: array
+                                description: Allowed values for the input. If provided,
+                                  the user must select one.
+                              default:
+                                type: string
+                                description: Default value for the input. SHOULD be
+                                  a valid value for the input.
+                              description:
+                                type: string
+                                description: 'Human-readable explanation of the input.
+                                  Clients can use this to provide
+
+                                  context to the user.'
+                              format:
+                                type: string
+                                enum:
+                                - boolean
+                                - filepath
+                                - number
+                                - string
+                                description: 'Specifies the input format. `"filepath"`
+                                  should be interpreted as a file
+
+                                  on the user''s filesystem. When the input is converted
+                                  to a string,
+
+                                  booleans should be represented by `"true"`/`"false"`,
+                                  and numbers by
+
+                                  decimal values.'
+                              isRequired:
+                                type: boolean
+                                description: Whether the input must be supplied for
+                                  the connection to succeed.
+                              isSecret:
+                                type: boolean
+                                description: 'Whether the input is a secret value
+                                  (e.g., password, token). If true,
+
+                                  clients should handle the value securely.'
+                              placeholder:
+                                type: string
+                                description: 'Placeholder displayed during configuration
+                                  to provide examples or
+
+                                  guidance about the expected form of the input.'
+                              value:
+                                type: string
+                                description: 'Pre-set value for the input. If set,
+                                  the value should not be configurable
+
+                                  by end users. Identifiers wrapped in `{curly_braces}`
+                                  will be replaced
+
+                                  with the corresponding entries from the input''s
+                                  `variables` map (if any).'
+                            type: object
+                            description: 'A user-supplied or pre-set input value,
+                              used for {@link Remote} URL
+
+                              variables and header values.'
+                          type: object
+                          description: 'Configuration variables that can be referenced
+                            as `{curly_braces}`
+
+                            placeholders in `url` (and inside header values via
+
+                            {@link KeyValueInput.variables}). The map key is the variable
+
+                            name; the value defines the variable''s properties (e.g.,
+                            human-readable
+
+                            description, default, whether it is required or secret).'
+                      type: object
+                      required:
+                      - type
+                      - url
+                      description: Metadata for connecting to a remote (HTTP-based)
+                        MCP server endpoint.
+                    type: array
+                    description: Metadata helpful for making HTTP-based connections
+                      to this MCP server.
+                  repository:
+                    properties:
+                      id:
+                        type: string
+                        description: 'Repository identifier from the hosting service
+                          (e.g., GitHub repo ID).
+
+                          Owned and determined by the source forge. Should remain
+                          stable across
+
+                          repository renames and may be used to detect repository
+                          resurrection
+
+                          attacks — if a repository is deleted and recreated, the
+                          ID should change.'
+                      source:
+                        type: string
+                        description: 'Repository hosting service identifier (e.g.,
+                          `"github"`). Used by registries
+
+                          to determine validation and API access methods.'
+                      subfolder:
+                        type: string
+                        description: 'Optional relative path from repository root
+                          to the server location within a
+
+                          monorepo or nested package structure. Must be a clean relative
+                          path.'
+                      url:
+                        type: string
+                        format: uri
+                        description: 'Repository URL for browsing source code. Should
+                          support both web browsing
+
+                          and `git clone` operations.'
+                    type: object
+                    required:
+                    - source
+                    - url
+                    description: 'Optional repository metadata for the MCP server
+                      source code.
+
+                      Recommended for transparency and security inspection.'
+                  title:
+                    type: string
+                    maxLength: 100
+                    minLength: 1
+                    description: 'Optional human-readable title or display name for
+                      the MCP server.
+
+                      MCP subregistries or clients MAY choose to use this for display
+                      purposes.'
+                  version:
+                    type: string
+                    maxLength: 255
+                    description: 'Version string for this server. SHOULD follow semantic
+                      versioning
+
+                      (e.g., ''1.0.2'', ''2.1.0-alpha''). Equivalent of `Implementation.version`
+
+                      in the MCP specification. Non-semantic versions are allowed
+                      but may not
+
+                      sort predictably. Version ranges are rejected (e.g., ''^1.2.3'',
+                      ''~1.2.3'',
+
+                      ''>=1.2.3'', ''1.x'', ''1.*'').'
+                  websiteUrl:
+                    type: string
+                    format: uri
+                    description: 'Optional URL to the server''s homepage, documentation,
+                      or project website.
+
+                      Provides a central link for users to learn more about the server.
+
+                      Particularly useful when the server has custom installation
+                      instructions
+
+                      or setup requirements.'
+                type: object
+                required:
+                - $schema
+                - description
+                - name
+                - version
+                description: 'A static metadata document describing a remote MCP server,
+                  suitable for
+
+                  pre-connection discovery. A Server Card may be hosted at any unreserved
+                  URI;
+
+                  MCP reserves `GET <streamable-http-url>/server-card` as the recommended
+
+                  location. Clients learn a card''s URL from an [AI Catalog](https://github.com/Agent-Card/ai-catalog)
+
+                  rather than guessing it.
+
+
+                  Server Cards describe only what is needed to discover and connect
+                  to a remote server:
+
+                  identity, transport, and protocol versions.
+
+
+                  They do not enumerate primitives (tools, resources, prompts) — those
+                  remain
+
+                  subject to runtime listing via the protocol''s standard list operations.
+
+
+                  The fields a Server Card does declare (identity, transport, protocol
+
+                  versions) are advisory, not authoritative: they should be consistent
+                  with
+
+                  the server''s `server/discover` response, and clients must not treat
+                  them as
+
+                  authoritative for security decisions. See "Consistency with Runtime
+
+                  Behavior" in docs/discovery.md for the normative requirement.'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          description: Bad Gateway
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '304':
+          description: Representation unchanged; ETag matched.
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+  /.well-known/ai-catalog.json:
+    get:
+      summary: Public MCP, A2A, OpenAPI, llms and verification-key discovery
+      operationId: ai_catalog__well_known_ai_catalog_json_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/ai-catalog+json:
+              schema:
+                properties:
+                  specVersion:
+                    const: '1.0'
+                  entries:
+                    items:
+                      properties:
+                        identifier:
+                          type: string
+                        type:
+                          type: string
+                        url:
+                          type: string
+                          format: uri
+                      type: object
+                      required:
+                      - identifier
+                      - type
+                      - url
+                    type: array
+                type: object
+                required:
+                - specVersion
+                - entries
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          description: Bad Gateway
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '304':
+          description: Representation unchanged; ETag matched.
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+  /developers:
+    get:
+      summary: Connect your procurement agent
+      operationId: developers_developers_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          description: Bad Gateway
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '304':
+          description: Representation unchanged; ETag matched.
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+  /developers/tools.json:
+    get:
+      summary: Generated MCP tool descriptions and input/output schemas
+      operationId: schemas_developers_tools_json_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  properties:
+                    description:
+                      type: string
+                    inputSchema:
+                      type: object
+                    outputSchema:
+                      type:
+                      - object
+                      - 'null'
+                  type: object
+                  required:
+                  - description
+                  - inputSchema
+                  - outputSchema
+                type: object
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          description: Bad Gateway
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '304':
+          description: Representation unchanged; ETag matched.
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+  /llms.txt:
+    get:
+      summary: Navigation for external LLM agents
+      operationId: llms_llms_txt_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/plain:
+              schema:
+                type: string
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '422':
+          description: Unprocessable Entity
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+        '502':
+          description: Bad Gateway
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '503':
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+              description: Seconds before retrying the same command, when retryable.
+        '304':
+          description: Representation unchanged; ETag matched.
+          headers:
+            X-Correlation-Id:
+              schema:
+                type: string
+              description: Accepted or generated request correlation identifier.
   /v1/meta:
     get:
       summary: Public pinned standards and installed packages; limiter scope
@@ -3349,83 +4586,92 @@ paths:
               description: Seconds before retrying the same command, when retryable.
   /v1/me:
     get:
-      summary: Authenticated principal, customer scope and current token buckets
+      summary: Caller scope, mandate, effective limits, budget, environment and operations
       operationId: me_v1_me_get
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent-mandate
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent-Mandate
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                additionalProperties: true
-                type: object
-                title: Response Me V1 Me Get
+                $ref: '#/components/schemas/AgentContext'
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '401':
-          description: Unauthorized
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '403':
-          description: Forbidden
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Forbidden
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '404':
-          description: Not Found
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Not Found
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '409':
-          description: Conflict
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Conflict
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '422':
-          description: Unprocessable Entity
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Unprocessable Entity
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '429':
-          description: Too Many Requests
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Too Many Requests
           headers:
             X-Correlation-Id:
               schema:
@@ -3437,22 +4683,22 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '500':
-          description: Internal Server Error
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
           headers:
             X-Correlation-Id:
               schema:
                 type: string
               description: Accepted or generated request correlation identifier.
         '502':
-          description: Bad Gateway
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Bad Gateway
           headers:
             X-Correlation-Id:
               schema:
@@ -3464,11 +4710,11 @@ paths:
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
         '503':
-          description: Service Unavailable
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+          description: Service Unavailable
           headers:
             X-Correlation-Id:
               schema:
@@ -3479,8 +4725,6 @@ paths:
                 type: integer
                 minimum: 1
               description: Seconds before retrying the same command, when retryable.
-      security:
-      - BearerAuth: []
   /v1/agents/{agent_id}/track-record:
     get:
       summary: Track Record
@@ -7429,6 +8673,58 @@ paths:
               description: Seconds before retrying the same command, when retryable.
 components:
   schemas:
+    AgentContext:
+      properties:
+        principal:
+          additionalProperties: true
+          type: object
+          title: Principal
+        customer_ids:
+          items:
+            type: string
+          type: array
+          title: Customer Ids
+        mandate:
+          additionalProperties: true
+          type: object
+          title: Mandate
+        effective_limits:
+          additionalProperties: true
+          type: object
+          title: Effective Limits
+        remaining_budget:
+          additionalProperties: true
+          type: object
+          title: Remaining Budget
+        environment:
+          type: string
+          title: Environment
+        rate_limits:
+          additionalProperties: true
+          type: object
+          title: Rate Limits
+        supported_operations:
+          items:
+            type: string
+          type: array
+          title: Supported Operations
+        standing_constraints:
+          additionalProperties: true
+          type: object
+          title: Standing Constraints
+      additionalProperties: false
+      type: object
+      required:
+      - principal
+      - customer_ids
+      - mandate
+      - effective_limits
+      - remaining_budget
+      - environment
+      - rate_limits
+      - supported_operations
+      - standing_constraints
+      title: AgentContext
     AgentMandate:
       properties:
         autonomy:
