@@ -109,11 +109,11 @@ def test_review_conflicting_case_evidence_needs_review(gateway, need, upstream, 
     if ratio:
         assert (offer.size_per_sales_unit, offer.units_needed, offer.size_confirmed_by_price) == (7.92, 1, True)
     else:
-        assert offer.size_per_sales_unit == min(catalog_size, 7.92)
+        assert offer.size_per_sales_unit == catalog_size
         assert offer.units_needed == (2 if catalog_size < 7.92 else 1)
         mismatch = next(w for w in offer.warnings if w.code == "SIZE_MISMATCH")
         assert f"catalog={catalog_size:g}" in mismatch.text and "name_parse=7.92" in mismatch.text
-        assert "display" in mismatch.text
+        assert f"used={catalog_size:g}" in mismatch.text and "from catalog" in mismatch.text
         assert "SIZE_UNCONFIRMED" in codes(offer)
         assert plan.lines[0].units == offer.units_needed
         assert plan.policy_preview.outcome == "PENDING_APPROVAL"
@@ -191,6 +191,9 @@ def test_review_all_real_case_name_sizes(need, real_case_name_products, record_t
                 assert offer.size_per_sales_unit is None or offer.size_per_sales_unit > 0
                 continue
             used = Decimal(str(offer.size_per_sales_unit or 0))
+            if not used:
+                assert "SIZE_UNKNOWN" in codes(offer)
+                continue  # Nested pcs counts without a reconciling total are not evidence.
             agrees = any(abs(used / size - 1) <= Decimal(".03") for size in sizes)
             mismatches = [w for w in offer.warnings if w.code == "SIZE_MISMATCH"]
             case = product.sales_volume_l if unit == "L" else product.sales_net_weight_kg
@@ -200,12 +203,12 @@ def test_review_all_real_case_name_sizes(need, real_case_name_products, record_t
             elif mismatches:
                 # Contradictions must be explicit; never skip them as previously.
                 text = " ".join(w.text for w in mismatches)
-                if not (used > 0 and (agrees or used <= min(sizes)) and
+                if not (used > 0 and
                         f"{float(used):g}" in text and "name_case=" in text):
-                    failures.append((product.id, "not conservative/visible", unit, str(used), text))
+                    failures.append((product.id, "contradiction not visible", unit, str(used), text))
             elif not agrees:
                 failures.append((product.id, product.name_en, unit, str(used), sorted(map(str, sizes))))
-    assert not failures, f"{len(failures)} failures / {len(real_case_name_products)} products: {failures[:12]}"
+    assert not failures, f"{len(failures)} failures / {len(real_case_name_products)} products: {failures[:30]}"
 
 
 @pytest.mark.parametrize("stored", ["current", "legacy_false", "legacy_missing"])
@@ -768,3 +771,47 @@ def test_demo_smoke_still_buys_464306_for_1010(gateway, need, upstream, tmp_path
 def test_ac_16_full_catalog_replays_recorded_demo(gateway, need, upstream, respx_mock):
     from conftest import replay_recorded_demo
     replay_recorded_demo(gateway, need, respx_mock)
+
+
+@pytest.mark.parametrize("pid,unit,size,requested,units", [
+    ("462607", "KG", 1.5, 1.5, 1), ("464639", "KG", .9, 54, 60),
+    ("460892", "KG", 10.8, 10.8, 1), ("477242", "L", 7.92, 7.92, 1),
+    ("470979", "KG", 4, 4, 1), ("462191", "KG", 5, 5, 1),
+])
+@pytest.mark.parametrize("stored", [False, True])
+def test_review_real_package_totals_through_approval(gateway, need, upstream, tmp_path, respx_mock,
+                                                    actual_product_rows, pid, unit, size, requested, units, stored):
+    row = next(r for r in actual_product_rows if str(r["id"]) == pid)
+    rebuild_catalog(gateway, tmp_path, [row])
+    product = gateway.catalog.get(pid)
+    if stored:
+        # Old catalogs lack dimension flags; retained content/names must still work.
+        data = product.model_dump()
+        for field in ("size_suspect", "volume_suspect", "weight_suspect"):
+            data.pop(field)
+        with gateway.db.connect(write=True) as conn:
+            conn.execute("UPDATE products SET data=? WHERE id=?", (json.dumps(data), pid))
+    request = need.model_copy(update={"intent": product.name_en, "search_terms": [],
+        "required_claims": [], "exclude_allergens": [], "quantity": Quantity(value=requested, unit=unit)})
+    upstream.sales_units[pid] = product.sales_unit
+    def price(request):
+        body = upstream.price_response(request).json()
+        for item in body["products"]:
+            item.pop("comparisonPrice")
+        return httpx.Response(200, json=body)
+    respx_mock.post("https://valio.test/api/price").mock(side_effect=price)
+    result = gateway.find_offers(request)
+    offer, plan = result.offers[0], result.plans[0]
+    assert (offer.size_per_sales_unit, offer.units_needed, offer.total) == (size, units, units * 13)
+    assert (plan.lines[0].units, plan.coverage.value, plan.total) == (units, requested, units * 13)
+    assert "SIZE_UNCONFIRMED" in codes(offer)
+    assert plan.policy_preview.outcome == "PENDING_APPROVAL"
+    quote = gateway.orders.create_quote(QuoteRequest(customer_id=request.customer_id, deliver_by=request.deliver_by,
+        plan_ref={"lookup_id": result.lookup_id, "plan_index": 0}), "external")
+    assert (quote.lines[0].size_per_sales_unit, quote.lines[0].units_needed, quote.total) == (size, units, units * 13)
+    order = gateway.orders.place_order(quote.id, f"review-total-{pid}-{stored}", "external")
+    assert order.status == "PENDING_APPROVAL"
+    approved = gateway.orders.approve(order.id, "Ada")
+    assert (approved.status, approved.total, approved.lines[0].units_needed) == ("CONFIRMED", units * 13, units)
+    assert gateway.lookup.get(result.lookup_id).offers[0].size_per_sales_unit == size
+    assert gateway.orders.get_quote(quote.id).total == gateway.orders.get_order(order.id).total == units * 13

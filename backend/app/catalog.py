@@ -37,22 +37,43 @@ def csv_values(path, column):
         return {str(row["productId"]): number(row.get(column)) for row in reader}
 
 
-def name_measures(name, unit):
+def name_measures(name, unit, anchor=None):
     """Positive net measures and their package counts, from outermost to innermost.
 
     A shared-unit net/drained expression (460/230g) describes one 460g package.
     Keep separated counts too: "8 x Brand 4x70g" and "4x6xBrand 0.33 l".
     "200g/4pcs" describes portions of an already weighed package.
     """
+    # With a shared scale the larger-first form is net/drained; smaller-first
+    # is count/total (10/1500G), never ten grams. Explicitly unit-bearing
+    # measures (10.8kg/80g) are parsed separately below.
+    def shared_measure(match):
+        first, second = (float(match[i].replace(",", ".")) for i in (1, 2))
+        after_portion = re.search(r"(?:(?:kg|g|l|dl|cl|ml)\s*[x×]\s*(?:appr\.?\s*)?|\d+\s*-\s*)$",
+                                  name[:match.start()], re.I)
+        return (match[1] if first > second and not after_portion else match[2]) + match[3]
+
+    name = re.sub(r"(?<![\d.,])(-?\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)\s*(kg|g|l|dl|cl|ml)\b",
+                  shared_measure, name, flags=re.I)
     pattern = (r"(?:(?<![\d.,])|(?<=[a-z]\.)(?=\d+\s*[x×]))"
                r"((?:\d+\s*[x×]\s*)*)(-?\d+(?:[.,]\d+)?)"
-               r"(?:\s*/\s*\d+(?:[.,]\d+)?(?=\s*(?:kg|g)\b))?\s*(kg|dl|cl|ml|l|g)\b")
+               r"\s*(kg|dl|cl|ml|l|g)\b")
     factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
     matches = list(re.finditer(pattern, name, re.I))
-    prefix = re.match(r"\s*((?:\d+\s*[x×]\s*)+)", name, re.I)
+    prefix = re.search(r"(?<![\d.,])((?:\d+\s*[x×]\s*)+)", name, re.I)
+    if prefix and re.match(r"\d+(?:[.,]\d+)?(?:\s*[x×*]\s*\d+(?:[.,]\d+)?)*\s*(?:mm|cm|m)\b",
+                           name[prefix.end():], re.I):
+        prefix = None  # Tray dimensions such as 325 x 265 x 100 mm are not pack counts.
+    pieces = re.search(r"(?<![\d.,x×])((?:\d+\s*[x×]\s*)*\d+)\s*(?:pcs|kpl)\b", name, re.I)
+    if prefix and pieces and pieces.start() <= prefix.start() < pieces.end():
+        prefix = None  # pcs/kpl chains are portions, not independent outer cases.
     leading = [int(n) for n in re.findall(r"\d+", prefix[1])] if prefix else []
-    pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+    piece_counts = [int(n) for n in re.findall(r"\d+", pieces[1])] if pieces else []
     direct = [[int(n) for n in re.findall(r"\d+", match[1])] for match in matches]
+    values = [float(pack_quantity(m[2].replace(",", "."), factor=factors[m[3].lower()]))
+              for m in matches if m[3].lower() in factors]
+    totals = [v for v in values if v > 0] + ([anchor] if anchor else [])
+    largest = max((v for v in values if v > 0), default=0)
     result = []
     for match, counts in zip(matches, direct):
         if match[3].lower() not in factors:
@@ -62,7 +83,27 @@ def name_measures(name, unit):
             continue
         if counts and prefix and match.start() >= prefix.end():
             counts = leading + counts
-        counts = counts or leading or next((c for c in direct if c), []) or ([int(pieces[1])] if pieces else [])
+        # Counts attached to one measure must not spread to an explicit total
+        # elsewhere in the name (357x14g/5kg). A slash-adjacent pcs count is
+        # portion information, in either order and with arbitrary whitespace.
+        if not counts and len(matches) == 1 and prefix and match.start() >= prefix.end():
+            counts = leading
+        slash_pieces = pieces and (re.fullmatch(r"\s*/\s*", name[pieces.end():match.start()])
+                                  if pieces.end() <= match.start() else
+                                  re.fullmatch(r"\s*/\s*", name[match.end():pieces.start()]))
+        if not counts and piece_counts and not slash_pieces:
+            combined = float(pack_quantity(value, multiplier=math.prod(piece_counts)))
+            reconciles = any(abs(combined / total - 1) <= .03 or math.isclose(
+                abs(combined / total - 1), .03, rel_tol=1e-12) for total in totals if total > value)
+            if reconciles or (len(piece_counts) == 1 and len(matches) == 1):
+                counts = piece_counts
+            elif len(piece_counts) > 1 and len(matches) == 1:
+                # A nested portion count alone cannot prove a package total.
+                continue
+        anchored = anchor and abs(value / anchor - 1) <= .03
+        if not counts and value < largest and len(values) > 1 and not anchored:
+            # Per-portion measures cannot become alternative package totals.
+            continue
         if any(count <= 0 for count in counts):
             continue
         result.append((value, counts))
@@ -73,11 +114,28 @@ def name_sizes(name, unit):
     return [value for value, _ in name_measures(name, unit)]
 
 
-def name_sales_sizes(names, unit, multiplier):
+def name_sales_sizes(names, unit, multiplier, anchor=None):
     """Apply the sales multiplier once, preserving counts within each base package."""
-    result, counted = [], []
+    result = []
     for name in names:
-        for value, counts in name_measures(name, unit):
+        measures = name_measures(name, unit, anchor)
+        for value, counts in measures:
+            if counts:
+                # A reconciled portion chain describes the same explicit total;
+                # do not consume one of its portion counts as an outer multiplier.
+                total = next((total for total, outer in measures if not outer and
+                    (abs(float(pack_quantity(value, multiplier=math.prod(counts))) / total - 1) <= .03 or math.isclose(
+                        abs(float(pack_quantity(value, multiplier=math.prod(counts))) / total - 1), .03, rel_tol=1e-12))), None)
+                if total is not None:
+                    factor = 1 if multiplier in {math.prod(counts), counts[0]} else multiplier
+                    result.append(float(pack_quantity(total, multiplier=factor)))
+                    continue
+            elif any(inner and (abs(float(pack_quantity(portion, multiplier=math.prod(inner))) / value - 1) <= .03 or math.isclose(
+                    abs(float(pack_quantity(portion, multiplier=math.prod(inner))) / value - 1), .03, rel_tol=1e-12))
+                     and multiplier in {math.prod(inner), inner[0]} for portion, inner in measures):
+                # The explicit total already includes the known outer package count.
+                result.append(value)
+                continue
             if multiplier == 1:
                 count = math.prod(counts)
             elif len(counts) > 1 and math.prod(counts) != multiplier:
@@ -87,15 +145,14 @@ def name_sales_sizes(names, unit, multiplier):
             size = float(pack_quantity(value, multiplier=count))
             if size > 0:
                 result.append(size)
-                if counts:
-                    counted.append(size)
-    return counted if multiplier == 1 and counted else result
+    return result
 
 
 def suspect_content(value, names, unit):
     if value is None:
         return False
-    named = [size for name in names for size in name_sizes(name, unit) if size > 0]
+    named = [size for name in names for measure, counts in name_measures(name, unit, value)
+             for size in (measure, float(pack_quantity(measure, multiplier=math.prod(counts)))) if size > 0]
     # Names can contain both portion and package weights. A compatible package candidate
     # supports the structured content even if an earlier portion candidate disagrees.
     return (value <= 0 or value > 100 or (unit == "KG" and value < .001)

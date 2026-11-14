@@ -359,8 +359,11 @@ Old stored lookups without preferences/plans remain readable, including through 
   with the price ratio uses the ratio and emits `SIZE_MISMATCH` naming the values; a conversion inconsistent
   with explicit name counts also carries `SIZE_MISMATCH`, even without a ratio. Both require approval by default.
   Without a live ratio, plausible but contradictory catalog/name content is not confirmed: `SIZE_MISMATCH`
-  names both figures and the plan displays the larger units-needed estimate (the smaller content).
-  This estimate is for review only and always requires approval; explicit quote quantities stay unchanged.
+  names both figures and retains the plausible catalog package total as the anchor.
+  Name candidates replace that anchor only when confirmed by the live ratio within 3%; either language can supply the confirmed candidate.
+  Slash portion counts (10/1500G, 60KPL/900G, 900g/60pcs, with optional spaces) never multiply a weighed package total.
+  Nested pcs/kpl chains keep every count and multiply only a portion measure that reconciles with a named or catalog total within 3%.
+  Explicit quote quantities stay unchanged.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
   count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.
