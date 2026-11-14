@@ -54,11 +54,50 @@ def suspect_content(value, names, unit):
             or bool(named and all(max(value / size, size / value) >= 10 for size in named)))
 
 
-def case_suspect(value, multiplier, names, unit):
-    # Names can describe either the inner package or the whole CASE. Compare
-    # like packaging levels; a compatible source supports the CASE evidence.
-    return (suspect_content(value, names, unit) and
-            suspect_content(value / (multiplier or 1) if value is not None else None, names, unit))
+def named_case_sizes(names, unit):
+    """Independent whole-case evidence from explicit counts, never a bare inner size.
+
+    A leading count may precede the brand (24x Brooklyn ... 0.33 L). A count
+    immediately before a measure takes precedence. A /4pcs suffix describes
+    the contents of an already weighed package, rather than four such packages.
+    """
+    pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+    factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
+    result = []
+    for name in names:
+        prefix = re.match(r"\s*(\d+)\s*[x×]", name, re.I)
+        pieces = re.search(r"(?<![\d.,/])(\d+)\s*(?:pcs|kpl)\b", name, re.I)
+        pack = next((m for m in re.finditer(pattern, name, re.I) if m[1]), None)
+        for match in re.finditer(pattern, name, re.I):
+            count = (match[1] or (prefix[1] if prefix else None) or
+                     (pack[1] if pack else None) or (pieces[1] if pieces else None))
+            if count and match[3].lower() in factors and int(count) > 0:
+                result.append(float(pack_quantity(match[2].replace(",", "."),
+                    multiplier=int(count), factor=factors[match[3].lower()])))
+    return result
+
+
+def case_suspect(value, multiplier, names, unit, base_unit=None, base_content=None):
+    if value is None:
+        return False
+    # Check bounds per base unit, but compare name/catalog evidence at the CASE
+    # level. An inner bottle match cannot validate a case holding many bottles.
+    if suspect_content(value / (multiplier or 1), [], unit):
+        return True
+    if base_unit == unit and multiplier:
+        # KG is a measure, not a count of packages (e.g. one 10 kg case).
+        expected = [multiplier]
+    else:
+        inner = [size for name in names for size in name_sizes(name, unit) if size > 0]
+        if base_content and not suspect_content(base_content, names, unit):
+            inner.append(base_content)
+        # Spec 05 R-8: a known multiplier already carries the package count.
+        # Even a "1 x" name cannot turn one bottle into a multi-bottle CASE.
+        expected = ([] if multiplier and multiplier > 1 else named_case_sizes(names, unit))
+        if not expected:
+            expected = [float(pack_quantity(size, multiplier=multiplier or 1)) for size in inner]
+    return bool(expected and not any(size > 0 and (abs(value / size - 1) <= .03 or
+                math.isclose(abs(value / size - 1), .03, rel_tol=1e-12)) for size in expected))
 
 
 def extract(raw, reliability, carbon):
@@ -89,7 +128,8 @@ def extract(raw, reliability, carbon):
                        if u.get("unitId") == raw.get("salesUnit")), 1) or 1
     for value, unit in ((case_l, "L"), (case_kg, "KG")):
         if value is not None:
-            suspicion[unit] = case_suspect(value, multiplier, names, unit)
+            suspicion[unit] = case_suspect(value, multiplier, names, unit, raw.get("baseUnit"),
+                                         volume_l if unit == "L" else weight_kg)
     statuses, declaration = {}, False
     for group in ("allergen", "nonAllergen"):
         for entry in grouped.get(group, []):

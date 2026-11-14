@@ -32,7 +32,7 @@ WARNINGS = (
     "Warnings: PARTIAL_STOCK means insufficient on-time sales units; DATE_SHIFT means delivery after the deadline; "
     "CUTOFF_PASSED means the order cut-off for the accompanying delivery date has passed, and requires approval; SALES_BLOCK means not for sale; "
     "NOT_AVAILABLE means empty schedule lines and rejects by default; UNKNOWN_PRODUCT is a valid legacy policy code, no longer emitted. AVAILABILITY_UNCONFIRMED means a schedule amount >=999999: stock unknown, any quantity orderable, available_amount=null, availability_known=false, no local reservation, ignored by default. The amount rule applies to every logistic model; delivery dates, sales blocks and units still apply. PRICE_ERROR means invalid/unavailable price; SIZE_UNKNOWN means no unit conversion; "
-    "SIZE_MISMATCH means exact pack content differs from the live price ratio by more than 3% and requires review; "
+    "SIZE_MISMATCH means pack content differs from the live price ratio or explicit name-count evidence by more than 3% and requires review; "
     "OUTSIDE_PREFERENCE marks substitutes and lists differences from soft brand, price, pack-size or label preferences; these need approval by default. "
     "NO_FIT_SCORE means unavailable Decisions probability; AVAILABILITY_ERROR means stock is unverified. "
     "Hard constraints and sale blocks cannot be overridden by fit scores."

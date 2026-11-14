@@ -10,7 +10,7 @@ from .auth import check_owner
 
 from . import audit
 from .mandates import evidence as mandate_evidence, decode
-from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect
+from .catalog import allergen_evidence, constraint_failures, number, suspect_content, case_suspect, named_case_sizes
 from .quantities import pack_quantity, sales_step
 from .db import DomainError
 from .models import Availability, LookupResult, OfferCard, Provenance, Retrieval, Warning
@@ -26,7 +26,7 @@ WARNING_TEXT = {
     "AVAILABILITY_UNCONFIRMED": "Valio does not know this product's stock; its ordering logic accepts any quantity",
     "PRICE_ERROR": "A valid net catalog price could not be obtained.",
     "SIZE_UNKNOWN": "Sales-unit content cannot be converted to the requested unit.",
-    "SIZE_MISMATCH": "Exact pack content differs from the live price ratio by more than 3%.",
+    "SIZE_MISMATCH": "Pack content evidence differs by more than 3%.",
     "NO_FIT_SCORE": "Decisions fit probability is unavailable; a human must review suitability.",
     "AVAILABILITY_ERROR": "Availability could not be verified with the upstream API.",
     "OUTSIDE_PREFERENCE": "The product is a substitute outside the buyer's soft preferences.",
@@ -114,18 +114,18 @@ def reconcile_size(product, price, requested_unit):
     exact = {}
     content = product.base_volume_l if requested_unit == "L" else product.base_net_weight_kg
     sales_content = product.sales_volume_l if requested_unit == "L" else product.sales_net_weight_kg
-    suspect = product.volume_suspect if requested_unit == "L" else product.weight_suspect
     # Recheck retained evidence even when an older build stored False after checking only English.
     # Keep each dimension independent so a bad volume does not discard a valid weight (or vice versa).
     names = [product.name_en, product.name_fi]
+    named_cases = named_case_sizes(names, requested_unit) if product.sales_unit in {"KI", "CASE"} else []
     # Recompute CASE suspicion from retained evidence: old builds falsely flagged
     # whole-case names after dividing their matching CASE weight by the multiplier.
-    suspect = (case_suspect(sales_content, multiplier, names, requested_unit) if sales_content is not None
-               else bool(suspect) or suspect_content(content, names, requested_unit))
-    if not suspect and sales_content and sales_content > 0:
+    base_suspect = suspect_content(content, names, requested_unit)
+    sales_suspect = case_suspect(sales_content, multiplier, names, requested_unit, product.base_unit, content)
+    if not sales_suspect and sales_content and sales_content > 0:
         exact["catalog"] = float(pack_quantity(sales_content, multiplier=multiplier, whole_case=True))
     if multiplier is not None and multiplier > 0:
-        if "catalog" not in exact and not suspect and content and content > 0:
+        if "catalog" not in exact and not base_suspect and content and content > 0:
             exact["catalog"] = float(pack_quantity(content, multiplier=multiplier))
         # Compute the name source too, even when structured catalog content exists.
         # Prefer English, then Finnish names. Match 10 l, 5 dl, 1L, 500 g, 1,5 kg.
@@ -143,22 +143,33 @@ def reconcile_size(product, price, requested_unit):
                     break
             if "name_parse" in exact:
                 break
+        if multiplier == 1 and named_cases:
+            exact["name_parse"] = named_cases[0]
+
+    def packaging_warnings(size):
+        if named_cases and not any(abs(size / named - 1) <= .03 or
+                isclose(abs(size / named - 1), .03, rel_tol=1e-12) for named in named_cases if named > 0):
+            return [Warning(code="SIZE_MISMATCH", text=(
+                f"{WARNING_TEXT['SIZE_MISMATCH']} used={size:g} {requested_unit}; "
+                f"name_case={named_cases} {requested_unit} per sales unit."))]
+        return []
+
     if exact:
         if ratio is None:
             source = next(iter(exact))
-            return exact[source], source, False, [warning("SIZE_UNCONFIRMED")]
+            return exact[source], source, False, [warning("SIZE_UNCONFIRMED"), *packaging_warnings(exact[source])]
         # Prefer confirmed structured content; the ratio can resolve conflicting catalog/name sizes.
         for source, size in exact.items():
             difference = abs(ratio / size - 1)
             if difference < 0.03 or isclose(difference, 0.03, rel_tol=1e-12):
-                return size, source, True, []
+                return size, source, True, packaging_warnings(size)
         values = ", ".join(f"{key}={value:g} {requested_unit}" for key, value in exact.items())
         mismatch = Warning(code="SIZE_MISMATCH", text=(
             f"{WARNING_TEXT['SIZE_MISMATCH']} {values}; price_ratio={ratio:g} {requested_unit} per sales unit."
         ))
         return ratio, "price_ratio", False, [mismatch]
     if ratio is not None:
-        return ratio, "price_ratio", False, []
+        return ratio, "price_ratio", False, packaging_warnings(ratio)
     return None, None, False, []
 
 

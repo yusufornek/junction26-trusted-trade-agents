@@ -284,15 +284,19 @@ Old stored lookups without preferences/plans remain readable, including through 
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
   `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
   and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
-  CASE sales content needs no base-unit multiplier; CASE and name evidence are compared at matching
-  packaging levels. Legacy CASE suspicion flags are recalculated from retained content and names.
+  CASE sales content needs no additional base-unit multiplier. It must agree within 3% with whole-case
+  name evidence (including leading counts such as `24x Brooklyn ... 0.33 L`), or inner content times the
+  sales-unit multiplier. An inner-bottle size cannot validate a multi-bottle CASE. A KG base-unit multiplier
+  measures case weight rather than counting packages, preserving valid whole-case weights.
+  Legacy CASE suspicion flags are recalculated from retained content and names without a database rewrite.
   Catalog sizes >100 L, >100 kg, <1 g per base unit or
   differing from every compatible name-size candidate by a factor >=10 are suspect. Portion weights do not
   invalidate a matching package weight. `volume_suspect` and `weight_suspect` track dimensions independently;
   `size_suspect` remains their aggregate. Both English and Finnish names supply size evidence at build.
   Reconciliation rechecks both names even for legacy records with missing or incorrectly false dimension flags.
-  Suspect content falls back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
-  uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
+  Suspect CASE content falls back to valid BASE content, the name or ratio, then `SIZE_UNKNOWN`. A disagreement
+  with the price ratio uses the ratio and emits `SIZE_MISMATCH` naming the values; a conversion inconsistent
+  with explicit name counts also carries `SIZE_MISMATCH`, even without a ratio. Both require approval by default.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain explicitly requested whole sales quantities, including KG. Lot sizes below one
   count as one; fractional quotes return `422 INVALID_LOT_SIZE` naming the whole-unit step.

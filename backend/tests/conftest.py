@@ -1,5 +1,6 @@
 import gzip
 import json
+import re
 import sys
 import threading
 from datetime import timedelta
@@ -238,6 +239,59 @@ def actual_product_rows():
     from app.config import ROOT
     with gzip.open(ROOT / "data/product_data.json.gz", "rt") as file:
         return json.load(file)
+
+
+@pytest.fixture(scope="session")
+def real_case_name_products(actual_product_rows):
+    """Independent name oracle; include every named multipack, including count-only goods."""
+    from decimal import Decimal
+    from app.catalog import extract
+    size_pattern = r"(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(kg|g|l|dl|cl|ml)\b"
+    prefix_pattern = r"^\s*(\d+)\s*[x×]"
+    direct_pattern = r"(?<![\d.,])(\d+)\s*[x×]\s*" + size_pattern
+    pieces_pattern = r"(?<![\d.,])(\d+)\s*(?:pcs|kpl)\b"
+    factors = {"kg": ("KG", "1"), "g": ("KG", ".001"), "l": ("L", "1"),
+               "dl": ("L", ".1"), "cl": ("L", ".01"), "ml": ("L", ".001")}
+    result = []
+    for row in actual_product_rows:
+        if row.get("deleted") or row.get("salesUnit") not in {"KI", "CASE"}:
+            continue
+        names = [n["value"] for n in (row.get("synkkaData") or {}).get("names", [])]
+        if not any(re.search(prefix_pattern, n, re.I) or re.search(direct_pattern, n, re.I)
+                   or re.search(pieces_pattern, n, re.I) for n in names):
+            continue
+        expected = {"L": set(), "KG": set()}
+        for name in names:
+            prefix = re.search(prefix_pattern, name, re.I)
+            pieces = re.search(pieces_pattern, name, re.I)
+            direct = {m.start(2): m[1] for m in re.finditer(direct_pattern, name, re.I)}
+            for match in re.finditer(size_pattern, name, re.I):
+                count = direct.get(match.start()) or (prefix[1] if prefix else None) or next(iter(direct.values()), None)
+                if count is None and pieces:
+                    # "200g/4pcs" weighs the whole bag; it is not four 200g bags.
+                    if pieces.start() > 0 and name[pieces.start() - 1] == "/":
+                        count = next((u["sizeInBaseUnits"] for u in row.get("units", [])
+                                      if u["unitId"] == row["salesUnit"]), 1)
+                    else:
+                        count = pieces[1]
+                if count is None:
+                    continue
+                unit, factor = factors[match[2].lower()]
+                expected[unit].add(Decimal(str(count)) * Decimal(match[1].replace(",", ".")) * Decimal(factor))
+        # A count-only translation may omit the package weight supplied in another language.
+        multiplier = next((u["sizeInBaseUnits"] for u in row.get("units", [])
+                           if u["unitId"] == row["salesUnit"]), 1)
+        for unit in expected:
+            if not expected[unit]:
+                for name in names:
+                    for match in re.finditer(size_pattern, name, re.I):
+                        dimension, factor = factors[match[2].lower()]
+                        if dimension == unit:
+                            expected[unit].add(Decimal(str(multiplier)) *
+                                Decimal(match[1].replace(",", ".")) * Decimal(factor))
+        result.append((extract(row, {}, {}), expected))
+    assert any(p.id == "477242" for p, _ in result)
+    return result
 
 
 @pytest.fixture(scope="session")
