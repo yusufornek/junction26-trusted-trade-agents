@@ -25685,6 +25685,8 @@ components:
           type: string
           maxLength: 4000
           title: Rrule
+          description: Daily, weekly weekdays, or monthly RRULE. Monthly clamping
+            uses BYMONTHDAY=28,...,preferred_day;BYSETPOS=-1.
           default: FREQ=WEEKLY
         timezone:
           type: string

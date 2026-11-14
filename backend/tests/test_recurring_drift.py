@@ -14,6 +14,7 @@ from app.models import PolicyUpdateRequest, Quantity
 from app.recurring import BaselineRequest, RecurringRequest, rule_for
 from conftest import agent_headers, quote_request, raw_product, rebuild_catalog
 from test_verifiable_mandate import buyer as vc_issuer, issue
+from test_supplier_adapters import nordfood, prepare as prepare_nordfood, reference
 
 
 @pytest.fixture
@@ -65,6 +66,48 @@ def test_ac_1_identical_runs_confirm_without_drift(gateway, upstream, recurring_
         assert len(client.get("/v1/recurring-orders").json()) == 1
         assert len(client.get(f"/v1/recurring-orders/{row['id']}/runs").json()) == 2
         assert client.get(f"/v1/recurring-orders/{row['id']}/runs", headers=agent_headers("other")).status_code == 404
+
+
+@pytest.mark.parametrize("policy_restricted", [False, True])
+def test_review_recurring_authorizes_quote_supplier(gateway, need, upstream, recurring_setup, nordfood, vc_issuer, policy_restricted):
+    from app.mandates import decode, sign_jwt
+    request = reference(need)
+    quote = prepare_nordfood(gateway, request)
+    order = gateway.orders.place_order(quote.id, "nf-recurring-baseline")
+    if order.status == "PENDING_APPROVAL":
+        order = gateway.orders.approve(order.id, "Buyer")
+    claims = decode(issue(vc_issuer, categories=["10400"]))[1]
+    claims["sub"] = claims["vc"]["credentialSubject"]["agent_id"] = "external"
+    claims["vc"]["credentialSubject"].update(recurring=True, supplier_ids=["nordfood"])
+    token = sign_jwt(vc_issuer, claims, kid="buyer-1")
+    policy = gateway.policy._editable(gateway.policy.get())
+    if policy_restricted:
+        policy["agents"]["external"]["supplier_ids"] = ["nordfood"]
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Supplier authority"))
+    with TestClient(create_app(gateway), headers={**agent_headers("external"), "Agent-Mandate": token}) as client:
+        args = {"approved_order_id": order.id, "cadence": {"start_at": (audit.utcnow() + timedelta(hours=1)).isoformat()}}
+        first = client.post("/v1/recurring-orders", json=args, headers={"Idempotency-Key": "nf-recurring"})
+        assert first.status_code == 200, first.text
+        assert first.json()["template"]["supplier_id"] == "nordfood"
+        again = client.post("/v1/recurring-orders", json=args, headers={"Idempotency-Key": "nf-recurring"})
+        assert again.status_code == 200 and again.json() == first.json()
+    # Historical workflows without the added top-level supplier still use their template.
+    row = gateway.recurring.get(first.json()["id"])
+    row.pop("supplier_id")
+    with gateway.db.connect(write=True) as conn:
+        gateway.recurring.save(conn, row)
+    import asyncio
+    from app.mcp_server import create_server
+    async def workflows():
+        server = create_server(gateway, "external", mandate=token)
+        listing = await server.call_tool("list_recurring_orders", {})
+        assert not listing.is_error
+        run = await server.call_tool("run_recurring_order_now", {"recurring_order_id": row["id"]})
+        assert not run.is_error, run.structured_content
+        assert gateway.orders.get_quote(run.structured_content["quote_id"]).supplier_id == "nordfood"
+        paused = await server.call_tool("pause_recurring_order", {"recurring_order_id": row["id"]})
+        assert not paused.is_error and paused.structured_content["status"] == "PAUSED"
+    asyncio.run(workflows())
 
 
 def test_ac_2_third_price_step_exceeds_cumulative_tolerance(gateway, upstream, recurring_setup):

@@ -1558,9 +1558,15 @@ buyer_admin or buyer_approver and increments the baseline revision.
 
 REST and the MCP CLI run an in-process scheduler. Supported RRULEs use DAILY,
 WEEKLY (optionally BYDAY=MO,TU,...) or MONTHLY (optionally BYMONTHDAY), with an
-optional positive INTERVAL. Times follow the named IANA timezone across DST;
+optional positive INTERVAL. Monthly suggestions preserve the preferred day with
+end-of-month clamping (`dateutil.relativedelta`): for day 30 the rule is
+`FREQ=MONTHLY;BYMONTHDAY=28,29,30;BYSETPOS=-1`, so February 28/29 is an occurrence
+and March returns to day 30. Existing plain BYMONTHDAY rules retain RRULE semantics.
+Times follow the named IANA timezone across DST;
 after downtime only the latest missed occurrence executes, once. Revoked authority
 or suspension produces a skipped run and a `recurring.stopped` domain event.
+Run-now reloads ACTIVE status under the writer transaction before creating any
+occurrence, lookup, quote or order, so a completed pause wins over a queued run.
 
 Buyer_admin uses `GET/PUT /v1/buyer/proposal-preferences` with optional
 `?customer_id=1` for multi-customer buyers. Empty categories/interests mean no
@@ -1702,7 +1708,7 @@ with `.venv/bin/python scripts/export_openapi.py`.
 Confirmed gateway purchases populate customer-owned memory atomically with the
 confirmation. Pending/rejected orders do not count; cancellations remove their
 memory entry. Existing confirmed orders are backfilled once on migration.
-Each product/request-unit series retains dates, purchased quantities in the
+Each supplier/product/request-unit series retains dates, purchased quantities in the
 request unit (including pack rounding), paid line totals, currency and agent.
 Unknown conversions are omitted rather than guessed; units never mix.
 
@@ -1711,19 +1717,26 @@ spread means maximum minus minimum. Confidence is low if the interval median
 is zero, interval spread exceeds max(3 days, 50% of median), or quantity spread
 exceeds 50% of median. High requires at least six purchases, interval spread at
 most max(3 days, 10% of median), and quantity spread at most 10%; otherwise medium.
-Consecutive calendar-month purchases on the same day predict that day next month;
+Consecutive calendar-month purchases predict the preferred day next month,
+clamped to the last day in shorter months;
 other rhythms use the rounded median day interval. The response explains confidence.
 
 `GET /v1/suggestions?horizon=14` returns patterns predicted from today through
 the horizon, with evidence, quantity, predicted date and a plain-language sentence.
 Omit horizon to use each customer's preference (default 14; supported range 1–365).
 Agents see their customers, buyer users their organisation, operators all customers;
-supplier agents are refused. A presented VC restricts customer/category scope.
+supplier agents are refused. Agents require current policy customer grants or a
+validated buyer VC; policy can only tighten that VC. Customer and supplier scope
+filter every history read and suggestion action, including command replays.
+A presented VC also restricts categories, checked in each purchase's supplier catalog.
+Older memory entries recover supplier identity from their stored need (default Valio).
 
 `POST /v1/suggestions/{id}/prepare` creates only a normal lookup with plans under
 the caller's mandate. Quote and order separately through the normal endpoints.
 `POST /{id}/make-recurring` uses the median quantity and detected cadence with the
 latest confirmed product evidence scaled to that quantity as the spec 35 baseline.
+Scaling multiplies before dividing with Decimal and rounds sales quantities to six
+decimal places and money to cents, preventing floating-point noise from becoming drift.
 It creates no quote/order; every execution revalidates mandate, policy and drift.
 Optional body: `{timezone, permitted_deviations, buyer_agent_id}`; deviations default
 to zero. Buyer approvers/admins (and operators) must name a purchasing agent;

@@ -4,11 +4,12 @@ import logging
 import threading
 from copy import deepcopy
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from dateutil.relativedelta import relativedelta
 from dateutil.rrule import rrulestr
 from fastapi import APIRouter, Depends, Header, Request
 from pydantic import Field, model_validator
@@ -22,7 +23,7 @@ from .models import InputText, InputTexts, BasketLookupRequest, Model, NeedSpec,
 
 
 class Cadence(Model):
-    rrule: InputText = "FREQ=WEEKLY"
+    rrule: InputText = Field(default="FREQ=WEEKLY", description="Daily, weekly weekdays, or monthly RRULE. Monthly clamping uses BYMONTHDAY=28,...,preferred_day;BYSETPOS=-1.")
     timezone: InputText = "Europe/Helsinki"
     start_at: datetime
     catch_up: Literal["once"] = "once"
@@ -32,7 +33,7 @@ class Cadence(Model):
         try:
             zone = ZoneInfo(self.timezone)
             parts = dict(p.split("=", 1) for p in self.rrule.upper().split(";"))
-            if (set(parts) - {"FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY"} or
+            if (set(parts) - {"FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY", "BYSETPOS"} or
                     parts.get("FREQ") not in {"DAILY", "WEEKLY", "MONTHLY"} or
                     ("BYDAY" in parts and parts["FREQ"] != "WEEKLY") or
                     ("BYMONTHDAY" in parts and parts["FREQ"] != "MONTHLY")):
@@ -43,6 +44,10 @@ class Cadence(Model):
                 raise ValueError("Use weekday names without ordinal prefixes")
             if "BYMONTHDAY" in parts and any(not 1 <= int(d) <= 31 for d in parts["BYMONTHDAY"].split(",")):
                 raise ValueError("Month days must be 1 through 31")
+            if "BYSETPOS" in parts:
+                days = [int(d) for d in parts.get("BYMONTHDAY", "").split(",")]
+                if parts["FREQ"] != "MONTHLY" or parts["BYSETPOS"] != "-1" or days != list(range(28, max(days) + 1)):
+                    raise ValueError("Use BYSETPOS=-1 with consecutive month days 28 through the preferred day")
             if self.start_at.tzinfo is None:
                 self.start_at = self.start_at.replace(tzinfo=zone)
             else:
@@ -111,9 +116,8 @@ def recent_schedule(row, now):
         # Eight periods cover skipped month days and the Gregorian century leap
         # gap (e.g. February 2096 -> 2104), without scanning from DTSTART.
         jump = max(0, months // interval - 8) * interval
-        year, month = divmod(start.year * 12 + start.month - 1 + jump, 12)
         parts.setdefault("BYMONTHDAY", str(start.day))
-        anchor = start.replace(year=year, month=month + 1, day=1) if jump else start
+        anchor = start.replace(day=1) + relativedelta(months=jump) if jump else start
         cadence["rrule"] = ";".join(f"{key}={value}" for key, value in parts.items())
     cadence["start_at"] = anchor.isoformat()
     rule = rule_for(recent)
@@ -123,6 +127,10 @@ def recent_schedule(row, now):
 def reviewer(principal, customer):
     return (principal.kind == "buyer_user" and principal.role in {"buyer_admin", "buyer_approver"}
             and customer in principal.customer_ids)
+
+
+def recurring_supplier(row):
+    return row.get("supplier_id") or row["template"].get("supplier_id", "valio")
 
 
 def physical_pack(product, price):
@@ -227,7 +235,7 @@ class Recurring:
 
     def authority(self, conn, row):
         policy, _, token = self.g.mandates.authorize(conn, None, row["agent_id"], row["customer_id"],
-                                                    bound=("recurring", row["id"]))
+                                                    bound=("recurring", row["id"]), supplier_id=recurring_supplier(row))
         grant = policy.agents.get(row["agent_id"])
         allowed = decode(token)[1]["vc"]["credentialSubject"].get("recurring") is True if token else bool(grant and grant.recurring)
         if not allowed:
@@ -255,6 +263,7 @@ class Recurring:
         if not reviewer(principal, quote.customer_id) and not (principal.kind == "agent" and principal.id == order.agent_id):
             raise DomainError("RECURRING_FORBIDDEN", "The template must belong to this buyer or agent", 403)
         row = {"id": str(uuid4()), "agent_id": order.agent_id, "customer_id": quote.customer_id,
+               "supplier_id": quote.supplier_id,
                "template": template, "basket": basket, "approved_order_id": order.id, "baseline_revision": 1,
                "baseline": snapshot(self.g, quote), "cadence": body.cadence.model_dump(mode="json"),
                "approved_lines": [{"product_id": l.product_id, "quantity_sales_units": l.units_needed} for l in quote.lines],
@@ -264,7 +273,7 @@ class Recurring:
         with self.g.db.connect(write=True) as conn:
             token = mandate or self.g.mandates.stored(conn, "order", order.id)
             self.g.mandates.authorize(conn, token, order.agent_id, quote.customer_id,
-                                      products=[line.product_id for line in quote.lines])
+                                      products=[line.product_id for line in quote.lines], supplier_id=quote.supplier_id)
             self.g.mandates.bind(conn, "recurring", row["id"], token)
             self.authority(conn, row)
             self.save(conn, row)
@@ -273,12 +282,13 @@ class Recurring:
                          "customer_id": row["customer_id"], "environment": self.g.settings.environment})
         return row
 
-    def workflow_authority(self, principal, customer, mandate=None):
+    def workflow_authority(self, principal, customer, mandate=None, *, supplier_id=None):
         """MCP workflows require the caller's current recurring permission, even on reads."""
         if principal.kind != "agent":
             raise DomainError("RECURRING_FORBIDDEN", "A purchasing agent credential is required", 403)
         with self.g.db.connect() as conn:
-            policy, _, token = self.g.mandates.authorize(conn, mandate, principal.id, customer)
+            policy, _, token = self.g.mandates.authorize(conn, mandate, principal.id, customer,
+                supplier_id=supplier_id or self.g.memory.authority_supplier(principal, mandate))
             grant = policy.agents.get(principal.id)
             allowed = decode(token)[1]["vc"]["credentialSubject"].get("recurring") is True if token else bool(grant and grant.recurring)
             if not allowed:
@@ -296,21 +306,23 @@ class Recurring:
     def from_suggestion(self, pattern, need, agent, body, mandate=None):
         """Use confirmed historical evidence as baseline; the first run revalidates it."""
         principal = Principal(agent, customer_ids=(pattern["customer_id"],))
-        self.workflow_authority(principal, pattern["customer_id"], mandate)
+        self.workflow_authority(principal, pattern["customer_id"], mandate, supplier_id=need.supplier_id)
         cadence = Cadence(rrule=pattern["cadence_rrule"], timezone=body.timezone,
                           start_at=datetime.combine(need.deliver_by, datetime.min.time()).replace(tzinfo=ZoneInfo(body.timezone)))
         latest = pattern["_latest"]
         baseline = deepcopy(latest["baseline"])
-        scale = pattern["typical_quantity"] / latest["quantity"]
-        baseline["lines"][0]["quantity"] *= scale
-        baseline["basket_cost"] *= scale
+        for target, key, precision in ((baseline["lines"][0], "quantity", "0.000001"), (baseline, "basket_cost", "0.01")):
+            target[key] = float((Decimal(str(target[key])) * Decimal(str(pattern["typical_quantity"])) /
+                                 Decimal(str(latest["quantity"]))).quantize(Decimal(precision), rounding=ROUND_HALF_UP))
         row = {"id": str(uuid4()), "agent_id": agent, "customer_id": pattern["customer_id"],
+               "supplier_id": need.supplier_id,
                "template": need.model_dump(mode="json"), "basket": False,
                "approved_order_id": latest["order_id"], "source_suggestion_id": pattern["id"],
                "baseline_revision": 1, "baseline": baseline, "cadence": cadence.model_dump(mode="json"),
                "approved_lines": [{"product_id": l["product"], "quantity_sales_units": l["quantity"]} for l in baseline["lines"]],
                "permitted_deviations": body.permitted_deviations.model_dump(), "status": "ACTIVE",
-               "delivery_offset_days": 0, "next_run_at": cadence.start_at.isoformat()}
+               "delivery_offset_days": 0}
+        row["next_run_at"] = rule_for(row).after(cadence.start_at, inc=True).isoformat()
         with self.g.db.connect(write=True) as conn:
             self.g.mandates.bind(conn, "recurring", row["id"], mandate)
             self.authority(conn, row)
@@ -322,7 +334,7 @@ class Recurring:
     def pause(self, id, principal, mandate=None):
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
-            self.workflow_authority(principal, row["customer_id"], mandate)
+            self.workflow_authority(principal, row["customer_id"], mandate, supplier_id=recurring_supplier(row))
             row["status"] = "PAUSED"
             self.save(conn, row)
             audit.append(conn, f"agent:{principal.id}", "RECURRING_STOPPED", "Buyer agent paused recurring execution.",
@@ -344,6 +356,7 @@ class Recurring:
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
             row.update(baseline=snapshot(self.g, quote), template=template, basket=basket,
+                       supplier_id=quote.supplier_id,
                        approved_lines=[{"product_id": l.product_id, "quantity_sales_units": l.units_needed} for l in quote.lines],
                        approved_order_id=order.id, baseline_revision=row["baseline_revision"] + 1)
             self.save(conn, row)
@@ -369,6 +382,8 @@ class Recurring:
         # One transaction includes the command, fresh lookup, quote, comparison and order.
         with self.g.db.connect(write=True) as conn:
             row = self.get(id, principal)
+            if row["status"] != "ACTIVE":
+                raise DomainError("INVALID_TRANSITION", "Recurring order is paused", 409)
             existing = conn.execute("SELECT data FROM recurring_runs WHERE occurrence_key=?", (key,)).fetchone()
             if existing:
                 return json.loads(existing[0])

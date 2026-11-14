@@ -1,5 +1,4 @@
 """Customer-owned purchase rhythms. Suggestions never commit a purchase."""
-import calendar
 import json
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -8,6 +7,7 @@ from hashlib import sha256
 from statistics import median
 from zoneinfo import ZoneInfo
 
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import Field, ValidationError, field_validator
 
@@ -18,7 +18,7 @@ from .db import DomainError
 from .foundation import PRINCIPAL
 from .models import InputText, InputTexts, LookupResult, Model, NeedSpec, Quote
 from .recurring import Deviations, snapshot
-from .mandates import decode
+from .mandates import decode, invalid
 
 
 class MemoryPreferences(Model):
@@ -53,6 +53,11 @@ class Snooze(Model):
 def preferences(conn, customer):
     row = conn.execute("SELECT data FROM memory_preferences WHERE customer_id=?", (customer,)).fetchone()
     return json.loads(row[0]) if row else MemoryPreferences().model_dump()
+
+
+def purchase_supplier(item):
+    """Earlier memory rows kept supplier identity only in the bound need."""
+    return item.get("supplier_id") or (item.get("need") or {}).get("supplier_id") or "valio"
 
 
 def remember_order(conn, order_id):
@@ -94,6 +99,7 @@ def remember_order(conn, order_id):
         quantity = line.units_needed * (line.size_per_sales_unit if unit != "SALES_UNIT" else 1)
         if not need:
             need = {"customer_id": customer, "intent": line.name, "quantity": {"value": quantity, "unit": unit}}
+        need["supplier_id"] = quote.supplier_id
         item = {"order_id": order_id, "customer_id": customer, "product_id": line.product_id,
                 "supplier_id": quote.supplier_id, "synthetic": quote.synthetic,
                 "timestamp": order.get("decided_at") or order["created_at"],
@@ -110,9 +116,9 @@ def remember_order(conn, order_id):
 def detect_patterns(purchases):
     groups = {}
     for item in purchases:
-        groups.setdefault((item["customer_id"], item["product_id"], item["unit"]), []).append(item)
+        groups.setdefault((item["customer_id"], purchase_supplier(item), item["product_id"], item["unit"]), []).append(item)
     result = []
-    for (customer, product, unit), items in sorted(groups.items()):
+    for (customer, supplier, product, unit), items in sorted(groups.items()):
         items = sorted(items, key=lambda item: (item["date"], item["order_id"]))
         if len(items) < 3:
             continue
@@ -122,11 +128,15 @@ def detect_patterns(purchases):
         interval, quantity = median(intervals), median(quantities)
         spread, quantity_spread = max(intervals) - min(intervals), max(quantities) - min(quantities)
         months = [d.year * 12 + d.month for d in dates]
-        monthly = len({d.day for d in dates}) == 1 and all(b - a == 1 for a, b in zip(months, months[1:]))
+        preferred_day = max(d.day for d in dates)
+        monthly = (all(b - a == 1 for a, b in zip(months, months[1:])) and
+                   all(d == dates[0] + relativedelta(months=i, day=preferred_day) for i, d in enumerate(dates)))
         if monthly:
-            year, month = (dates[-1].year + 1, 1) if dates[-1].month == 12 else (dates[-1].year, dates[-1].month + 1)
-            predicted = date(year, month, min(dates[-1].day, calendar.monthrange(year, month)[1]))
-            rrule = f"FREQ=MONTHLY;BYMONTHDAY={dates[-1].day}"
+            predicted = dates[-1] + relativedelta(months=1, day=preferred_day)
+            # Select the last available day up to the preferred day. This standard
+            # RRULE is exactly relativedelta's short-month clamp, including leap years.
+            days = ",".join(str(d) for d in range(min(28, preferred_day), preferred_day + 1))
+            rrule = f"FREQ=MONTHLY;BYMONTHDAY={days}" + (";BYSETPOS=-1" if preferred_day > 28 else "")
         else:
             predicted = dates[-1] + timedelta(days=max(1, round(interval)))
             rrule = f"FREQ=DAILY;INTERVAL={max(1, round(interval))}"
@@ -140,7 +150,7 @@ def detect_patterns(purchases):
         latest = items[-1]
         # A new purchase produces a new suggestion; dismissing this need does not dismiss all future needs.
         identifier = sha256(json.dumps([customer, product, unit, [i["order_id"] for i in items]]).encode()).hexdigest()[:32]
-        result.append({"id": identifier, "customer_id": customer, "product_id": product,
+        result.append({"id": identifier, "customer_id": customer, "product_id": product, "supplier_id": supplier,
             "name": latest["name"], "unit": unit, "order_count": len(items),
             "median_interval_days": interval, "interval_spread_days": spread,
             "typical_quantity": quantity, "quantity_spread": quantity_spread,
@@ -163,6 +173,21 @@ class PurchaseMemory:
                     remember_order(conn, row[0])
                 conn.execute("INSERT INTO memory_meta VALUES('backfilled')")
 
+    def authority_supplier(self, principal, mandate=None):
+        """Choose a permitted supplier for credential validation without assuming Valio."""
+        grant = self.g.policy.get().agents.get(principal.id)
+        suppliers = grant.supplier_ids if grant else None
+        if mandate:
+            subject = decode(mandate)[1].get("vc", {}).get("credentialSubject", {})
+            claimed = subject.get("supplier_ids")
+            if claimed is not None:
+                if not isinstance(claimed, list) or any(not isinstance(s, str) or not s for s in claimed):
+                    invalid("supplier")
+                suppliers = [s for s in claimed if suppliers is None or s in suppliers]
+        if suppliers == []:
+            raise DomainError("SUPPLIER_NOT_IN_MANDATE", "No supplier is in the current mandate", 403)
+        return suppliers[0] if suppliers is not None else "valio"
+
     def scoped(self, principal, mandate=None):
         if principal.operator:
             return principal
@@ -170,17 +195,37 @@ class PurchaseMemory:
             raise DomainError("BUYER_REQUIRED", "Purchase memory requires a buyer credential", 403)
         if principal.kind == "agent":
             check_suspension(self.g.db, principal.id)
-            principal = self.g.proposals.effective_principal(principal, mandate)
             if mandate:
-                customer = decode(mandate)[1]["vc"]["credentialSubject"]["customer_id"]
+                customer = decode(mandate)[1].get("vc", {}).get("credentialSubject", {}).get("customer_id")
+                with self.g.db.connect() as conn:
+                    self.g.mandates.authorize(conn, mandate, principal.id, customer,
+                                              supplier_id=self.authority_supplier(principal, mandate))
                 principal = replace(principal, customer_ids=(customer,))
             else:
                 grant = self.g.policy.get().agents.get(principal.id)
                 allowed = tuple(c for c in principal.customer_ids if grant and c in grant.customer_ids)
-                if not grant or principal.customer_ids and not allowed:
+                if not grant:
+                    raise DomainError("AGENT_NOT_REGISTERED", "Purchase memory requires a current mandate", 403)
+                if principal.customer_ids and not allowed:
                     raise DomainError("CUSTOMER_NOT_IN_MANDATE", "Current agent authority excludes these customers", 403)
                 principal = replace(principal, customer_ids=allowed)
         return principal
+
+    def visible_item(self, principal, item, mandate=None):
+        if principal.operator or principal.kind != "agent":
+            return True
+        supplier = purchase_supplier(item)
+        grant = self.g.policy.get().agents.get(principal.id)
+        if grant and grant.supplier_ids is not None and supplier not in grant.supplier_ids:
+            return False
+        if mandate:
+            subject = decode(mandate)[1]["vc"]["credentialSubject"]
+            if subject.get("supplier_ids") is not None and supplier not in subject["supplier_ids"]:
+                return False
+            categories = subject.get("categories")
+            if categories is not None and self.g.suppliers.get(supplier).catalog.get(item["product_id"]).category not in categories:
+                return False
+        return True
 
     def patterns(self, principal, mandate=None):
         principal = self.scoped(principal, mandate)
@@ -191,10 +236,10 @@ class PurchaseMemory:
                     continue
                 prefs = preferences(conn, row["customer_id"])
                 item = json.loads(row["data"])
-                if mandate and principal.kind == "agent":
-                    categories = decode(mandate)[1]["vc"]["credentialSubject"].get("categories")
-                    if categories is not None and self.g.catalog.get(item["product_id"]).category not in categories:
-                        continue
+                item["supplier_id"] = purchase_supplier(item)
+                item["need"] = {**item.get("need", {}), "supplier_id": item["supplier_id"]}
+                if not self.visible_item(principal, item, mandate):
+                    continue
                 if prefs.get("enabled", True) and not prefs.get("forgotten_at") and item["product_id"] not in prefs.get("excluded_products", []):
                     items.append(item)
         return detect_patterns(items)
@@ -268,7 +313,8 @@ class PurchaseMemory:
             if action in {"prepared", "made_recurring"}:
                 agent = self.purchasing_agent(principal, pattern["customer_id"], body.buyer_agent_id if body else None)
                 check_suspension(self.g.db, agent)
-                self.g.mandates.authorize(conn, mandate, agent, pattern["customer_id"], products=[pattern["product_id"]])
+                self.g.mandates.authorize(conn, mandate, agent, pattern["customer_id"], products=[pattern["product_id"]],
+                                          supplier_id=pattern["supplier_id"])
                 if action == "prepared":
                     context = PRINCIPAL.set(Principal(agent, customer_ids=(pattern["customer_id"],)))
                     try:
