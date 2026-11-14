@@ -7,12 +7,13 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, TEST_KEYS, agent_headers
 from conftest import quote_request
 
 
 @pytest.fixture
 def client(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         yield client
 
 
@@ -35,11 +36,12 @@ def calls(upstream):
 
 
 @pytest.mark.parametrize("decision,status", [("approve", "CONFIRMED"), ("reject", "REJECTED")])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, decision, status):
     lookup, quote, order = place(gateway, need)
     response = client.post(f"/v1/approvals/{order.id}/{decision}", json={"approver": "Ada"})
     assert response.status_code == 200
+    assert response.json()["approver"] == "Ada"
     before = calls(upstream)
     response = client.get(f"/v1/orders/{order.id}/timeline")
     assert response.status_code == 200, response.text
@@ -50,7 +52,8 @@ def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, de
     steps = timeline["steps"]
     assert [s["step"] for s in steps] == ["lookup", "quote", "order", "decision"]
     assert [s["action"] for s in steps] == ["LOOKUP", "CREATE_QUOTE", "PLACE_ORDER", decision.upper()]
-    assert [s["actor"] for s in steps] == ["agent:buyer"] * 3 + ["human:Ada"]
+    assert [s["actor"] for s in steps] == ["agent:buyer"] * 3 + ["human:operator"]
+    assert steps[-1]["data"]["stated_name"] == "Ada"
     assert [s["ts"] for s in steps] == sorted(s["ts"] for s in steps)
     events = gateway.audit()
     for step, event in zip(steps, events, strict=True):
@@ -63,7 +66,7 @@ def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, de
 
 
 @pytest.mark.parametrize("expired", [False, True])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_timeline_ac2_legacy_stored_quote_without_lookup(client, gateway, need, upstream, monkeypatch, expired):
     _, quote, order = place(gateway, need, with_lookup=False)
     if expired:
@@ -85,7 +88,7 @@ def test_timeline_ac2_legacy_stored_quote_without_lookup(client, gateway, need, 
     assert calls(upstream) == before
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_timeline_ac3_replay_failures_and_cancellation(client, gateway, need, upstream):
     _, quote, order = place(gateway, need)
     # A separate order, even by the same agent, must never enter this timeline.
@@ -94,7 +97,7 @@ def test_timeline_ac3_replay_failures_and_cancellation(client, gateway, need, up
     assert client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Ada"}).status_code == 409
     # This failed placement carries only the quote ID, not the order ID.
     assert client.post("/v1/orders", json={"quote_id": quote.id}, headers={
-        "Idempotency-Key": "another-key", "X-Agent-Id": "buyer"}).status_code == 409
+        "Idempotency-Key": "another-key", **agent_headers("buyer")}).status_code == 409
     assert client.post(f"/v1/approvals/{order.id}/approve", json={"approver": "Ada"}).status_code == 200
     assert client.post(f"/v1/approvals/{order.id}/reject", json={"approver": "Ada"}).status_code == 409
     assert client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Ada", "reason": "Wrong product"}).status_code == 200
@@ -117,7 +120,7 @@ def test_timeline_ac3_replay_failures_and_cancellation(client, gateway, need, up
     assert calls(upstream) == before
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_timeline_ac4_totals_sum_actual_step_calls(client, gateway, need, upstream, respx_mock, monkeypatch):
     # Both lookups share the process cache. Only the referenced one belongs to the order.
     gateway.find_offers(need)
@@ -153,7 +156,7 @@ def test_timeline_ac5_unknown_order_and_generated_contract(client, upstream):
     assert calls(upstream) == before
     contract = Path(__file__).resolve().parents[2] / "contracts/openapi.yaml"
     schema = yaml.safe_load(contract.read_text())
-    assert schema == create_app().openapi()
+    assert schema == create_app(keys=TEST_KEYS).openapi()
     operation = schema["paths"]["/v1/orders/{order_id}/timeline"]["get"]
     assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/OrderTimeline"
     models = schema["components"]["schemas"]

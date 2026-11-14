@@ -9,12 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, TEST_KEYS, agent_headers
 from app.mcp_server import create_server
 
 
 @pytest.mark.parametrize("registered_agents", [("hotel-agent",)], indirect=True)
 def test_full_rest_flow_1000_l(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=agent_headers("hotel-agent")) as client:
         result = client.post("/v1/offers", json=need.model_dump(mode="json"))
         assert result.status_code == 200, result.text
         lookup = result.json()
@@ -24,12 +25,13 @@ def test_full_rest_flow_1000_l(gateway, need, upstream):
             "need_ref": lookup["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": offer["units_needed"]}]})
         assert quote_result.status_code == 200, quote_result.text
         quote = quote_result.json()
-        headers = {"Idempotency-Key": "rest-demo", "X-Agent-Id": "hotel-agent"}
+        headers = {"Idempotency-Key": "rest-demo", **agent_headers("hotel-agent")}
         order_response = client.post("/v1/orders", json={"quote_id": quote["id"]}, headers=headers)
         assert order_response.status_code == 200, order_response.text
         order = order_response.json()
         assert order["status"] == "PENDING_APPROVAL"
         assert client.post("/v1/orders", json={"quote_id": quote["id"]}, headers=headers).json()["id"] == order["id"]
+        client.headers.update(OPERATOR_HEADERS)
         inbox = client.get("/v1/approvals").json()
         assert inbox[0]["quote"]["id"] == quote["id"]
         assert inbox[0]["order"]["policy"]["hits"][0]["rule"] == "max_auto_total_eur"
@@ -80,7 +82,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 def test_streamable_http_transport(gateway):
     app = create_server(gateway).streamable_http_app(stateless_http=True, json_response=True)
     headers = {"Accept": "application/json, text/event-stream"}
-    with TestClient(app, base_url="http://localhost:8001") as client:
+    with TestClient(app, base_url="http://localhost:8001", headers=agent_headers("mcp-agent")) as client:
         initialized = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1"}}})
         assert initialized.status_code == 200
@@ -138,7 +140,7 @@ finally:
 
 
 def test_contract_all_routes_have_response_schema():
-    schema = create_app().openapi()
+    schema = create_app(keys=TEST_KEYS).openapi()
     assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/approvals", "/v1/approvals/{order_id}/approve",
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",

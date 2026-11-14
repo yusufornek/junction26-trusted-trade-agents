@@ -6,6 +6,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from conftest import OPERATOR_HEADERS
 from app.models import PolicyUpdateRequest, Quantity
 from conftest import quote_request
 
@@ -80,7 +81,7 @@ def test_ac_4_fill_up_preserves_low_fits_and_approval(gateway, upstream, shortli
     assert sum(o.fit >= 0.8 for o in result.offers) == 3
     assert all(o.fit == fits[o.product_id] for o in result.offers)
     quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=result.lookup_id))
-    order = gateway.orders.place_order(quote.id, "low-fit", "hotel-chain-agent")
+    order = gateway.orders.place_order(quote.id, "low-fit", "external")
     assert order.status == "PENDING_APPROVAL"
     assert "min_fit_probability" in {h.rule for h in order.policy.hits}
 
@@ -106,7 +107,7 @@ def test_ac_6_no_decisions_uses_catalog_order(gateway, upstream, shortlist):
 
 
 def test_ac_7_policy_live_max_validation_and_legacy_update(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         policy = client.get("/v1/policy").json()
         assert policy["shortlist"]["live_max"] == 25
         for value in (10, 40, 12):

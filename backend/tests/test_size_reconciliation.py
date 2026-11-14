@@ -5,6 +5,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, TEST_KEYS
 from conftest import quote_request
 
 
@@ -121,7 +122,7 @@ def test_size_ac6_price_error_keeps_unconfirmed_name(gateway, need, upstream):
 
 
 def test_size_ac7_policy_and_generated_contract(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         response = client.get("/v1/policy")
         assert response.status_code == 200
         policy = response.json()
@@ -129,7 +130,7 @@ def test_size_ac7_policy_and_generated_contract(gateway):
         assert "SIZE_MISMATCH" in policy["approval"]["warnings_need_approval"]
     contract = Path(__file__).resolve().parents[2] / "contracts/openapi.yaml"
     schema = yaml.safe_load(contract.read_text())
-    assert schema == create_app().openapi()
+    assert schema == create_app(keys=TEST_KEYS).openapi()
     field = schema["components"]["schemas"]["OfferCard"]["properties"]["size_confirmed_by_price"]
     assert field["type"] == "boolean" and field["default"] is False
     assert field["description"]

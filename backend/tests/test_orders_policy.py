@@ -32,9 +32,10 @@ def test_policy_all_hits(gateway, need, upstream, total, fit, warnings, violatio
     assert {h.rule for h in result.hits} == rules
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_idempotency_concurrent_retries_and_fixed_price(gateway, need, upstream):
-    quote = fitted_quote(gateway, need)
+    lookup = gateway.find_offers(need, actor="agent:buyer")
+    quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id), "buyer")
     upstream.price = 50
     with ThreadPoolExecutor(max_workers=4) as pool:
         orders = list(pool.map(lambda _: gateway.orders.place_order(quote.id, "same-key", "buyer"), range(4)))
@@ -45,7 +46,8 @@ def test_idempotency_concurrent_retries_and_fixed_price(gateway, need, upstream)
     assert len(upstream.availability_calls) == 3  # lookup, quote, one order
     assert len([a for a in gateway.audit() if a.action == "PLACE_ORDER"]) == 1
     with pytest.raises(DomainError, match="another quote or agent"):
-        gateway.orders.place_order(quote.id, "same-key", "different-agent")
+        another = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id), "buyer")
+        gateway.orders.place_order(another.id, "same-key", "buyer")
     with pytest.raises(DomainError) as error:
         gateway.orders.place_order(quote.id, "different-key", "buyer")
     assert error.value.code == "QUOTE_ALREADY_ACCEPTED"

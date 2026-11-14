@@ -88,7 +88,7 @@ class Policy:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
 
-    def update(self, request, *, reset=False):
+    def update(self, request, *, reset=False, actor=None):
         # Shared SQLite writer lock serializes policy updates across REST/MCP processes.
         replaced, previous = False, None
         try:
@@ -108,10 +108,10 @@ class Policy:
                     for field in ("required_claims", "exclude_allergens"):
                         customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
                 resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
-                audit.append(conn, f"human:{request.updated_by}", "POLICY_UPDATED",
+                audit.append(conn, actor or f"human:{request.updated_by}", "POLICY_UPDATED",
                              "Restored default policy." if reset else "Updated procurement policy.",
                              data={"diff": self._diff(before, after), "comment": getattr(request, "comment", None),
-                                   "reset": reset})
+                                   "reset": reset, "stated_name": request.updated_by})
                 self._replace(yaml.safe_dump(resource.model_dump(mode="json", exclude={"known_warning_codes"}), sort_keys=False))
                 replaced = True
         except BaseException:
@@ -144,6 +144,8 @@ class Policy:
 
     def check_customer(self, agent_id, customer_id, policy=None):
         mandate = (policy or self.get()).agents.get(agent_id)
+        if mandate is None:
+            raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; procurement requires a mandate", 403)
         if mandate is not None and customer_id not in mandate.customer_ids:
             raise DomainError("CUSTOMER_NOT_IN_MANDATE", f"Agent {agent_id} has no mandate for customer {customer_id}", 403)
 

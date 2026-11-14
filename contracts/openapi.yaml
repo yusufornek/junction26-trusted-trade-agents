@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Valio Aimo Trusted Trade Agents
-  description: MVP fixed-price gateway. REST and MCP share one core. Local quotes/orders
-    and one human approver role; development only, no authentication.
+  description: MVP fixed-price gateway. REST and MCP share one core. Bearer credentials
+    establish agent ownership and operator authority. Commitments are gateway-simulated.
   version: 0.1.0
 paths:
   /health:
@@ -16,6 +16,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
@@ -57,20 +63,12 @@ paths:
       summary: Rank live offers and substitutes; propose fulfilment plans with caller
         policy previews
       operationId: offers_v1_offers_post
-      parameters:
-      - name: x-agent-id
-        in: header
-        required: false
-        schema:
-          type: string
-          default: external
-          title: X-Agent-Id
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/NeedSpec'
+        required: true
       responses:
         '200':
           description: Successful Response
@@ -78,46 +76,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LookupResult'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '502':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Bad Gateway
-        '503':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
           description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/lookups/{lookup_id}:
     get:
       summary: Retrieve stored alternatives behind a quote's need_ref
       operationId: get_lookup_v1_lookups__lookup_id__get
+      security:
+      - BearerAuth: []
       parameters:
       - name: lookup_id
         in: path
@@ -132,6 +140,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LookupResult'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -179,6 +193,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PolicyResource'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
@@ -215,6 +235,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
     put:
       summary: Persist policy for subsequent operations and audit changed fields
       operationId: put_policy_v1_policy_put
@@ -231,6 +253,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PolicyResource'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
@@ -267,6 +295,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/policy/reset:
     post:
       summary: Restore committed policy defaults with a human audit event
@@ -284,6 +314,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PolicyResource'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
@@ -320,10 +356,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/stats:
     get:
       summary: Operator metrics from persisted evidence; no upstream calls
       operationId: stats_v1_stats_get
+      security:
+      - BearerAuth: []
       parameters:
       - name: since
         in: query
@@ -341,6 +381,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Stats'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -381,6 +427,8 @@ paths:
     get:
       summary: Product
       operationId: product_v1_products__id__get
+      security:
+      - BearerAuth: []
       parameters:
       - name: id
         in: path
@@ -395,6 +443,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Product'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -434,23 +488,15 @@ paths:
   /v1/quotes:
     post:
       summary: Recheck selected lines or a plan_ref live and lock fixed prices
-      description: Quotes and lookups are open to unregistered agents. Ordering requires
-        a mandate.
+      description: Lookup, quote and order require a customer mandate and enforce
+        agent ownership.
       operationId: create_quote_v1_quotes_post
-      parameters:
-      - name: x-agent-id
-        in: header
-        required: false
-        schema:
-          type: string
-          default: external
-          title: X-Agent-Id
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/QuoteRequest'
+        required: true
       responses:
         '200':
           description: Successful Response
@@ -458,46 +504,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quote'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '502':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
           description: Bad Gateway
-        '503':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
           description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/quotes/{id}:
     get:
       summary: Get Quote
       operationId: get_quote_v1_quotes__id__get
+      security:
+      - BearerAuth: []
       parameters:
       - name: id
         in: path
@@ -512,6 +568,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quote'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -555,6 +617,8 @@ paths:
         with no order or reservation created. Existing idempotent orders are returned
         on retry. Registered agents are subject to policy and may require human approval.'
       operationId: place_order_v1_orders_post
+      security:
+      - BearerAuth: []
       parameters:
       - name: idempotency-key
         in: header
@@ -565,13 +629,6 @@ paths:
           description: 'Retry key: same quote and agent returns the same order.'
           title: Idempotency-Key
         description: 'Retry key: same quote and agent returns the same order.'
-      - name: x-agent-id
-        in: header
-        required: false
-        schema:
-          type: string
-          default: external
-          title: X-Agent-Id
       requestBody:
         required: true
         content:
@@ -585,6 +642,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -624,6 +687,8 @@ paths:
     get:
       summary: Orders
       operationId: orders_v1_orders_get
+      security:
+      - BearerAuth: []
       responses:
         '200':
           description: Successful Response
@@ -634,6 +699,12 @@ paths:
                 items:
                   $ref: '#/components/schemas/Order'
                 title: Response Orders V1 Orders Get
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -674,6 +745,8 @@ paths:
     get:
       summary: Get Order
       operationId: get_order_v1_orders__id__get
+      security:
+      - BearerAuth: []
       parameters:
       - name: id
         in: path
@@ -688,6 +761,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -729,6 +808,8 @@ paths:
       summary: Read the full lookup-to-order audit story and call totals without upstream
         requests
       operationId: order_timeline_v1_orders__order_id__timeline_get
+      security:
+      - BearerAuth: []
       parameters:
       - name: order_id
         in: path
@@ -743,6 +824,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OrderTimeline'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -784,6 +871,8 @@ paths:
       summary: Cancel a confirmed order before every known cutoff; fixed prices remain
         unchanged
       operationId: cancel_order_v1_orders__order_id__cancel_post
+      security:
+      - BearerAuth: []
       parameters:
       - name: order_id
         in: path
@@ -804,6 +893,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -854,6 +949,12 @@ paths:
                   $ref: '#/components/schemas/ApprovalItem'
                 type: array
                 title: Response Approvals V1 Approvals Get
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
@@ -890,6 +991,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - BearerAuth: []
   /v1/approvals/{order_id}/approve:
     post:
       summary: Approve
@@ -901,6 +1004,8 @@ paths:
         revoked mandate returns 403 AGENT_NOT_REGISTERED with rule hits in data; the
         order remains pending and can be rejected.
       operationId: approve_v1_approvals__order_id__approve_post
+      security:
+      - BearerAuth: []
       parameters:
       - name: order_id
         in: path
@@ -921,6 +1026,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -961,6 +1072,8 @@ paths:
     post:
       summary: Reject
       operationId: reject_v1_approvals__order_id__reject_post
+      security:
+      - BearerAuth: []
       parameters:
       - name: order_id
         in: path
@@ -981,6 +1094,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -1021,6 +1140,8 @@ paths:
     get:
       summary: Audit
       operationId: audit_v1_audit_get
+      security:
+      - BearerAuth: []
       parameters:
       - name: order_id
         in: query
@@ -1048,6 +1169,12 @@ paths:
                 items:
                   $ref: '#/components/schemas/AuditEntry'
                 title: Response Audit V1 Audit Get
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unauthorized
         '403':
           content:
             application/json:
@@ -1528,6 +1655,12 @@ components:
       title: LiveCalls
     LookupResult:
       properties:
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+          description: Creating agent; legacy unowned records are operator-only.
         lookup_id:
           type: string
           title: Lookup Id
@@ -2413,6 +2546,12 @@ components:
         id:
           type: string
           title: Id
+        agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Id
+          description: Creating agent; legacy unowned records are operator-only.
         customer_id:
           type: string
           title: Customer Id
@@ -2836,3 +2975,8 @@ components:
       - code
       - count
       title: WarningCount
+  securitySchemes:
+    BearerAuth:
+      type: http
+      description: Operator-issued agent key or operator token.
+      scheme: bearer

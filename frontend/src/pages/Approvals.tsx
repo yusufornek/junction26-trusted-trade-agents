@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, useAsync, when } from "../ui";
 
 export default function Approvals() {
@@ -10,15 +10,20 @@ export default function Approvals() {
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);
 
-  const act = async (orderId: string, kind: "approve" | "reject") => {
+  const act = async (orderId: string, revision: number, kind: "approve" | "reject") => {
     setBusy(orderId + kind);
     setActionError(null);
     try {
-      await (kind === "approve" ? api.approve : api.reject)(orderId, approver, comment || `${kind}d in console`);
+      if (kind === "approve") {
+        await api.approve(orderId, approver, comment || "Approved in console", revision);
+      } else {
+        await api.reject(orderId, approver, comment || "Rejected in console");
+      }
       setComment("");
       reload();
     } catch (e) {
       setActionError(e);
+      if (e instanceof ApiError && e.code === "EVIDENCE_CHANGED") await reload();
     } finally {
       setBusy(null);
     }
@@ -47,6 +52,14 @@ export default function Approvals() {
       </Card>
 
       {actionError ? <ErrorNote error={actionError} /> : null}
+      {actionError instanceof ApiError && actionError.code === "EVIDENCE_CHANGED" ? (
+        <Card>
+          <p className="text-[13px] font-medium">Evidence changed. Review the refreshed order before approving again.</p>
+          <ul className="mt-2 list-disc pl-5 text-[13px] text-ink-muted">
+            {actionError.data?.changes?.map((change, index) => <li key={index}>{change}</li>)}
+          </ul>
+        </Card>
+      ) : null}
 
       {!data?.length ? (
         <Card>
@@ -105,14 +118,14 @@ export default function Approvals() {
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
               <button
                 className="btn-dark"
-                onClick={() => act(order.id, "approve")}
+                onClick={() => act(order.id, order.evidence_revision, "approve")}
                 disabled={busy === order.id + "approve"}
               >
                 {busy === order.id + "approve" ? "Approving…" : `Approve ${eur(order.total, order.currency)}`}
               </button>
               <button
                 className="btn-danger"
-                onClick={() => act(order.id, "reject")}
+                onClick={() => act(order.id, order.evidence_revision, "reject")}
                 disabled={busy === order.id + "reject"}
               >
                 Reject

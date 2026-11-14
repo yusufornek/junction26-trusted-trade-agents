@@ -13,8 +13,9 @@ several small ones. A mandate says, per agent, on whose behalf it buys and how m
   limit is the lower of this and `approval.max_auto_total_eur`), `max_auto_daily_total_eur` (cumulative, see R-3)
   and `note` (free text, who granted it). Defaults in `backend/policy.yaml` register `hotel-chain-agent` and
   `web-console` (the operator console's own buyer flow) for customer `"1"` with a daily limit of 5,000 EUR.
-- **R-2 Ordering requires a mandate** (team decision 2026-11-14): an agent without a mandate can look up offers
-  and get quotes. `place_order` from such an agent answers `403 AGENT_NOT_REGISTERED`, creates no order and no
+- **R-2 Ordering requires a mandate** (team decision 2026-11-14; tightened by spec 19: an authenticated agent
+  without a mandate answers `403 AGENT_NOT_REGISTERED` on lookup, quote and order, a missing credential answers
+  `401`). Before spec 19 an agent without a mandate could look up offers and get quotes. `place_order` from such an agent answers `403 AGENT_NOT_REGISTERED`, creates no order and no
   reservation, and is audited as a failed attempt under `agent:<id>`. Policy previews (`plans[].policy_preview`)
   for such an agent show outcome `REJECTED` with rule hit `unregistered_agent`, so the agent learns it before
   quoting. An idempotent retry of an order that already exists returns that order. A pending order whose agent

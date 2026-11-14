@@ -9,12 +9,19 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, agent_headers
 from app.mcp_server import create_server
 from app.models import PolicyUpdateRequest, Quantity
 from app.service import Gateway
 from conftest import quote_request
 
 AGENT = "hotel-chain-agent"
+
+
+@pytest.fixture
+def registered_agents():
+    # This module verifies the actual committed mandate inventory.
+    return ()
 
 
 @pytest.fixture
@@ -49,40 +56,40 @@ def test_ac_1_registered_agent_within_limits_confirms(gateway, need, upstream):
     assert order.policy.hits == []
 
 
-def test_ac_2_unregistered_agent_cannot_order_but_can_lookup_and_quote(gateway, need, upstream):
+def test_ac_2_unregistered_agent_cannot_lookup_quote_or_order(gateway, need, upstream):
     upstream.price = 14
     upstream.model, upstream.amount = "Stock", 1000
+    # Provision a quote before revocation so placement exercises the owner's mandate check.
+    set_mandate(gateway, agent="external")
+    lookup = gateway.find_offers(need, actor="agent:external")
+    request = quote_request(need, qty=100, need_ref=lookup.lookup_id)
+    quote = gateway.orders.create_quote(request, "external")
+    policy = gateway.policy.get().model_dump(mode="json")
+    del policy["agents"]["external"]
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Ada"))
+    calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
     with TestClient(create_app(gateway)) as client:
-        # REST defaults to external; lookups and quotes remain open.
-        lookup_response = client.post("/v1/offers", json=need.model_dump(mode="json"))
-        assert lookup_response.status_code == 200
-        lookup = lookup_response.json()
-        assert lookup["plans"]
-        for plan in lookup["plans"]:
-            assert plan["policy_preview"]["outcome"] == "REJECTED"
-            assert "unregistered_agent" in [h["rule"] for h in plan["policy_preview"]["hits"]]
-        quote_response = client.post("/v1/quotes", json=quote_request(
-            need, qty=100, need_ref=lookup["lookup_id"]).model_dump(mode="json"))
-        assert quote_response.status_code == 200
-        quote = quote_response.json()
-        calls = len(upstream.price_calls), len(upstream.availability_calls)
-        response = client.post("/v1/orders", json={"quote_id": quote["id"]},
-                               headers={"Idempotency-Key": "external"})
-        assert response.status_code == 403 and response.json()["code"] == "AGENT_NOT_REGISTERED"
-        assert calls == (len(upstream.price_calls), len(upstream.availability_calls))
-        assert gateway.orders.get_quote(quote["id"]).status == "OPEN"
+        for headers, status, code in (({}, 401, "UNAUTHENTICATED"),
+                                       (agent_headers("external"), 403, "AGENT_NOT_REGISTERED")):
+            for path, body in (("/v1/offers", need.model_dump(mode="json")),
+                               ("/v1/quotes", request.model_dump(mode="json")),
+                               ("/v1/orders", {"quote_id": quote.id})):
+                response = client.post(path, json=body, headers={**headers, "Idempotency-Key": "external"})
+                assert response.status_code == status and response.json()["code"] == code
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
+        assert gateway.orders.get_quote(quote.id).status == "OPEN"
         with gateway.db.connect() as conn:
             assert conn.execute("SELECT count(*) FROM orders").fetchone()[0] == 0
             assert conn.execute("SELECT count(*) FROM reservations").fetchone()[0] == 0
         event = gateway.audit()[-1]
         assert event.action == "PLACE_ORDER_FAILED" and event.actor == "agent:external"
-        assert event.quote_id == quote["id"] and event.data["error"] == "AGENT_NOT_REGISTERED"
+        assert event.quote_id == quote.id and event.data["error"] == "AGENT_NOT_REGISTERED"
         assert "ordering requires a mandate" in event.summary
-        assert client.get("/v1/stats").json()["agents_seen"] == [
+        assert client.get("/v1/stats", headers=OPERATOR_HEADERS).json()["agents_seen"] == [
             {"actor": "agent:external", "order_count": 0, "registered": False}]
-        client.post("/v1/offers", json=need.model_dump(mode="json"), headers={"X-Agent-Id": "web-console"})
+        client.post("/v1/offers", json=need.model_dump(mode="json"), headers={**agent_headers("web-console")})
         assert gateway.audit()[-1].actor == "agent:web-console"
-        stats = client.get("/v1/stats").json()
+        stats = client.get("/v1/stats", headers=OPERATOR_HEADERS).json()
         assert {entry["actor"]: entry["registered"] for entry in stats["agents_seen"]} == {
             "agent:web-console": True, "agent:external": False}
 
@@ -168,25 +175,31 @@ def test_ac_6_effective_per_order_limit_reports_source(gateway, need, upstream):
 
 def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need, upstream):
     other_need = need.model_copy(update={"customer_id": "2"})
-    lookup = gateway.find_offers(other_need)
-    with TestClient(create_app(gateway)) as client:
-        request = quote_request(other_need, qty=1, need_ref=lookup.lookup_id).model_dump(mode="json")
+    # Create owned evidence while authorised, then revoke that customer's scope.
+    policy = gateway.policy.get().model_dump(mode="json")
+    policy["agents"][AGENT]["customer_ids"] = ["1", "2"]
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Ada"))
+    lookup = gateway.find_offers(other_need, actor=f"agent:{AGENT}")
+    request = quote_request(other_need, qty=1, need_ref=lookup.lookup_id).model_dump(mode="json")
+    quote = gateway.orders.create_quote(quote_request(other_need, qty=1, need_ref=lookup.lookup_id), AGENT)
+    policy["agents"][AGENT]["customer_ids"] = ["1"]
+    gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Ada"))
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         calls = len(upstream.price_calls), len(upstream.availability_calls)
-        denied = client.post("/v1/quotes", json=request, headers={"X-Agent-Id": AGENT})
+        denied = client.post("/v1/quotes", json=request, headers={**agent_headers(AGENT)})
         assert denied.status_code == 403 and denied.json()["code"] == "CUSTOMER_NOT_IN_MANDATE"
         assert calls == (len(upstream.price_calls), len(upstream.availability_calls))
         event = gateway.audit()[-1]
         assert event.action == "CREATE_QUOTE_FAILED" and event.actor == f"agent:{AGENT}"
         assert event.data["error"] == "CUSTOMER_NOT_IN_MANDATE"
-        # Creating the quote as an unregistered caller cannot bypass placement scope.
-        quote = client.post("/v1/quotes", json=request).json()
-        denied = client.post("/v1/orders", json={"quote_id": quote["id"]}, headers={
-            "X-Agent-Id": AGENT, "Idempotency-Key": "scope"})
+        denied = client.post("/v1/orders", json={"quote_id": quote.id}, headers={
+            **agent_headers(AGENT), "Idempotency-Key": "scope"})
         assert denied.status_code == 403 and denied.json()["code"] == "CUSTOMER_NOT_IN_MANDATE"
         event = gateway.audit()[-1]
-        assert event.action == "PLACE_ORDER_FAILED" and event.quote_id == quote["id"]
+        assert event.action == "PLACE_ORDER_FAILED" and event.quote_id == quote.id
         assert event.data["error"] == "CUSTOMER_NOT_IN_MANDATE"
-        assert gateway.orders.get_quote(quote["id"]).status == "OPEN"
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls))
+        assert gateway.orders.get_quote(quote.id).status == "OPEN"
         assert gateway.orders.list_orders() == []
         # Revoking scope after quote creation also takes effect at placement.
         quote = fitted_quote(gateway, need)
@@ -194,11 +207,11 @@ def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need,
         body["agents"][AGENT]["customer_ids"] = ["2"]
         gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
         assert client.post("/v1/orders", json={"quote_id": quote.id}, headers={
-            "X-Agent-Id": AGENT, "Idempotency-Key": "revoked"}).status_code == 403
+            **agent_headers(AGENT), "Idempotency-Key": "revoked"}).status_code == 403
 
 
 def test_ac_8_policy_merges_legacy_fields_validates_and_audits_mandates(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = client.get("/v1/policy").json()
         body["agents"][AGENT]["max_auto_daily_total_eur"] = 2500
         body["shortlist"]["live_max"] = 12
@@ -253,29 +266,36 @@ def test_ac_9_mcp_uses_fixed_server_identity_for_mandate(gateway, need, upstream
     unregistered = create_server(gateway, agent_id="outsider")
 
     async def run():
-        for server, identity, expected in ((registered, AGENT, "CONFIRMED"),
-                                           (unregistered, "outsider", "AGENT_NOT_REGISTERED")):
+        for server in (registered, unregistered):
             tools = await server.list_tools()
             assert all("agent_id" not in t.input_schema["properties"] for t in tools)
             assert "unregistered" in next(t.description for t in tools if t.name == "place_order").lower()
-            offers = await server.call_tool("find_offers", {"need": need.model_dump(mode="json")})
-            assert not offers.is_error
-            assert gateway.audit()[-1].actor == f"agent:{identity}"
-            quote = await server.call_tool("create_quote", {"customer_id": "1", "deliver_by": str(need.deliver_by),
-                "need_ref": offers.structured_content["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
-            assert not quote.is_error
-            args = {"quote_id": quote.structured_content["id"], "idempotency_key": identity}
-            if expected == "AGENT_NOT_REGISTERED":
-                with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
-                    await server.call_tool("place_order", args)
-                event = gateway.audit()[-1]
-                assert event.action == "PLACE_ORDER_FAILED" and event.actor == f"agent:{identity}"
-                assert event.data["error"] == "AGENT_NOT_REGISTERED"
-            else:
-                placed = await server.call_tool("place_order", args)
-                assert not placed.is_error
-                assert placed.structured_content["agent_id"] == identity
-                assert placed.structured_content["status"] == expected
+
+        offers = await registered.call_tool("find_offers", {"need": need.model_dump(mode="json")})
+        assert not offers.is_error
+        assert gateway.audit()[-1].actor == f"agent:{AGENT}"
+        quote = await registered.call_tool("create_quote", {"customer_id": "1", "deliver_by": str(need.deliver_by),
+            "need_ref": offers.structured_content["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
+        assert not quote.is_error
+        placed = await registered.call_tool("place_order", {
+            "quote_id": quote.structured_content["id"], "idempotency_key": AGENT})
+        assert not placed.is_error
+        assert placed.structured_content["agent_id"] == AGENT
+        assert placed.structured_content["status"] == "CONFIRMED"
+
+        calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+        for tool, action, args in (
+            ("find_offers", "LOOKUP_FAILED", {"need": need.model_dump(mode="json")}),
+            ("create_quote", "CREATE_QUOTE_FAILED", {"customer_id": "1", "deliver_by": str(need.deliver_by),
+                "need_ref": offers.structured_content["lookup_id"], "lines": [{"product_id": "1", "quantity_sales_units": 1}]}),
+            ("place_order", "PLACE_ORDER_FAILED", {"quote_id": quote.structured_content["id"], "idempotency_key": "outsider"}),
+        ):
+            with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
+                await unregistered.call_tool(tool, args)
+            event = gateway.audit()[-1]
+            assert event.action == action and event.actor == "agent:outsider"
+            assert event.data["error"] == "AGENT_NOT_REGISTERED"
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
         with pytest.raises(ToolError, match="CUSTOMER_NOT_IN_MANDATE"):
             await registered.call_tool("create_quote", {"customer_id": "2", "deliver_by": str(need.deliver_by),
                 "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
@@ -293,14 +313,14 @@ def test_ac_11_revoked_mandate_blocks_approval_but_allows_replay_and_rejection(g
         reservations = [tuple(row) for row in conn.execute("SELECT * FROM reservations")]
     assert reservations == [(order.id, "1", 100)]
 
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = gateway.policy.get().model_dump(mode="json")
         del body["agents"][AGENT]
         assert client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"}).status_code == 200
         # Placement replays still return the existing order after the mandate is removed.
         calls = len(upstream.availability_calls)
         replay = client.post("/v1/orders", json={"quote_id": order.quote_id}, headers={
-            "Idempotency-Key": "revoke-pending", "X-Agent-Id": AGENT})
+            "Idempotency-Key": "revoke-pending", **agent_headers(AGENT)})
         assert replay.status_code == 200 and replay.json()["id"] == order.id
         assert len(upstream.availability_calls) == calls
 

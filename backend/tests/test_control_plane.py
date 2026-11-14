@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS
 from app.lookup import WARNING_TEXT
 from app.models import PolicyDocument
 from app.service import Gateway
@@ -18,7 +19,7 @@ def editable(resource):
 
 
 def test_lookup_fetch_and_not_found(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         result = client.post("/v1/offers", json=need.model_dump(mode="json")).json()
         calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
         assert client.get(f"/v1/lookups/{result['lookup_id']}").json() == result
@@ -31,7 +32,7 @@ def test_lookup_fetch_and_not_found(gateway, need, upstream):
 @pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
     defaults_bytes = gateway.settings.policy_path.read_bytes()
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         defaults = client.get("/v1/policy").json()
         assert defaults["approval"]["max_auto_total_eur"] == 1500
         assert defaults["shortlist"]["catalog_pool"] == 40
@@ -53,9 +54,9 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
             assert peer.policy.get().approval.max_auto_total_eur == 10
             assert gateway.orders.place_order(second_quote.id, "after").status == "PENDING_APPROVAL"
             event = [e for e in gateway.audit() if e.action == "POLICY_UPDATED"][-1]
-            assert event.actor == "human:Ada"
+            assert event.actor == "human:operator"
             assert event.data == {"diff": {"approval.max_auto_total_eur": {"before": 1500, "after": 10}},
-                                  "comment": "Lower budget", "reset": False}
+                                  "comment": "Lower budget", "reset": False, "stated_name": "Ada"}
             assert gateway.policy.runtime_path == gateway.settings.db_path.parent / "policy.yaml"
             assert gateway.policy.runtime_path.is_file()
             reloaded = Gateway(gateway.settings)
@@ -69,7 +70,8 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
             assert reset.json()["updated_by"] == "Grace"
             assert peer.policy.get().approval.max_auto_total_eur == 1500
             reset_event = [e for e in gateway.audit() if e.action == "POLICY_UPDATED"][-1]
-            assert reset_event.actor == "human:Grace"
+            assert reset_event.actor == "human:operator"
+            assert reset_event.data["stated_name"] == "Grace"
             assert reset_event.data["diff"] == {"approval.max_auto_total_eur": {"before": 10, "after": 1500}}
             assert reset_event.data["reset"] is True
             assert gateway.orders.place_order(gateway.orders.create_quote(request).id, "reset").status == "CONFIRMED"
@@ -90,7 +92,7 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
     ("reject", "on", ["TYPO"], "Unknown warning codes: TYPO"),
 ])
 def test_policy_validation_no_side_effects(gateway, section, field, value, message):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         before = client.get("/v1/policy").json()
         body = editable(before)
         body[section][field] = value
@@ -104,7 +106,7 @@ def test_policy_validation_no_side_effects(gateway, section, field, value, messa
 
 
 def test_policy_zero_weights_and_blank_human(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = editable(client.get("/v1/policy").json())
         for key in body["ranking_weights"]:
             body["ranking_weights"][key] = 0
@@ -120,7 +122,7 @@ def test_policy_zero_weights_and_blank_human(gateway):
 
 
 def test_policy_applies_shortlist_and_ranking(gateway, need, upstream, monkeypatch):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = editable(client.get("/v1/policy").json())
         body["shortlist"]["catalog_pool"] = 10
         body["ranking_weights"] = {key: int(key == "reliability") for key in body["ranking_weights"]}
@@ -141,9 +143,9 @@ def test_policy_applies_shortlist_and_ranking(gateway, need, upstream, monkeypat
     assert all(o.score == .97 for o in result.offers[1:])  # Missing reliability uses the global median.
 
 
-@pytest.mark.parametrize("registered_agents", [("hotel",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("hotel", "observer")], indirect=True)
 def test_stats_small_flow_and_since(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         empty = client.get("/v1/stats").json()
         assert empty["lookups"] == 0
         assert empty["average_live_calls_per_lookup"] == {"price": 0, "availability": 0}
@@ -158,6 +160,11 @@ def test_stats_small_flow_and_since(gateway, need, upstream):
         gateway.orders.approve(pending.id, "Ada")
         # Seen agents need not have placed an order. Cached calls still count as zero actual calls.
         second_lookup = gateway.find_offers(need, "agent:observer")
+        # Revoke after lookup: the global view still reports historical, now-unregistered identities.
+        from app.models import PolicyUpdateRequest
+        body = gateway.policy.get().model_dump(mode="json")
+        del body["agents"]["observer"]
+        gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Fixture"))
         calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
         stats = client.get("/v1/stats").json()
         assert stats["lookups"] == 2
@@ -198,7 +205,7 @@ def test_stats_rejections_legacy_placements_and_timezone(gateway, need, upstream
     with gateway.db.connect(write=True) as conn:
         audit.append(conn, "agent:legacy", "PLACE_ORDER", "Order CONFIRMED at the locked total of 13.00 EUR.",
                      data={"rule_hits": []})
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         stats = client.get("/v1/stats").json()
         assert stats["orders_by_status"]["REJECTED"] == 2
         assert stats["placement_outcomes"] == {"CONFIRMED": 1, "PENDING_APPROVAL": 1, "REJECTED": 1}
@@ -227,7 +234,7 @@ def test_stats_top_five_warnings_and_rules(gateway, need, upstream, respx_mock):
     quote = gateway.orders.create_quote(quote_request(need, qty=200, need_ref=lookup.lookup_id))
     order = gateway.orders.place_order(quote.id, "many-rules")
     assert len(order.policy.hits) > 5
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         stats = client.get("/v1/stats").json()
     assert stats["top_warning_codes"] == [{"code": k, "count": v} for k, v in sorted(warnings.items(), key=lambda x: (-x[1], x[0]))[:5]]
     hits = Counter(h.rule for h in order.policy.hits)
@@ -235,7 +242,7 @@ def test_stats_top_five_warnings_and_rules(gateway, need, upstream, respx_mock):
 
 
 def test_policy_persistence_failure_rolls_back_audit(gateway, monkeypatch):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         before = client.get("/v1/policy").json()
         body = editable(before)
         body["approval"]["max_auto_total_eur"] = 10

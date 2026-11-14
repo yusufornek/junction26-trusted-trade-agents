@@ -11,6 +11,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, TEST_KEYS, agent_headers
 from app.mcp_server import create_server
 from app.models import QuoteLineRequest
 from conftest import quote_request
@@ -18,12 +19,12 @@ from conftest import quote_request
 
 @pytest.fixture
 def client(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         yield client
 
 
 def place_order(gateway, need, *, qty=6, product_ids=("1",), agent_id="buyer"):
-    lookup = gateway.find_offers(need)
+    lookup = gateway.find_offers(need, actor=f"agent:{agent_id}")
     request = quote_request(need, qty=qty, need_ref=lookup.lookup_id)
     request.lines = [QuoteLineRequest(product_id=pid, quantity_sales_units=qty) for pid in product_ids]
     quote = gateway.orders.create_quote(request, agent_id=agent_id)
@@ -35,7 +36,7 @@ def call_counts(upstream):
 
 
 @pytest.mark.parametrize("reason", [None, "Agent selected the wrong product"])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac1_human_confirmed_order(client, gateway, need, upstream, reason):
     order = place_order(gateway, need)
     assert order.status == "CONFIRMED"
@@ -57,7 +58,7 @@ def test_cancel_ac1_human_confirmed_order(client, gateway, need, upstream, reaso
 
 
 @pytest.mark.parametrize("missing_ids", [{"1"}, {"1", "4"}])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac1_missing_cutoffs_do_not_block(client, gateway, need, upstream, respx_mock, missing_ids):
     def availability_response(request):
         body = upstream.availability_response(request).json()
@@ -74,7 +75,7 @@ def test_cancel_ac1_missing_cutoffs_do_not_block(client, gateway, need, upstream
     assert client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Ada"}).status_code == 200
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac2_stock_reservation_released(client, gateway, need, upstream):
     upstream.model, upstream.amount = "Stock", 10
     order = place_order(gateway, need, product_ids=("1", "4"))
@@ -89,7 +90,7 @@ def test_cancel_ac2_stock_reservation_released(client, gateway, need, upstream):
 
 
 @pytest.mark.parametrize("seconds_after", [0, 1])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac3_cutoff_passed(client, gateway, need, upstream, respx_mock, monkeypatch, seconds_after):
     # Only the second line has reached its cutoff; checking just the first is insufficient.
     first_cutoff = upstream.cutoff + timedelta(hours=1)
@@ -117,7 +118,7 @@ def test_cancel_ac3_cutoff_passed(client, gateway, need, upstream, respx_mock, m
 
 
 @pytest.mark.parametrize("status", ["PENDING_APPROVAL", "REJECTED", "EXPIRED", "CANCELLED"])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac4_invalid_transition(client, gateway, need, upstream, monkeypatch, status):
     order = place_order(gateway, need, qty=200 if status != "CANCELLED" else 6)
     if status == "REJECTED":
@@ -145,7 +146,7 @@ def test_cancel_ac5_unknown_order(client, gateway):
 
 
 @pytest.mark.parametrize("body", [{"cancelled_by": ""}, {"cancelled_by": " \t\n "}, {}, {"cancelled_by": None}])
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     order = place_order(gateway, need)
     response = client.post(f"/v1/orders/{order.id}/cancel", json=body)
@@ -156,18 +157,20 @@ def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     assert event.action == "CANCEL_FAILED"
     assert event.quote_id == order.quote_id
     assert event.data["error"] == "VALIDATION_ERROR"
-    # The actor is normalised, never raw input ("human:None", unstripped names, objects).
+    # Credentials establish the actor; invalid typed names stay in normalised audit data.
     name = body.get("cancelled_by") if isinstance(body, dict) else None
     expected = name.strip() if isinstance(name, str) and name.strip() else "unknown"
-    assert event.actor == f"human:{expected}"
+    assert event.actor == "human:operator"
+    assert event.data["stated_name"] == expected
     assert event.data["inputs"]["order_id"] == order.id
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, monkeypatch):
     order = place_order(gateway, need)
     body = {"cancelled_by": "Ada", "reason": "Wrong product"}
     assert client.post(f"/v1/orders/{order.id}/cancel", json=body).status_code == 200
+    assert gateway.orders.get_order(order.id).cancelled_by == "Ada"
     assert client.post(f"/v1/orders/{order.id}/cancel", json=body).status_code == 409
     events = client.get("/v1/audit", params={"order_id": order.id}).json()
     success = [e for e in events if e["action"] == "CANCEL"]
@@ -177,7 +180,8 @@ def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, m
     assert failed[0]["data"]["error"] == "INVALID_TRANSITION"
     assert failed[0]["data"]["inputs"]["reason"] == "Wrong product"
     for event in success + failed:
-        assert event["actor"] == "human:Ada"
+        assert event["actor"] == "human:operator"
+        assert event["data"]["stated_name"] == "Ada"
         assert event["order_id"] == order.id
         assert event["quote_id"] == order.quote_id
         assert event["data"]["live_calls"] == {"price": 0, "availability": 0}
@@ -191,12 +195,12 @@ def test_cancel_ac7_success_and_failure_audit(client, gateway, need, upstream, m
     assert event["quote_id"] == other.quote_id
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
     owner = create_server(gateway, agent_id="buyer")
     other = create_server(gateway, agent_id="other")
-    lookup = gateway.find_offers(need)
-    quote = gateway.orders.create_quote(quote_request(need, qty=6, need_ref=lookup.lookup_id))
+    lookup = gateway.find_offers(need, actor="agent:buyer")
+    quote = gateway.orders.create_quote(quote_request(need, qty=6, need_ref=lookup.lookup_id), "buyer")
 
     async def run():
         tools = await owner.list_tools()
@@ -208,12 +212,12 @@ def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
         before = gateway.orders.get_order(order_id)
         assert before.agent_id == "buyer" and before.status == "CONFIRMED"
         before_calls = call_counts(upstream)
-        with pytest.raises(ToolError, match="NOT_ORDER_OWNER"):
+        with pytest.raises(ToolError, match="ORDER_NOT_FOUND"):
             await other.call_tool("cancel_order", {"order_id": order_id, "reason": "Not mine"})
         assert gateway.orders.get_order(order_id) == before
         failed = gateway.audit(order_id=order_id)[-1]
         assert failed.action == "CANCEL_FAILED" and failed.actor == "agent:other"
-        assert failed.data["error"] == "NOT_ORDER_OWNER" and failed.quote_id == quote.id
+        assert failed.data["error"] == "ORDER_NOT_FOUND" and failed.quote_id == quote.id
         cancelled = await owner.call_tool("cancel_order", {"order_id": order_id, "reason": "Buyer correction"})
         assert not cancelled.is_error
         assert cancelled.structured_content["status"] == "CANCELLED"
@@ -229,23 +233,23 @@ def test_cancel_ac8_mcp_owner_and_other_agent(gateway, need, upstream):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac8_mcp_transport_exposes_owner_error(gateway, need, upstream):
     order = place_order(gateway, need)
     server = create_server(gateway, agent_id="other")
     app = server.streamable_http_app(stateless_http=True, json_response=True)
-    with TestClient(app, base_url="http://localhost:8001") as client:
+    with TestClient(app, base_url="http://localhost:8001", headers=agent_headers("other")) as client:
         response = client.post("/mcp", headers={"Accept": "application/json, text/event-stream"},
                                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
                                    "name": "cancel_order", "arguments": {"order_id": order.id, "reason": "Not mine"}}})
         assert response.status_code == 200
         result = response.json()["result"]
         assert result["isError"]
-        assert "NOT_ORDER_OWNER" in result["content"][0]["text"]
+        assert "ORDER_NOT_FOUND" in result["content"][0]["text"]
     assert gateway.orders.get_order(order.id) == order
 
 
-@pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
+@pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac9_stats_exclude_cancelled_spend(client, gateway, need, upstream):
     order = place_order(gateway, need)
     retained = place_order(gateway, need)
@@ -263,7 +267,7 @@ def test_cancel_ac9_stats_exclude_cancelled_spend(client, gateway, need, upstrea
 def test_cancel_ac10_generated_openapi_contract():
     contract = Path(__file__).resolve().parents[2] / "contracts/openapi.yaml"
     schema = yaml.safe_load(contract.read_text())
-    assert schema == create_app().openapi()
+    assert schema == create_app(keys=TEST_KEYS).openapi()
     operation = schema["paths"]["/v1/orders/{order_id}/cancel"]["post"]
     assert operation["requestBody"]["required"]
     assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/CancelRequest"

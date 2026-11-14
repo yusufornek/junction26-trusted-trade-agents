@@ -29,5 +29,22 @@ change or extend.
 | 19 | [Authentication](19-authentication.md) | Credentials for agents and the operator; object ownership | in progress |
 | 20 | [Total-cost ranking](20-total-cost-ranking.md) | Offers ranked by what the packs needed cost, overbuy shown | built |
 | 21 | [Audit anchoring](21-audit-anchoring.md) | Head hash of the audit chain written to Polygon | in progress |
+| 22 | [Shared foundation: one procurement state machine](22-shared-foundation.md) | Shared foundation: one procurement state machine | in progress |
+| 23 | [Machine-readable recovery contract](23-recovery-contract.md) | Machine-readable recovery contract | in progress |
+| 24 | [Per-agent rate limits](24-rate-limits.md) | Per-agent rate limits | in progress |
+| 25 | [Supplier adapters and a second supplier](25-supplier-adapters.md) | Supplier adapters and a second supplier | in progress |
+| 26 | [Deterministic developer sandbox](26-sandbox.md) | Deterministic developer sandbox | in progress |
+| 27 | [OpenTelemetry traces and metrics](27-opentelemetry.md) | OpenTelemetry traces and metrics | in progress |
+| 28 | [Buyer-side view](28-buyer-view.md) | Buyer-side view | in progress |
+| 29 | [Downloadable transaction evidence](29-evidence-bundle.md) | Downloadable transaction evidence | in progress |
+| 30 | [Exception journey: the agent waits, resumes and takes its receipt](30-exception-journey.md) | Exception journey: the agent waits, resumes and takes its receipt | in progress |
+| 31 | [Allergen-safe substitution for a hospital kitchen](31-hospital-substitution.md) | Allergen-safe substitution for a hospital kitchen | in progress |
+| 32 | [Recipe to order: ingredient baskets](32-basket-recipe.md) | Recipe to order: ingredient baskets | in progress |
+| 33 | [Signed webhooks and approver notifications](33-webhooks.md) | Signed webhooks and approver notifications | in progress |
+| 34 | [A2A service next to MCP](34-a2a-service.md) | A2A service next to MCP | in progress |
+| 35 | [Recurring orders with drift detection](35-recurring-drift.md) | Recurring orders with drift detection | in progress |
+| 36 | [Proactive supplier proposals](36-supplier-proposals.md) | Proactive supplier proposals | in progress |
+| 37 | [MCP server card and discovery](37-mcp-server-card.md) | MCP server card and discovery | in progress |
+| 38 | [Connect your agent](38-connect-kit.md) | Connect your agent | in progress |
 
 Status values: `draft` (written, waiting for team review) → `in progress` → `built` (all ACs pass) .

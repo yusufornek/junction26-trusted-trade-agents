@@ -8,8 +8,10 @@ from time import perf_counter
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from mcp.server.mcpserver.exceptions import ToolError
 
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, agent_headers
 from app.catalog import build
 from app.db import DomainError
 from app.mcp_server import create_server
@@ -66,27 +68,32 @@ def update(gateway, *, global_limit=None, per_order=None, daily=5000):
 
 def test_exceptions_ac_1_single_preview_identity_no_side_effects_and_legacy(gateway, need, upstream):
     upstream.amounts = {"1": 1000}
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         lookup = client.post("/v1/offers", json=need.model_dump(mode="json"),
-                             headers={"X-Agent-Id": AGENT}).json()
+                             headers={**agent_headers(AGENT)}).json()
         plan, = lookup["plans"]
         assert plan["kind"] == "single" and plan["lines"][0]["units"] == 1000
         assert plan["policy_preview"] == {"outcome": "CONFIRMED", "hits": []}
-        unknown = client.post("/v1/offers", json=need.model_dump(mode="json")).json()
-        assert unknown["plans"][0]["policy_preview"]["outcome"] == "REJECTED"
-        assert unknown["plans"][0]["policy_preview"]["hits"][0]["rule"] == "unregistered_agent"
+        calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+        unknown = client.post("/v1/offers", json=need.model_dump(mode="json"), headers=agent_headers("outsider"))
+        assert unknown.status_code == 403 and unknown.json()["code"] == "AGENT_NOT_REGISTERED"
+        assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
 
         async def check_mcp():
-            for identity, expected in [(AGENT, "CONFIRMED"), ("unknown-mcp", "REJECTED")]:
-                result = await create_server(gateway, identity).call_tool(
+            result = await create_server(gateway, AGENT).call_tool(
+                "find_offers", {"need": need.model_dump(mode="json")})
+            assert not result.is_error
+            assert result.structured_content["plans"][0]["policy_preview"]["outcome"] == "CONFIRMED"
+            calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+            with pytest.raises(ToolError, match="AGENT_NOT_REGISTERED"):
+                await create_server(gateway, "unknown-mcp").call_tool(
                     "find_offers", {"need": need.model_dump(mode="json")})
-                assert not result.is_error
-                assert result.structured_content["plans"][0]["policy_preview"]["outcome"] == expected
+            assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
         asyncio.run(check_mcp())
         with gateway.db.connect() as conn:
             assert all(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
                        for table in ("orders", "quotes", "reservations"))
-        assert [event.action for event in gateway.audit()] == ["LOOKUP"] * 4
+        assert [event.action for event in gateway.audit()] == ["LOOKUP", "LOOKUP_FAILED"] * 2
         # Old JSON lacks every additive lookup field. GET and timeline must still work.
         old = dict(lookup)
         old.pop("plans")
@@ -222,10 +229,10 @@ def test_exceptions_ac_6_pack_price_and_label_differences_are_explained(gateway,
 def test_exceptions_ac_7_plan_ref_rest_mcp_and_validation(gateway, need, upstream):
     upstream.amounts = {"1": 380, "2": 70}
     result = find(gateway, need)
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = {"customer_id": "1", "deliver_by": str(need.deliver_by),
                 "plan_ref": {"lookup_id": result.lookup_id, "plan_index": 0}}
-        response = client.post("/v1/quotes", json=body, headers={"X-Agent-Id": AGENT})
+        response = client.post("/v1/quotes", json=body, headers={**agent_headers(AGENT)})
         assert response.status_code == 200, response.text
         q = response.json()
         assert q["need_ref"] == result.lookup_id
@@ -370,16 +377,20 @@ def test_exceptions_ac_13_preferred_split_precedes_cheaper_substitute(gateway, n
     assert any(any(w.code == "OUTSIDE_PREFERENCE" for w in plan.warnings) for plan in partial_result.plans[1:])
 
 
-def test_exceptions_ac_14_preview_rejects_customer_outside_mandate(gateway, need, upstream):
+def test_exceptions_ac_14_rejects_customer_outside_mandate_before_preview(gateway, need, upstream):
     upstream.amount = 2000
-    result = find(gateway, need, customer_id="2")
-    assert result.plans
-    for plan in result.plans:
-        assert plan.policy_preview.outcome == "REJECTED"
-        assert "CUSTOMER_NOT_IN_MANDATE" in {hit.rule for hit in plan.policy_preview.hits}
+    calls = len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls)
+    with pytest.raises(DomainError) as refused_lookup:
+        find(gateway, need, customer_id="2")
+    assert refused_lookup.value.code == "CUSTOMER_NOT_IN_MANDATE" and refused_lookup.value.status == 403
+    event = gateway.audit()[-1]
+    assert event.action == "LOOKUP_FAILED" and event.actor == f"agent:{AGENT}"
+    assert event.data["error"] == "CUSTOMER_NOT_IN_MANDATE"
     with pytest.raises(DomainError) as refused_quote:
-        quote(gateway, result.need, result)
+        gateway.orders.create_quote(QuoteRequest(customer_id="2", deliver_by=need.deliver_by,
+            lines=[{"product_id": "1", "quantity_sales_units": 1}]), AGENT)
     assert refused_quote.value.code == "CUSTOMER_NOT_IN_MANDATE" and refused_quote.value.status == 403
+    assert calls == (len(upstream.price_calls), len(upstream.availability_calls), len(upstream.decision_calls))
     # Placement still returns its existing 403 if scope changes after quoting.
     allowed = find(gateway, need)
     q = quote(gateway, need, allowed)

@@ -4,6 +4,7 @@ import json
 from uuid import uuid4
 
 from . import audit
+from .auth import check_owner
 from .catalog import hard_violations
 from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
@@ -58,7 +59,8 @@ class Orders:
             with self.db.connect(write=True) as conn:
                 audit.append(conn, actor, action + "_FAILED", error.message,
                              order_id=inputs.get("order_id"), quote_id=inputs.get("quote_id"),
-                             data={"inputs": inputs, "error": error.code, "live_calls": counter.live().model_dump(), **error.data})
+                             data={"inputs": inputs, "error": error.code, "live_calls": counter.live().model_dump(),
+                                   **({"stated_name": inputs["stated_name"]} if "stated_name" in inputs else {}), **error.data})
             raise
 
     @staticmethod
@@ -102,15 +104,18 @@ class Orders:
                     audit.append(conn, "system", "ORDER_EXPIRED", "Approval deadline passed; local reservations released.",
                                  order_id=order.id, quote_id=order.quote_id)
 
-    def create_quote(self, request, agent_id="external"):
+    def create_quote(self, request, agent_id="external", *, operator=False):
         self.expire()
         actor = f"agent:{agent_id}"
         return self._run("CREATE_QUOTE", actor, request.model_dump(mode="json"),
-                         lambda counter: self._create_quote(request, actor, counter))
+                         lambda counter: self._create_quote(request, actor, counter, operator))
 
-    def _create_quote(self, request, actor, counter):
-        self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
+    def _create_quote(self, request, actor, counter, operator=False):
+        agent_id = actor.removeprefix("agent:")
+        if agent_id not in self.policy.get().agents:
+            self.policy.check_customer(agent_id, request.customer_id)
         if not request.need_ref:
+            self.policy.check_customer(agent_id, request.customer_id)
             raise DomainError("NEED_REF_REQUIRED", "Explicit lines require need_ref to a stored request", 422)
         lookup = None
         if request.need_ref:
@@ -119,6 +124,8 @@ class Orders:
             if not row:
                 raise DomainError("NEED_NOT_FOUND", "need_ref must be a lookup_id returned by this gateway", 404)
             lookup = LookupResult.model_validate_json(row["data"], context={"stored": True})
+            check_owner(lookup, None if operator else agent_id, "LOOKUP_NOT_FOUND")
+            self.policy.check_customer(agent_id, request.customer_id)
             if lookup.need.customer_id != request.customer_id or lookup.need.deliver_by != request.deliver_by:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
         plan = None
@@ -164,7 +171,7 @@ class Orders:
                     expiries.append(offer.availability.closing_time)
                 violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens, effective))
                 lines.append(offer)
-            quote = Quote(id=str(uuid4()), customer_id=request.customer_id, deliver_by=request.deliver_by,
+            quote = Quote(id=str(uuid4()), agent_id=actor.removeprefix("agent:"), customer_id=request.customer_id, deliver_by=request.deliver_by,
                           need_ref=request.need_ref, plan_ref=request.plan_ref,
                           warnings=[w for w in plan.warnings if w.code == "PARTIAL_STOCK"] if plan else [],
                           status="OPEN", created_at=now, expires_at=min(expiries),
@@ -179,18 +186,23 @@ class Orders:
                          "hard_constraint_violations": violations, "warnings": {o.product_id: [w.code for w in o.warnings] for o in lines}})
         return quote
 
-    def place_order(self, quote_id, idempotency_key, agent_id="external"):
+    def place_order(self, quote_id, idempotency_key, agent_id="external", *, operator=False):
         if not idempotency_key or not idempotency_key.strip():
             raise DomainError("IDEMPOTENCY_REQUIRED", "A non-empty idempotency key is required", 422)
         self.expire()
         inputs = {"quote_id": quote_id, "idempotency_key": idempotency_key}
         return self._run("PLACE_ORDER", f"agent:{agent_id}", inputs,
-                         lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter))
+                         lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator))
 
-    def _place_order(self, quote_id, key, agent_id, counter):
+    def _place_order(self, quote_id, key, agent_id, counter, operator=False):
         # Serializes idempotency, reservation reads and writes across REST/MCP processes.
         with self.db.connect(write=True) as conn:
+            policy = self.policy.get()
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=?", (key,)).fetchone()
+            if not existing and agent_id not in policy.agents:
+                raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
+            quote = self._quote(conn, quote_id)
+            check_owner(quote, None if operator else agent_id, "QUOTE_NOT_FOUND")
             if existing:
                 order = Order.model_validate_json(existing["data"])
                 if order.quote_id != quote_id or order.agent_id != agent_id:
@@ -199,10 +211,6 @@ class Orders:
                              order_id=order.id, quote_id=order.quote_id,
                              data={"inputs": {"idempotency_key": key}, "live_calls": counter.live().model_dump()})
                 return order
-            quote = self._quote(conn, quote_id)
-            policy = self.policy.get()
-            if agent_id not in policy.agents:
-                raise DomainError("AGENT_NOT_REGISTERED", f"Agent {agent_id} has no mandate; ordering requires a mandate", 403)
             self.policy.check_customer(agent_id, quote.customer_id, policy)
             if quote.status == "EXPIRED" or quote.expires_at <= audit.utcnow():
                 raise DomainError("EXPIRED_QUOTE", "Quote expired; create a new quote before ordering")
@@ -267,22 +275,23 @@ class Orders:
                 if line.availability.logistic_model != "Terminal":
                     conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, line.product_id, line.units_needed))
 
-    def get_quote(self, quote_id):
+    def get_quote(self, quote_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
-            return self._quote(conn, quote_id)
+            return check_owner(self._quote(conn, quote_id), agent_id, "QUOTE_NOT_FOUND")
 
-    def get_order(self, order_id):
+    def get_order(self, order_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
-            return self._order(conn, order_id)
+            return check_owner(self._order(conn, order_id), agent_id, "ORDER_NOT_FOUND")
 
-    def timeline(self, order_id):
+    def timeline(self, order_id, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
             # Order state, quote reference and audit history share one read snapshot.
             conn.execute("BEGIN")
             order = self._order(conn, order_id)
+            check_owner(order, agent_id, "ORDER_NOT_FOUND")
             quote = self._quote(conn, order.quote_id)
             events = audit.read_timeline(conn, order.id, quote.id, quote.need_ref)
         stages = {"LOOKUP": "lookup", "CREATE_QUOTE": "quote", "PLACE_ORDER": "order",
@@ -304,31 +313,32 @@ class Orders:
             total_decision_calls=sum(step.decision_calls for step in steps),
         )
 
-    def list_orders(self, pending_only=False):
+    def list_orders(self, pending_only=False, agent_id=None):
         self.expire()
         with self.db.connect() as conn:
             sql = "SELECT data FROM orders" + (" WHERE status='PENDING_APPROVAL'" if pending_only else "") + " ORDER BY rowid DESC"
-            return [Order.model_validate_json(r[0]) for r in conn.execute(sql)]
+            orders = [Order.model_validate_json(r[0]) for r in conn.execute(sql)]
+            return [order for order in orders if agent_id is None or order.agent_id == agent_id]
 
-    def approve(self, order_id, approver, comment="", evidence_revision=None):
-        return self._review(order_id, approver, comment, True, evidence_revision)
+    def approve(self, order_id, approver, comment="", evidence_revision=None, *, actor=None):
+        return self._review(order_id, approver, comment, True, evidence_revision, actor=actor)
 
-    def reject(self, order_id, approver, comment=""):
-        return self._review(order_id, approver, comment, False)
+    def reject(self, order_id, approver, comment="", *, actor=None):
+        return self._review(order_id, approver, comment, False, actor=actor)
 
-    def _review(self, order_id, approver, comment, approve, evidence_revision=None):
+    def _review(self, order_id, approver, comment, approve, evidence_revision=None, *, actor=None):
         self.expire()
         if not approver.strip():
             raise DomainError("APPROVER_REQUIRED", "An approver name is required", 422)
         action = "APPROVE" if approve else "REJECT"
-        inputs = {"order_id": order_id, "comment": comment}
+        inputs = {"order_id": order_id, "comment": comment, "stated_name": approver}
         if approve and evidence_revision is not None:
             inputs["evidence_revision"] = evidence_revision
-        return self._run(action, f"human:{approver}", inputs,
+        return self._run(action, actor or f"human:{approver}", inputs,
                          lambda counter: self._review_transaction(order_id, approver, comment, approve, counter,
-                                                                  evidence_revision))
+                                                                  evidence_revision, actor=actor))
 
-    def _review_transaction(self, order_id, approver, comment, approve, counter, evidence_revision=None):
+    def _review_transaction(self, order_id, approver, comment, approve, counter, evidence_revision=None, *, actor=None):
         changes = []
         with self.db.connect(write=True) as conn:
             order = self._order(conn, order_id)
@@ -369,7 +379,7 @@ class Orders:
                 order.approver, order.comment = approver, comment
             self._save_order(conn, order)
             self._reserve(conn, order)
-            data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision},
+            data = {"inputs": {"comment": comment, "evidence_revision": evidence_revision}, "stated_name": approver,
                     "evidence_revision": order.evidence_revision,
                     "rule_hits": [h.model_dump() for h in order.policy.hits],
                     "fit_scores": {o.product_id: o.fit for o in order.lines},
@@ -377,11 +387,11 @@ class Orders:
                     "order_warnings": [w.code for w in order.warnings],
                     "live_calls": counter.live().model_dump()}
             if changes:
-                audit.append(conn, f"human:{approver}", "EVIDENCE_CHANGED",
+                audit.append(conn, actor or f"human:{approver}", "EVIDENCE_CHANGED",
                              "Order evidence changed; review before approving: " + "; ".join(changes),
                              order_id=order.id, quote_id=quote.id, data={**data, "changes": changes})
             else:
-                audit.append(conn, f"human:{approver}", "APPROVE" if approve else "REJECT",
+                audit.append(conn, actor or f"human:{approver}", "APPROVE" if approve else "REJECT",
                              f"Human {approver} {'approved' if approve else 'rejected'} the order.",
                              order_id=order.id, quote_id=quote.id, data=data)
         # Leave the writer transaction successfully so the pending revision and its audit survive the 409.
@@ -390,9 +400,11 @@ class Orders:
                               data={"evidence_revision": order.evidence_revision, "changes": changes})
         return order
 
-    def cancel(self, order_id, actor="system", reason=""):
+    def cancel(self, order_id, actor="system", reason="", *, stated_name=None):
         """Core transition for a local confirmed order, before any known cutoff."""
         inputs = {"order_id": order_id, "reason": reason}
+        if stated_name is not None:
+            inputs["stated_name"] = stated_name
         return self._run("CANCEL", actor, inputs,
                          lambda counter: self._cancel(order_id, actor, reason, inputs, counter))
 
@@ -401,18 +413,19 @@ class Orders:
             order = self._order(conn, order_id)
             inputs["quote_id"] = order.quote_id
             if actor.startswith("agent:") and order.agent_id != actor.removeprefix("agent:"):
-                raise DomainError("NOT_ORDER_OWNER", "An agent can cancel only orders it placed", 403)
+                raise DomainError("ORDER_NOT_FOUND", "Order was not found", 404)
             if order.status != "CONFIRMED":
                 raise DomainError("INVALID_TRANSITION", "Only CONFIRMED orders can be cancelled")
             cutoffs = [o.availability.closing_time for o in order.lines if o.availability.closing_time]
             if any(c <= audit.utcnow() for c in cutoffs):
                 raise DomainError("CUTOFF_PASSED", "Cancellation cutoff has passed")
             order.status = "CANCELLED"
-            order.cancelled_by = actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor
+            order.cancelled_by = inputs.get("stated_name") or (actor.split(":", 1)[1] if actor.startswith(("human:", "agent:")) else actor)
             order.cancel_reason = reason
             self._save_order(conn, order)
             self._reserve(conn, order)
             audit.append(conn, actor, "CANCEL", "Confirmed order cancelled; local reservations released.",
                          order_id=order.id, quote_id=order.quote_id,
-                         data={"reason": reason, "live_calls": counter.live().model_dump()})
+                         data={"reason": reason, "live_calls": counter.live().model_dump(),
+                               **({"stated_name": inputs["stated_name"]} if "stated_name" in inputs else {})})
             return order

@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from conftest import OPERATOR_HEADERS
 from app.db import DomainError
 from app.models import PolicyUpdateRequest, QuoteRequest
 from conftest import quote_request, set_customers
@@ -13,7 +14,7 @@ def unconstrained(need):
 
 def test_ac_1_lookup_unions_standing_claims_and_shows_sources(gateway, need, upstream):
     set_customers(gateway, {"1": {"required_claims": ["free_from_lactose"], "note": "Hotel buyer"}})
-    result = gateway.find_offers(unconstrained(need))
+    result = gateway.find_offers(unconstrained(need), actor="agent:web-console")
     assert result.offers and "2" not in {o.product_id for o in result.offers}
     assert result.effective_constraints.model_dump() == {
         "required_claims": [{"code": "FREE_FROM_LACTOSE", "source": "customer_policy"}], "exclude_allergens": []}
@@ -24,7 +25,7 @@ def test_ac_1_lookup_unions_standing_claims_and_shows_sources(gateway, need, ups
 def test_ac_2_explicit_line_cannot_escape_standing_claim(gateway, need, upstream):
     set_customers(gateway, {"1": {"required_claims": ["FREE_FROM_LACTOSE"]}})
     need = unconstrained(need)
-    result = gateway.find_offers(need)
+    result = gateway.find_offers(need, actor="agent:web-console")
     quote = gateway.orders.create_quote(quote_request(need, qty=1, product_id="2", need_ref=result.lookup_id), "web-console")
     assert any("customer_policy" in v and "FREE_FROM_LACTOSE" in v for v in quote.hard_constraint_violations)
     order = gateway.orders.place_order(quote.id, "standing-explicit", "web-console")
@@ -34,7 +35,7 @@ def test_ac_2_explicit_line_cannot_escape_standing_claim(gateway, need, upstream
 
 
 def test_ac_3_every_quote_requires_stored_request_and_plan_ref_binds_it(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         response = client.post("/v1/quotes", json=quote_request(need, qty=1).model_dump(mode="json"))
         assert response.status_code == 422 and response.json()["code"] == "NEED_REF_REQUIRED"
         result = gateway.find_offers(need)
@@ -48,7 +49,7 @@ def test_ac_3_every_quote_requires_stored_request_and_plan_ref_binds_it(gateway,
 
 def test_ac_4_current_policy_added_after_quote_rejects_at_placement(gateway, need, upstream):
     need = unconstrained(need)
-    lookup = gateway.find_offers(need)
+    lookup = gateway.find_offers(need, actor="agent:web-console")
     quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id), "web-console")
     assert not quote.hard_constraint_violations
     set_customers(gateway, {"1": {"exclude_allergens": ["AM"]}})
@@ -58,7 +59,7 @@ def test_ac_4_current_policy_added_after_quote_rejects_at_placement(gateway, nee
 
 
 def test_ac_5_current_policy_blocks_pending_approval_but_allows_rejection(gateway, need, upstream):
-    lookup = gateway.find_offers(unconstrained(need))
+    lookup = gateway.find_offers(unconstrained(need), actor="agent:web-console")
     quote = gateway.orders.create_quote(quote_request(need, qty=200, need_ref=lookup.lookup_id), "web-console")
     order = gateway.orders.place_order(quote.id, "standing-after-order", "web-console")
     assert order.status == "PENDING_APPROVAL"
@@ -72,7 +73,7 @@ def test_ac_5_current_policy_blocks_pending_approval_but_allows_rejection(gatewa
 
 
 def test_ac_6_customer_policy_get_put_preservation_vocabulary_and_audit(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = client.get("/v1/policy").json()
         body["customers"] = {"1": {"required_claims": [" free_from_lactose "], "exclude_allergens": ["ae"], "note": "Hotel"}}
         updated = client.put("/v1/policy", json={"policy": body, "updated_by": "Ada"})

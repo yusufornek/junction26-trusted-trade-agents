@@ -210,6 +210,7 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     lookup_id: str = Field(description="Server-side need reference; pass as need_ref when quoting to preserve fit and constraints.")
     need: NeedSpec
     effective_constraints: "EffectiveConstraints" = Field(default_factory=lambda: EffectiveConstraints())
@@ -258,6 +259,7 @@ class QuoteRequest(RequestScope):
 
 class Quote(Model):
     id: str
+    agent_id: str | None = Field(default=None, description="Creating agent; legacy unowned records are operator-only.")
     customer_id: str
     deliver_by: date
     need_ref: str | None = None

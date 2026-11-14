@@ -6,13 +6,14 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS
 from app.models import PlanRef, PolicyUpdateRequest, QuoteRequest
 from conftest import quote_request
 
 
 @pytest.fixture
 def client(gateway):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         yield client
 
 
@@ -65,7 +66,8 @@ def test_ac_2_stock_drop_persists_pending_revision_and_audit(client, gateway, ne
     assert "PARTIAL_STOCK" in {w.code for w in stored.lines[0].warnings}
     assert "PARTIAL_STOCK" in {h.rule for h in stored.policy.hits}
     event = gateway.audit(order_id=order.id)[-1]
-    assert event.action == "EVIDENCE_CHANGED" and event.actor == "human:Ada"
+    assert event.action == "EVIDENCE_CHANGED" and event.actor == "human:operator"
+    assert event.data["stated_name"] == "Ada"
     assert event.data["changes"] == data["changes"]
     assert event.data["evidence_revision"] == 2
     assert event.data["live_calls"] == {"price": 0, "availability": 1}

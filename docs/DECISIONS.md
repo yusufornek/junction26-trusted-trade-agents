@@ -2,6 +2,14 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The gateway is built out as a product in this submission** (specs 22–38): one procurement state
+  machine behind REST, MCP and A2A (shared principals, command idempotency, domain events, durable outbox);
+  RFC 9457 recovery contract; per-agent rate limits; supplier adapters with a second (synthetic) supplier;
+  deterministic sandbox; OpenTelemetry; buyer-side view; downloadable transaction evidence; the 400 L exception
+  journey; hospital allergen-safe substitution; recipe baskets; signed webhooks; a real A2A 1.0 service;
+  recurring orders with drift detection; proactive supplier proposals; MCP server card; a connect-your-agent kit.
+  Pitch sentence: "Valio Aimo's agent-commerce gateway lets external buyer agents discover offers and place
+  orders under buyer-defined authority, with human approval for exceptions and verifiable transaction records."
 - 2026-11-14 — **The buyer grants its agent's authority as a signed W3C Verifiable Credential** (JWT, Ed25519);
   the gateway verifies it on every step, the operator's policy can only tighten it, and the buyer revokes it with a
   signed revocation (spec 12). **The audit chain's head hash is anchored on Polygon mainnet** in a plain

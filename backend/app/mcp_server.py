@@ -6,6 +6,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from .db import DomainError
+from .auth import Credentials, MCPBearerMiddleware
 from .models import LookupResult, NeedSpec, Order, PlanRef, Product, Quote, QuoteLineRequest, QuoteRequest
 from .service import Gateway
 
@@ -26,6 +27,13 @@ WARNINGS = (
 
 
 class GatewayMCPServer(MCPServer):
+    def streamable_http_app(self, **kwargs):
+        if not self.keys.has_agent(self.agent_id):
+            raise RuntimeError("AGENT_KEYS must contain the launched MCP agent; run scripts/gen_keys.py --write")
+        app = super().streamable_http_app(**kwargs)
+        app.add_middleware(MCPBearerMiddleware, keys=self.keys, agent_id=self.agent_id)
+        return app
+
     async def call_tool(self, name, arguments, context=None):
         try:
             return await super().call_tool(name, arguments, context)
@@ -48,13 +56,15 @@ def create_server(gateway, agent_id="mcp-agent"):
     server = GatewayMCPServer("Valio Aimo Trusted Trade Agents", instructions=(
         "Outside buyer procurement gateway: search locally, find live offers, create a fixed-price quote, then place an order. "
         "No negotiation. Prices are locked only until quote expiry; orders may require human approval in the REST inbox. Approval is REST-only: changed stock/policy evidence returns EVIDENCE_CHANGED and must be reviewed again at the new evidence_revision. "
-        "Ordering requires a mandate; unregistered agents can look up offers and create quotes. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
+        "Lookup, quote and order require a mandate; unregistered agents receive AGENT_NOT_REGISTERED. Registered agents have customer scope, per-order and cumulative rolling 24-hour limits. "
         "Lookups include single/split/partial plans, coverage and uncovered quantities, plus side-effect-free policy_preview for this server's identity. "
         "Previews include mandate and daily limits; stock and policy may change, so placement is authoritative. "
         "Every quote is bound to a stored request: quote a plan with plan_ref {lookup_id, plan_index}, or explicit lines with required need_ref. "
         "Current customer standing constraints are unioned with request constraints at lookup, quote, order and approval. "
         "customer_id is required; deliver_by must be today through +60 days (Europe/Helsinki); quantities are strict numbers >0 and <=1,000,000. "
         "Unknown claim/allergen/label codes return UNKNOWN_CODE with valid values. " + WARNINGS))
+    server.keys = gateway.settings.keys or Credentials()
+    server.agent_id = agent_id
 
     @server.tool(description="Search the local catalog using AND terms and validated structured hard filters. Returns at most 10 products; no live API calls. Exclusions require an uncontradicted free-from entry or a catalog allergen declaration not listing the code; contains, may_contain, undeclared and missing data fail. X99 is only a declaration marker. Contradicted claims fail. Customer standing constraints apply in find_offers, which is the procurement path.")
     def search_products(query: str, required_claims: list[str] | None = None,
@@ -66,7 +76,7 @@ def create_server(gateway, agent_id="mcp-agent"):
     def find_offers(need: NeedSpec) -> LookupResult:
         return gateway.find_offers(need, actor=f"agent:{agent_id}")
 
-    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents may look up offers and quote, while ordering requires a mandate. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. No negotiation or signing in MVP.")
+    @server.tool(description="Recheck live price and stock for selected lines or a stored fulfilment plan, then lock fixed net EUR prices until expires_at (at most 30 minutes). Supply exactly one of lines or plan_ref {lookup_id, plan_index}; plan_index is zero-based, need_ref defaults to the plan lookup. Explicit lines REQUIRE need_ref to a stored lookup, otherwise 422 NEED_REF_REQUIRED. Current customer standing constraints are unioned with the stored request at quotation, placement and approval. Partial-plan uncovered warnings persist into ordering. Registered agents may quote only for customers in their mandate (CUSTOMER_NOT_IN_MANDATE); unregistered agents receive AGENT_NOT_REGISTERED on lookup, quote and order. Quantities are strict numbers >0 and <=1,000,000 in sales units. Invalid price or missing currency prevents quoting. Customer and delivery date must match the stored need. No negotiation or signing in MVP.")
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None) -> Quote:
         try:
@@ -75,7 +85,7 @@ def create_server(gateway, agent_id="mcp-agent"):
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 
-    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookups and quotes are open. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists.")
+    @server.tool(description="Accept an unexpired fixed-price quote. Ordering requires a mandate: unregistered agents receive AGENT_NOT_REGISTERED with no order or reservation created. Lookup and quote also require a mandate. Registered agents must stay in customer scope, below the lower of global and mandate per-order limits, and within a cumulative rolling 24-hour autonomous spend limit; cancelled and human-approved orders are excluded. Rechecks stock and policy; returns CONFIRMED, PENDING_APPROVAL or REJECTED with every rule hit. Retry with the same idempotency_key to get the same order. EXPIRED_QUOTE requires a new quote. Human approval is REST-only in the inbox, optionally bound to evidence_revision. Changed evidence stays pending with 409 EVIDENCE_CHANGED; a human must review the refreshed revision before approving again. No upstream order endpoint exists.")
     def place_order(quote_id: str, idempotency_key: str) -> Order:
         try:
             return gateway.orders.place_order(quote_id, idempotency_key, agent_id=agent_id)
@@ -84,9 +94,9 @@ def create_server(gateway, agent_id="mcp-agent"):
 
     @server.tool(description="Read current local order state, fixed-price lines, order and line warnings, evidence_revision and approval rule hits. Pending orders can expire; this does not submit another order or call upstream APIs.")
     def get_order_status(order_id: str) -> Order:
-        return gateway.orders.get_order(order_id)
+        return gateway.orders.get_order(order_id, agent_id)
 
-    @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. NOT_ORDER_OWNER rejects another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
+    @server.tool(description="Cancel only a CONFIRMED order placed by this server's agent identity (--agent-id), before every known line cutoff. Lines without a cutoff do not block. Releases local stock reservations, records the reason and actor, and leaves fixed prices unchanged. No upstream calls. ORDER_NOT_FOUND (404) hides another agent's order; INVALID_TRANSITION or CUTOFF_PASSED rejects ineligible orders.")
     def cancel_order(order_id: str, reason: str = "") -> Order:
         try:
             return gateway.orders.cancel(order_id, actor=f"agent:{agent_id}", reason=reason)

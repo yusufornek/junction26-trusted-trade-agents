@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from math import isclose
 from uuid import uuid4
 
+from .auth import check_owner
+
 from . import audit
 from .catalog import allergen_evidence, constraint_failures, number
 from .db import DomainError
@@ -312,14 +314,24 @@ class Lookup:
     def __init__(self, db, catalog, valio, decisions, policy):
         self.db, self.catalog, self.valio, self.decisions, self.policy = db, catalog, valio, decisions, policy
 
-    def get(self, lookup_id):
+    def get(self, lookup_id, agent_id=None):
         with self.db.connect() as conn:
             row = conn.execute("SELECT data FROM lookups WHERE id=?", (lookup_id,)).fetchone()
         if not row:
             raise DomainError("LOOKUP_NOT_FOUND", "Lookup was not found", 404)
-        return LookupResult.model_validate_json(row["data"], context={"stored": True})
+        return check_owner(LookupResult.model_validate_json(row["data"], context={"stored": True}),
+                           agent_id, "LOOKUP_NOT_FOUND")
 
     def find_offers(self, need, actor="agent:external"):
+        # Check authority before catalog screening, Decisions or any Valio call.
+        try:
+            self.policy.check_customer(actor.removeprefix("agent:"), need.customer_id)
+        except DomainError as error:
+            with self.db.connect(write=True) as conn:
+                audit.append(conn, actor, "LOOKUP_FAILED", error.message,
+                             data={"inputs": need.model_dump(mode="json"), "error": error.code,
+                                   "live_calls": {"price": 0, "availability": 0}, "decision_calls": 0})
+            raise
         query = " ".join(need.search_terms) if need.search_terms else need.intent
         policy = self.policy.get()
         original_need = need
@@ -392,7 +404,7 @@ class Lookup:
             "required_claims": self.catalog.normalize_codes(original_need.required_claims, "required_claims"),
             "exclude_allergens": self.catalog.normalize_codes(original_need.exclude_allergens, "exclude_allergens"),
             "preferences": need.preferences})
-        result = LookupResult(lookup_id=str(uuid4()), need=stored_need, effective_constraints=effective,
+        result = LookupResult(lookup_id=str(uuid4()), agent_id=agent_id, need=stored_need, effective_constraints=effective,
                               exclusion_counts=removed_by, offers=returned, plans=plans,
                               no_match_reason=no_match_reason, excluded_count=excluded,
                               retrieval=retrieval, matched_count=matched_count,

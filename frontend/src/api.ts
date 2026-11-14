@@ -99,6 +99,7 @@ export type Order = {
   lines: QuoteLine[];
   policy: PolicyResult | null;
   live_calls: LiveCalls | null;
+  evidence_revision: number;
   approver: string | null;
   comment: string | null;
 };
@@ -153,32 +154,53 @@ export type Stats = {
 };
 
 export class ApiError extends Error {
-  constructor(readonly code: string, message: string, readonly status: number) {
+  constructor(readonly code: string, message: string, readonly status: number, readonly data?: { changes?: string[]; evidence_revision?: number }) {
     super(message);
+  }
+}
+
+let token = "";
+const authListeners = new Set<() => void>();
+export const hasToken = () => Boolean(token);
+export function setToken(value: string) {
+  token = value.trim();
+  authListeners.forEach((listener) => listener());
+}
+export function onAuthChange(listener: () => void) {
+  authListeners.add(listener);
+  return () => { authListeners.delete(listener); };
+}
+export class AuthenticationError extends ApiError {
+  constructor(message = "Sign in with your operator token.") {
+    super("UNAUTHENTICATED", message, 401);
   }
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
+  if (res.status === 401) {
+    setToken("");
+    throw new AuthenticationError();
+  }
   const text = await res.text();
   const body = text ? JSON.parse(text) : null;
   if (!res.ok) {
-    // The gateway returns {code, message} for domain errors; anything else is unexpected.
-    throw new ApiError(body?.code ?? "HTTP_" + res.status, body?.message ?? res.statusText, res.status);
+    // The gateway returns {code, message, data} for domain errors.
+    throw new ApiError(body?.code ?? "HTTP_" + res.status, body?.message ?? res.statusText, res.status, body?.data);
   }
   return body as T;
 }
 
 export const api = {
   health: () => call<Health>("/health"),
-  offers: (need: NeedSpec, agentId = "web-console") =>
+  offers: (need: NeedSpec) =>
     call<LookupResult>("/v1/offers", {
       method: "POST",
       body: JSON.stringify(need),
-      headers: { "X-Agent-Id": agentId },
     }),
   lookup: (id: string) => call<LookupResult>(`/v1/lookups/${id}`),
   createQuote: (
@@ -188,27 +210,25 @@ export const api = {
       need_ref: string;
       lines: { product_id: string; quantity_sales_units: number }[];
     },
-    agentId = "web-console",
   ) =>
     call<Quote>("/v1/quotes", {
       method: "POST",
       body: JSON.stringify(body),
-      headers: { "X-Agent-Id": agentId },
     }),
   quote: (id: string) => call<Quote>(`/v1/quotes/${id}`),
-  placeOrder: (quoteId: string, idempotencyKey: string, agentId = "web-console") =>
+  placeOrder: (quoteId: string, idempotencyKey: string) =>
     call<Order>("/v1/orders", {
       method: "POST",
       body: JSON.stringify({ quote_id: quoteId }),
-      headers: { "Idempotency-Key": idempotencyKey, "X-Agent-Id": agentId },
+      headers: { "Idempotency-Key": idempotencyKey },
     }),
   orders: () => call<Order[]>("/v1/orders"),
   order: (id: string) => call<Order>(`/v1/orders/${id}`),
   approvals: () => call<ApprovalItem[]>("/v1/approvals"),
-  approve: (orderId: string, approver: string, comment: string) =>
+  approve: (orderId: string, approver: string, comment: string, evidence_revision: number) =>
     call<Order>(`/v1/approvals/${orderId}/approve`, {
       method: "POST",
-      body: JSON.stringify({ approver, comment }),
+      body: JSON.stringify({ approver, comment, evidence_revision }),
     }),
   reject: (orderId: string, approver: string, comment: string) =>
     call<Order>(`/v1/approvals/${orderId}/reject`, {

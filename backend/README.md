@@ -11,6 +11,7 @@ No installation is needed in the supplied environment. From the **repository roo
 
 ```sh
 cd backend
+.venv/bin/python scripts/gen_keys.py --write
 .venv/bin/python -m app.catalog build
 .venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 ```
@@ -19,10 +20,10 @@ In separate terminals, starting in `backend/`:
 
 ```sh
 # MCP stdio; stdout is reserved for protocol messages
-.venv/bin/python -m app.mcp_server
+.venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent
 
 # MCP Streamable HTTP: http://127.0.0.1:8001/mcp
-.venv/bin/python -m app.mcp_server --http --host 127.0.0.1 --port 8001
+.venv/bin/python -m app.mcp_server --agent-id hotel-chain-agent --http --host 127.0.0.1 --port 8001
 
 # Entire offline suite, with Valio/OpenAI mocked using respx
 .venv/bin/python -m pytest tests -q
@@ -49,14 +50,14 @@ The effective policy returns to `policy.yaml` defaults. Every earlier archive is
 The script refuses an answering API port (default 8000); use `--port PORT` for another port or
 `--force` to continue anyway. It prints the archive path, product count and API start command.
 
-Startup loads `VALIO_API_BASE`, `VALIO_API_KEY`, and `OPENAI_API_KEY` from repo-root `.env.local`
+Startup loads `VALIO_API_BASE`, `VALIO_API_KEY`, `OPENAI_API_KEY`, `AGENT_KEYS`, `OPERATOR_TOKEN`, and `OPERATOR_AGENT_ID` from repo-root `.env.local`
 if present. Existing environment variables take precedence. The parser accepts comments, optional
 `export`, and quoted values; it does not execute shell code. See `backend/.env.example` for variable
 names. No keys are printed. A missing Decisions key yields `NO_FIT_SCORE` and human approval;
 missing Valio configuration produces visible unavailable evidence and prevents quoting.
 
 For a stdio MCP client, set its executable to the **absolute** `backend/.venv/bin/python` path,
-arguments to `["-m", "app.mcp_server"]`, and working directory to the absolute `backend/` path.
+arguments to `["-m", "app.mcp_server", "--agent-id", "hotel-chain-agent"]`, and working directory to the absolute `backend/` path.
 Tools: `search_products`, `find_offers`, `create_quote`, `place_order`, `get_order_status`, `cancel_order`.
 `cancel_order(order_id, reason="")` cancels only confirmed orders placed by the server's `--agent-id`,
 before every known line cutoff. Lines without a cutoff do not block. Cancellation releases local
@@ -89,9 +90,8 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    Customer and delivery date must match the lookup. Invalid plan indices return 422.
    Explicit lines without `need_ref` return `422 NEED_REF_REQUIRED`; every new quote binds a stored need.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
-   header `Idempotency-Key`, and `X-Agent-Id` identifying a registered agent such as
-   `hotel-chain-agent`. The default `external` is unregistered: ordering requires a mandate
-   (`403 AGENT_NOT_REGISTERED`); lookups and quotes are open. Fixed prices remain the quoted prices. Repeated keys return the existing order;
+   headers `Idempotency-Key` and `Authorization: Bearer <agent secret>` for a registered agent such as
+   `hotel-chain-agent`. Lookup, quote and order require a mandate (`403 AGENT_NOT_REGISTERED`). Fixed prices remain the quoted prices. Repeated keys return the existing order;
    reuse with another quote/agent is a conflict.
 4. If `PENDING_APPROVAL`, inspect `GET /v1/approvals`. A human calls
    `POST /v1/approvals/{order_id}/approve` or `/reject`, body
@@ -136,7 +136,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   and nonnegative. Invalid requests return `422 VALIDATION_ERROR`.
 - `POST /v1/policy/reset` with `{"updated_by": "Ada"}` restores committed defaults and returns
   the effective resource with new update metadata. Both writes append `POLICY_UPDATED` by
-  `human:<name>`; `data.diff` maps changed dotted field paths to `{before, after}` and also records
+  `human:operator`, with the typed name in `data.stated_name`; `data.diff` maps changed dotted field paths to `{before, after}` and also records
   the optional comment and whether the operation was a reset.
 - Effective policy is loaded from gitignored `backend/var/policy.yaml` before `backend/policy.yaml`.
   Writes atomically replace the runtime file; committed defaults remain unchanged. REST and MCP
@@ -161,13 +161,13 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
 `policy.yaml` registers `hotel-chain-agent` and `web-console` for customer `"1"`, each with a
 5,000 EUR rolling 24-hour autonomous limit. `agents` maps each identity to `customer_ids`, optional
 `max_auto_total_eur`, required `max_auto_daily_total_eur`, and a free-text `note` recording its grant.
-REST uses `X-Agent-Id` (also accepted by `POST /v1/offers` for lookup audit attribution). MCP fixes
-identity using `--agent-id` at launch; tools cannot change it per call. The frontend buyer flow
-should send `X-Agent-Id: web-console`.
+REST resolves identity from `Authorization: Bearer <secret>`; `X-Agent-Id` has no authority. MCP fixes
+identity using `--agent-id` at launch; tools cannot change it per call. The console uses the operator token
+and its buyer actions run as `OPERATOR_AGENT_ID` (default `web-console`).
 
-Ordering requires a mandate. Unregistered agents may search and quote; placement returns
-`403 AGENT_NOT_REGISTERED`, creates no order or reservation, and audits the failed attempt under
-`agent:<id>`. Plan previews show `REJECTED` with `unregistered_agent`. Registered agents may quote or
+Lookup, quote and order require a mandate. Unregistered agents receive
+`403 AGENT_NOT_REGISTERED`, create no order or reservation, and failed attempts are audited under
+`agent:<id>`. Registered agents may look up, quote or
 order only for their listed customers; violations return `403 CUSTOMER_NOT_IN_MANDATE`, audit a
 failed attempt, and do not commit an order. Scope is rechecked at placement under the current policy.
 
@@ -332,10 +332,10 @@ Old stored lookups without preferences/plans remain readable, including through 
   must still be in the future. Missing cutoffs do not block; a cutoff equal to now has passed.
   Fixed prices and quote evidence remain unchanged. The order stores `cancelled_by` (human name or
   placing agent ID) and `cancel_reason`; older/uncancelled orders return null for both fields.
-  Successful cancellation records one `CANCEL` audit event by `human:<name>` or `agent:<id>` with
+  Successful cancellation records one `CANCEL` audit event by `human:operator` or `agent:<id>` with
   the reason, order ID and quote ID. Refused attempts record `CANCEL_FAILED` with the error code.
   Errors: `404 ORDER_NOT_FOUND`, `409 INVALID_TRANSITION`, `409 CUTOFF_PASSED`,
-  `403 NOT_ORDER_OWNER` (MCP agent ownership), and `422 VALIDATION_ERROR` (invalid request).
+  `404 ORDER_NOT_FOUND` (another agent's order), and `422 VALIDATION_ERROR` (invalid request).
   Cancelled orders count under stats `orders_by_status.CANCELLED` and leave confirmed spend.
 - Stock reservations are local because mock stock never decreases. Both pending and confirmed orders
   reserve the **full requested** quantity, conservatively across all delivery dates. Availability
@@ -351,9 +351,59 @@ Old stored lookups without preferences/plans remain readable, including through 
 
 ## MVP boundaries
 
-This local development gateway has one named human approver role and no authentication.
+This prototype uses operator-issued shared Bearer secrets and one operator role.
 Keep REST/MCP bound to loopback; CORS allows `http://localhost:*` for the frontend teammate.
 Signed quotes, verifiable-credential mandates, UBL/Peppol, hash chaining, multiple approver roles, drift detection,
 automatic re-planning after commitment, recipe-aware substitutions, payments, deployment and separate buyer-agent code are deferred.
 The generated frontend contract is `contracts/openapi.yaml`; domain/validation errors use `{code,message}` with optional `data` for domain evidence.
 Live Valio/OpenAI integration requires network access and configured keys; the suite uses no network.
+
+
+## Authentication and console sign-in
+
+From `backend/`, generate missing credentials for the effective policy's agents and the operator:
+
+```sh
+.venv/bin/python scripts/gen_keys.py --write
+# Optional isolated env file:
+.venv/bin/python scripts/gen_keys.py --write --env-file /path/to/local.env
+```
+
+The command preserves existing values, uses `secrets.token_urlsafe(32)` for new values, and prints
+only added names. A second run changes nothing. The default target is repo-root `.env.local`;
+`AGENT_KEYS` is a comma-separated list of `agent-id:secret`, and `OPERATOR_TOKEN` is required to start
+the REST API. Process environment values take precedence. The server retains SHA-256 digests for
+constant-time comparisons; credentials belong only in the local env file, never policy or audit data.
+Restart after provisioning or rotating credentials. Never share the operator token with buyer agents.
+
+An agent sends its own secret on every REST call. For example, with its key in `AGENT_SECRET`:
+
+```python
+import os
+import httpx
+
+response = httpx.get("http://localhost:8000/v1/orders",
+                    headers={"Authorization": "Bearer " + os.environ["AGENT_SECRET"]})
+response.raise_for_status()
+```
+
+`GET /health`, `/docs`, and `/openapi.json` stay public. Other REST routes require a valid credential
+(`401 UNAUTHENTICATED`). Lookup, quote and order require a registered mandate and the customer's scope
+(`403 AGENT_NOT_REGISTERED` / `CUSTOMER_NOT_IN_MANDATE`). Lookups and quotes store `agent_id`; agents
+can only access their own lookups, quotes, orders, cancellations and timelines. Other agents' objects
+return 404, and `GET /v1/orders` returns only the caller's orders. Legacy records without ownership
+are operator-only. Operators can see all objects. Approvals/rejections, the approval inbox, policy
+read/write/reset, audit and stats require the operator credential (`403 OPERATOR_REQUIRED` for agents).
+Operator changes use audit actor `human:operator`; typed names remain on the order/policy and in
+`data.stated_name`. The console buyer identity remains subject to its mandate and budgets.
+
+Open the console and paste `OPERATOR_TOKEN` from your local env file into its password field, then
+click **Sign in**. The token stays in memory; reload or **Sign out** clears it. A 401 returns to sign-in.
+Approval submits the displayed `evidence_revision`; `409 EVIDENCE_CHANGED` shows the returned changes
+and reloads the inbox for review before another approval.
+
+MCP stdio is unchanged: launch `python -m app.mcp_server --agent-id hotel-chain-agent` (the demo
+`demo/run_buyer_agent.sh` continues to provision this identity). For `--http`, configure that agent
+in `AGENT_KEYS` and send `Authorization: Bearer <that agent's secret>` on **every** HTTP request,
+including initialization, GET and DELETE. Another agent's key or the operator token is refused.
+OAuth for remote MCP and named operator accounts are production follow-ups.

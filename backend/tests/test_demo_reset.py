@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS
 from app.models import Order, PolicyUpdateRequest
 from conftest import quote_request
 from scripts import reset_demo as reset_script
@@ -58,7 +59,7 @@ def test_ac_1_reset_clears_transaction_state_and_restores_default_policy(gateway
         for table in ("orders", "quotes", "lookups", "reservations", "audit"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     assert not reset_paths["runtime_policy_path"].exists()
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         assert client.get("/v1/policy").json() == defaults
         assert client.get("/v1/approvals").json() == []
 

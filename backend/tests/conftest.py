@@ -11,11 +11,23 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import audit
+from app.auth import Credentials
 from app.catalog import build
 from app.config import BACKEND, Settings
 from app.models import NeedSpec, PolicyDocument, QuoteLineRequest, QuoteRequest
 from app.policy import Policy
 from app.service import Gateway
+
+OPERATOR_TOKEN = "test-operator-token"
+TEST_AGENT_IDS = ("external", "hotel-chain-agent", "web-console", "hotel-agent", "buyer", "other", "mcp-agent",
+                  "outsider", "hotel", "observer", "agent-a", "agent-b", "unregistered")
+AGENT_TOKENS = {agent: f"test-secret-{agent}" for agent in TEST_AGENT_IDS}
+TEST_KEYS = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{token}" for agent, token in AGENT_TOKENS.items()))
+OPERATOR_HEADERS = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
+
+
+def agent_headers(agent_id):
+    return {"Authorization": f"Bearer {AGENT_TOKENS[agent_id]}"}
 
 
 def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None, sales="KI", base="ST", multiplier=10, brand="Fixture"):
@@ -44,7 +56,7 @@ def raw_product(pid, name, *, lactose=True, egg=False, volume=None, weight=None,
 @pytest.fixture
 def registered_agents(request):
     """Explicit test-only mandates; production and mandate tests keep unregistered callers untrusted."""
-    return getattr(request, "param", ())
+    return getattr(request, "param", ("external",))
 
 
 @pytest.fixture
@@ -76,7 +88,8 @@ def gateway(tmp_path, registered_agents, product_rows):
         policy_path = tmp_path / "defaults.yaml"
         policy_path.write_text(yaml.safe_dump(defaults))
     service = Gateway(Settings(db_path=tmp_path / "app.db", policy_path=policy_path,
-                               valio_api_base="https://valio.test", valio_api_key="test-key", openai_api_key="test-key"))
+                               valio_api_base="https://valio.test", valio_api_key="test-key", openai_api_key="test-key",
+                               keys=TEST_KEYS))
     build(service.db, source, reliability, carbon)
     yield service
     service.close()

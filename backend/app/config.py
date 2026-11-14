@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .auth import Credentials
+
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 
@@ -17,7 +19,7 @@ def load_env(path: Path = ROOT / ".env.local") -> None:
         if line.startswith("export "):
             line = line[7:]
         key, sep, value = line.partition("=")
-        if sep and key.strip() in {"VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY"}:
+        if sep and key.strip() in {"VALIO_API_BASE", "VALIO_API_KEY", "OPENAI_API_KEY", "AGENT_KEYS", "OPERATOR_TOKEN", "OPERATOR_AGENT_ID"}:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
@@ -33,6 +35,7 @@ class Settings:
     valio_api_base: str = "https://junction26.valioaimo.fi"
     valio_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
+    keys: Credentials | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls):
@@ -41,4 +44,6 @@ class Settings:
             valio_api_base=os.getenv("VALIO_API_BASE", cls.valio_api_base).rstrip("/"),
             valio_api_key=os.getenv("VALIO_API_KEY", ""),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            keys=Credentials(os.getenv("OPERATOR_TOKEN", ""), os.getenv("AGENT_KEYS", ""),
+                             os.getenv("OPERATOR_AGENT_ID", "web-console")),
         )

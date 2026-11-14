@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutGrid,
@@ -8,8 +9,8 @@ import {
   ShieldCheck,
   Activity,
 } from "lucide-react";
-import { api } from "./api";
-import { useAsync } from "./ui";
+import { api, hasToken, onAuthChange, setToken } from "./api";
+import { Card, ErrorNote, useAsync } from "./ui";
 
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
@@ -31,6 +32,28 @@ const TITLES: Record<string, { title: string; sub: string }> = {
 
 export default function Shell() {
   const { pathname } = useLocation();
+  const [signedIn, setSignedIn] = useState(hasToken);
+  const [tokenInput, setTokenInput] = useState("");
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<unknown>(null);
+  useEffect(() => onAuthChange(() => setSignedIn(hasToken())), []);
+  const signIn = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSigningIn(true);
+    setSignInError(null);
+    // Keep the outlet unmounted until the token is verified as an operator token.
+    setToken(tokenInput);
+    setTokenInput("");
+    try {
+      await api.policy();
+      setSignedIn(true);
+    } catch (error) {
+      setToken("");
+      setSignInError(error);
+    } finally {
+      setSigningIn(false);
+    }
+  };
   const health = useAsync(() => api.health(), []);
   const head = TITLES[pathname] ?? { title: "Order", sub: "Commitment detail" };
 
@@ -79,7 +102,26 @@ export default function Shell() {
             customer <span className="font-semibold text-ink">1</span>
           </div>
         </header>
-        <Outlet />
+        {signedIn && !signingIn ? (
+          <>
+            <div className="mb-4 flex justify-end">
+              <button className="btn-ghost" onClick={() => setToken("")}>Sign out</button>
+            </div>
+            <Outlet />
+          </>
+        ) : (
+          <Card className="mx-auto max-w-md">
+            <form className="flex flex-col gap-3" onSubmit={signIn}>
+              <label className="flex flex-col gap-1.5">
+                <span className="label">Operator token</span>
+                <input className="field" type="password" autoComplete="off" required
+                  value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} />
+              </label>
+              <button className="btn-dark" disabled={signingIn}>{signingIn ? "Signing in…" : "Sign in"}</button>
+              {signInError ? <ErrorNote error={signInError} /> : null}
+            </form>
+          </Card>
+        )}
       </main>
     </div>
   );

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app import audit
 from app.api import create_app
+from conftest import OPERATOR_HEADERS, agent_headers
 from app.catalog import build, extract, hard_violations
 from app.db import DomainError
 from app.lookup import availability_for, offer_for, rank, timestamp
@@ -92,7 +93,7 @@ def test_ac_3_claim_contradictions_are_not_proof(gateway, need, upstream, tmp_pa
 
 
 def test_ac_4_codes_normalize_and_unknowns_have_valid_values_rest_and_mcp(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         body = need.model_dump(mode="json")
         body["exclude_allergens"] = [" ae "]
         body["required_claims"] = [" free_from_lactose "]
@@ -117,7 +118,7 @@ def test_ac_4_codes_normalize_and_unknowns_have_valid_values_rest_and_mcp(gatewa
 
             async def check():
                 with pytest.raises(ToolError) as error:
-                    await create_server(gateway).call_tool("find_offers", {"need": invalid})
+                    await create_server(gateway, "external").call_tool("find_offers", {"need": invalid})
                 assert json.loads(str(error.value))["code"] == "UNKNOWN_CODE"
             asyncio.run(check())
 
@@ -135,8 +136,8 @@ def test_ac_5_request_bounds_rest_and_mcp_match(gateway, need, upstream):
     cases.extend([("customer_id", missing), ("customer_id", {**base, "customer_id": " "}),
                   ("brands", {**base, "preferences": {"brands": [" "]}}),
                   ("pack_size", {**base, "preferences": {"pack_size": {"min": 2, "max": 1}}})])
-    server = create_server(gateway)
-    with TestClient(create_app(gateway)) as client:
+    server = create_server(gateway, "external")
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         for field, body in cases:
             response = client.post("/v1/offers", json=body)
             assert response.status_code == 422 and field in response.json()["message"]
@@ -149,8 +150,8 @@ def test_ac_5_request_bounds_rest_and_mcp_match(gateway, need, upstream):
                 assert data["code"] == response.json()["code"] == "VALIDATION_ERROR"
                 assert field in data["message"]
             asyncio.run(matching())
-        app = create_server(gateway).streamable_http_app(stateless_http=True, json_response=True)
-        with TestClient(app, base_url="http://localhost:8001") as mcp:
+        app = create_server(gateway, "external").streamable_http_app(stateless_http=True, json_response=True)
+        with TestClient(app, base_url="http://localhost:8001", headers=agent_headers("external")) as mcp:
             response = mcp.post("/mcp", headers={"Accept": "application/json, text/event-stream"}, json={
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": "find_offers", "arguments": {"need": missing}}})
@@ -261,7 +262,7 @@ def test_ac_10_unknown_stock_is_finite_and_no_stock_rejects(gateway, need, upstr
 
 def test_ac_11_missing_cutoff_needs_approval_and_naive_time_is_helsinki(gateway, need, upstream, respx_mock):
     mutate_response(respx_mock, upstream, "availability", lambda b: [r.pop("closingTime") for r in b["products"]])
-    lookup = gateway.find_offers(need)
+    lookup = gateway.find_offers(need, actor="agent:web-console")
     quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id), "web-console")
     order = gateway.orders.place_order(quote.id, "no-cutoff", "web-console")
     assert order.status == "PENDING_APPROVAL" and "CUTOFF_UNKNOWN" in codes(order.lines[0])
@@ -330,7 +331,7 @@ def test_ac_13_missing_ranking_data_uses_global_median_and_fit_missing_sorts_las
 
 
 def test_ac_14_policy_fails_closed_and_protected_warnings_cannot_be_ignored(gateway, need, upstream):
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         policy = client.get("/v1/policy").json()
         policy["approval"]["warnings_need_approval"] = []
         assert client.put("/v1/policy", json={"policy": policy, "updated_by": "Ada"}).status_code == 200
@@ -380,7 +381,7 @@ def test_ac_15_build_fails_loudly_skips_deleted_and_reports_coverage(gateway, tm
     from app.models import Product
     assert set(report["coverage"]) == set(Product.model_fields)
     assert all(v["filled"] + v["empty"] == 1 for v in report["coverage"].values())
-    with TestClient(create_app(gateway)) as client:
+    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["coverage"] == report["coverage"]
     command = [sys.executable, "-m", "app.catalog", "build", "--db", str(tmp_path / "cli.db"),
                "--source", str(tmp_path / "products.json.gz"), "--reliability", str(tmp_path / "reliability.csv"),
