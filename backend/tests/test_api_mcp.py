@@ -40,7 +40,7 @@ def test_full_rest_flow_1000_l(gateway, need, upstream):
         assert client.get("/v1/orders").json()[0]["total"] == 2600
         assert client.get("/v1/approvals").json() == []
         assert client.get("/v1/products/1").json()["claims"] == ["FREE_FROM_LACTOSE"]
-        assert client.get("/health").json() == {"status": "ok", "catalog_rows": 7}
+        assert client.get("/health").json() == {"status": "ok", "catalog_rows": 7, "coverage": gateway.catalog.metadata("coverage")}
         entries = client.get("/v1/audit", params={"quote_id": quote["id"]}).json()
         assert [a["action"] for a in entries] == ["CREATE_QUOTE", "PLACE_ORDER", "ORDER_REPLAY", "APPROVE"]
         assert entries[1]["data"]["live_calls"] == {"price": 0, "availability": 1}

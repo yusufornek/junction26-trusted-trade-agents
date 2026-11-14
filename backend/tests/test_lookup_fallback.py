@@ -83,7 +83,8 @@ def test_ac_4_pool_truncation_reports_all_hard_filtered_matches(gateway, need, u
     gateway.catalog.search("milk", need.required_claims, need.exclude_allergens, 1,
                            counts=counts, removed_by=removed_by, mode="or" if broaden else "and")
     assert counts == {"matched_count": 43}
-    assert removed_by == {"required_claims.FREE_FROM_LACTOSE": 1, "exclude_allergens.AE": 1}
+    assert removed_by == {"required_claims.FREE_FROM_LACTOSE (request; missing required claim)": 1,
+                          "exclude_allergens.AE (request; contains)": 1}
     assert_audit(gateway, result)
 
 
@@ -115,6 +116,7 @@ def test_or_retrieval_prioritizes_distinct_words_then_fts_rank(gateway, need, up
             raw_product("3", "Pear juice"), raw_product("4", "Apple pear", lactose=False)]
     replace_catalog(gateway, tmp_path, rows)
     request = intent_need(need, "apple pear for a hotel")
+    request.exclude_allergens = []  # This retrieval fixture has no AE in its vocabulary.
     result = gateway.find_offers(request)
     assert result.retrieval.mode == "intent_broadened"
     screened = upstream.decision_calls[0]["input"][0]["content"][1]["data"]["candidates"]

@@ -1,12 +1,13 @@
 from datetime import timedelta
 from decimal import Decimal
+import json
 from uuid import uuid4
 
 from . import audit
 from .catalog import hard_violations
 from .db import DomainError
 from .lookup import availability_for, offer_for, reserved
-from .models import LiveCalls, LookupResult, NeedSpec, Order, OrderTimeline, Quantity, Quote, QuoteLineRequest, TimelineStep
+from .models import LiveCalls, LookupResult, OfferCard, Order, OrderTimeline, Quote, QuoteLineRequest, TimelineStep
 from .valio import RequestCounter
 
 
@@ -109,13 +110,15 @@ class Orders:
 
     def _create_quote(self, request, actor, counter):
         self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
+        if not request.need_ref:
+            raise DomainError("NEED_REF_REQUIRED", "Explicit lines require need_ref to a stored request", 422)
         lookup = None
         if request.need_ref:
             with self.db.connect() as conn:
                 row = conn.execute("SELECT data FROM lookups WHERE id=?", (request.need_ref,)).fetchone()
             if not row:
                 raise DomainError("NEED_NOT_FOUND", "need_ref must be a lookup_id returned by this gateway", 404)
-            lookup = LookupResult.model_validate_json(row["data"])
+            lookup = LookupResult.model_validate_json(row["data"], context={"stored": True})
             if lookup.need.customer_id != request.customer_id or lookup.need.deliver_by != request.deliver_by:
                 raise DomainError("NEED_MISMATCH", "Quote customer and delivery date must match need_ref", 422)
         plan = None
@@ -136,19 +139,21 @@ class Orders:
         price = self.valio.fetch("price", request.customer_id, request.deliver_by, ids, counter, fresh=True)
         stock = self.valio.fetch("availability", request.customer_id, request.deliver_by, ids, counter, fresh=True)
         now = audit.utcnow()
-        need = lookup.need if lookup else NeedSpec(
-            customer_id=request.customer_id, intent="Explicit product selection", deliver_by=request.deliver_by,
-            quantity=Quantity(value=1, unit="SALES_UNIT"))
+        need = lookup.need
+        with self.db.connect() as conn:
+            evidence = conn.execute("SELECT data FROM lookup_offers WHERE lookup_id=?", (lookup.lookup_id,)).fetchone()
+        all_offers = [OfferCard.model_validate(o) for o in json.loads(evidence[0])] if evidence else lookup.offers
         fit_by_id = {o.product_id: {"probability": o.fit, "question": o.fit_question or ""}
-                     for o in lookup.offers if o.fit is not None} if lookup else {}
+                     for o in all_offers if o.fit is not None}
         with self.db.connect(write=True) as conn:
             # Recheck after taking the same lock used by policy updates.
             self.policy.check_customer(actor.removeprefix("agent:"), request.customer_id)
+            need, effective = self.policy.effective_need(lookup.need)
             lines, violations, expiries = [], [], [now + timedelta(minutes=30)]
             for line in requested_lines:
                 p = products[line.product_id]
                 offer = offer_for(p, need, price[p.id], stock[p.id], fit_by_id.get(p.id),
-                                  sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id))
+                                  sales_quantity=line.quantity_sales_units, reserved_amount=reserved(conn, p.id), sources=effective)
                 if offer.unit_price is None or any(w.code == "PRICE_ERROR" for w in offer.warnings):
                     raise DomainError("PRICE_ERROR", f"Cannot lock an invalid price for {p.id}", 502)
                 if offer.currency != "EUR":
@@ -157,7 +162,7 @@ class Orders:
                     expiries.append(offer.valid_to)
                 if offer.availability.closing_time and offer.availability.closing_time > now:
                     expiries.append(offer.availability.closing_time)
-                violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens))
+                violations.extend(hard_violations(p, need.required_claims, need.exclude_allergens, effective))
                 lines.append(offer)
             quote = Quote(id=str(uuid4()), customer_id=request.customer_id, deliver_by=request.deliver_by,
                           need_ref=request.need_ref, plan_ref=request.plan_ref,
@@ -229,22 +234,24 @@ class Orders:
             return order
 
     def _violations(self, conn, quote):
-        violations = list(quote.hard_constraint_violations)
+        violations = [] if quote.need_ref else list(quote.hard_constraint_violations)
         if quote.need_ref:
-            lookup = LookupResult.model_validate_json(conn.execute("SELECT data FROM lookups WHERE id=?", (quote.need_ref,)).fetchone()[0])
+            lookup = LookupResult.model_validate_json(conn.execute("SELECT data FROM lookups WHERE id=?", (quote.need_ref,)).fetchone()[0], context={"stored": True})
+            need, effective = self.policy.effective_need(lookup.need)
             for line in quote.lines:
-                violations.extend(hard_violations(self.catalog.get(line.product_id), lookup.need.required_claims, lookup.need.exclude_allergens))
+                violations.extend(hard_violations(self.catalog.get(line.product_id), need.required_claims, need.exclude_allergens, effective))
         return sorted(set(violations))
 
     @staticmethod
     def _refresh_stock(conn, lines, deliver_by, stock, exclude_order=None):
         refreshed = []
-        stock_codes = {"PARTIAL_STOCK", "DATE_SHIFT", "CUTOFF_PASSED", "SALES_BLOCK", "UNKNOWN_PRODUCT", "AVAILABILITY_ERROR"}
+        stock_codes = {"PARTIAL_STOCK", "DATE_SHIFT", "CUTOFF_PASSED", "CUTOFF_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
+                       "AVAILABILITY_ERROR", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "NO_STOCK"}
         for original in lines:
             line = original.model_copy(deep=True)
             raw = stock[line.product_id]
             line.availability, warnings = availability_for(raw, deliver_by, line.units_needed,
-                                                           reserved(conn, line.product_id, exclude_order))
+                                                           reserved(conn, line.product_id, exclude_order), line.sales_unit)
             line.warnings = [w for w in line.warnings if w.code not in stock_codes] + warnings
             from .lookup import timestamp
             line.provenance["availability"].fetched_at = timestamp(raw.get("_fetched_at")) or audit.utcnow()
@@ -257,7 +264,7 @@ class Orders:
         conn.execute("DELETE FROM reservations WHERE order_id=?", (order.id,))
         if order.status in {"CONFIRMED", "PENDING_APPROVAL"}:
             for line in order.lines:
-                if line.availability.logistic_model == "Stock":
+                if line.availability.logistic_model != "Terminal":
                     conn.execute("INSERT INTO reservations VALUES(?,?,?)", (order.id, line.product_id, line.units_needed))
 
     def get_quote(self, quote_id):
@@ -340,7 +347,8 @@ class Orders:
                 # Evaluate as the placing agent so the audit keeps the mandate rules the human signs off
                 # (per-order and daily limits); only REJECTED blocks an approval.
                 evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
-                                                        agent_id=order.agent_id, warnings=quote.warnings)
+                                                        agent_id=order.agent_id, customer_id=quote.customer_id,
+                                                        warnings=quote.warnings)
                 if evaluation.outcome == "REJECTED":
                     if any(hit.rule == "unregistered_agent" for hit in evaluation.hits):
                         raise DomainError("AGENT_NOT_REGISTERED", "Approval requires a mandate for the placing agent", 403,

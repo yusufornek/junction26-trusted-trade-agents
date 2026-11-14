@@ -68,7 +68,9 @@ def test_cancel_ac1_missing_cutoffs_do_not_block(client, gateway, need, upstream
 
     respx_mock.post("https://valio.test/api/availability").mock(side_effect=availability_response)
     order = place_order(gateway, need, product_ids=("1", "4"))
-    assert order.status == "CONFIRMED"
+    assert order.status == "PENDING_APPROVAL"
+    assert "CUTOFF_UNKNOWN" in {hit.rule for hit in order.policy.hits}
+    order = gateway.orders.approve(order.id, "Ada")
     assert client.post(f"/v1/orders/{order.id}/cancel", json={"cancelled_by": "Ada"}).status_code == 200
 
 

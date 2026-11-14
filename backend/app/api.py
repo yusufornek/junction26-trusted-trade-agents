@@ -54,7 +54,8 @@ def create_app(gateway=None):
                 await run_in_threadpool(audit_cancel_validation, request, error.body, message)
             except sqlite3.Error:
                 logger.exception("Could not audit a refused cancellation")
-        return JSONResponse(status_code=422, content={"code": "VALIDATION_ERROR", "message": message})
+        code = "UNKNOWN_CODE" if any(e["type"] == "UNKNOWN_CODE" for e in error.errors()) else "VALIDATION_ERROR"
+        return JSONResponse(status_code=422, content={"code": code, "message": message})
 
     def svc(request):
         return request.app.state.gateway
@@ -78,7 +79,8 @@ def create_app(gateway=None):
     @app.get("/health", response_model=Health)
     def health(request: Request):
         count = svc(request).catalog.count()
-        return Health(status="ok" if count else "catalog_empty", catalog_rows=count)
+        return Health(status="ok" if count else "catalog_empty", catalog_rows=count,
+                      coverage=svc(request).catalog.metadata("coverage"))
 
     @app.post("/v1/offers", response_model=LookupResult,
               summary="Rank live offers and substitutes; propose fulfilment plans with caller policy previews")

@@ -116,7 +116,7 @@ def test_size_ac6_price_error_keeps_unconfirmed_name(gateway, need, upstream):
     assert offer.size_per_sales_unit == 5.0
     assert offer.size_source == "name_parse"
     assert offer.size_confirmed_by_price is False
-    assert {w.code for w in offer.warnings} == {"PRICE_ERROR"}
+    assert {w.code for w in offer.warnings} == {"PRICE_ERROR", "SIZE_UNCONFIRMED"}
     assert offer.units_needed == 200
 
 

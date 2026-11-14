@@ -35,9 +35,13 @@ In separate terminals, starting in `backend/`:
 ```
 
 The build reads the unchanged gzip/CSV files in `../data/` and writes `backend/var/app.db` (gitignored).
-Rebuilding replaces only catalog/FTS rows, retaining orders and audit. The real 17,546-row catalog
-built in 1.719 seconds in the supplied environment. API docs: `http://127.0.0.1:8000/docs`.
-`GET /health` returns the catalog row count; build the catalog before demonstrating lookup.
+Rebuilding replaces catalog/FTS rows and catalog metadata, retaining orders and audit. Deleted products
+are skipped. Missing reliability/CO2 files or required columns stop the build with a named error.
+The JSON build report prints `rows`, `deleted_skipped`, `seconds` and `coverage` with filled/empty counts
+for every catalog field. Coverage, code vocabularies and global ranking statistics are stored in SQLite;
+`GET /health` returns the row count and coverage. Rebuild before using the new evidence model.
+For an isolated rebuild use `--db /tmp/catalog-check.db`; fixture builds may also supply `--source`,
+`--reliability` and `--carbon`. API docs: `http://127.0.0.1:8000/docs`.
 
 `scripts/reset_demo.py` moves the database, any WAL/SHM sidecars and runtime policy into a new
 `var/archive/YYYYMMDD-HHMMSS/` folder, then rebuilds the catalog with empty transaction/audit state.
@@ -83,6 +87,7 @@ The SDK import is `mcp.server.mcpserver.MCPServer`; both transports use the inst
    Alternatively, omit `lines` and send `plan_ref: {"lookup_id": "...", "plan_index": 0}`;
    `need_ref` then defaults to that lookup. Exactly one of `lines` or `plan_ref` is required.
    Customer and delivery date must match the lookup. Invalid plan indices return 422.
+   Explicit lines without `need_ref` return `422 NEED_REF_REQUIRED`; every new quote binds a stored need.
 3. Call `place_order(quote_id, idempotency_key)`. REST: `POST /v1/orders` with `{"quote_id":"..."}`,
    header `Idempotency-Key`, and `X-Agent-Id` identifying a registered agent such as
    `hotel-chain-agent`. The default `external` is unregistered: ordering requires a mandate
@@ -120,7 +125,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   for unknown orders. MCP `get_order_status` continues to return the existing order model.
 - `GET /v1/lookups/{lookup_id}` returns the original stored `LookupResult`, including alternatives;
   use a quote's `need_ref`. Unknown IDs return `404 LOOKUP_NOT_FOUND`. No upstream calls are made.
-- `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `agents`, `updated_at`,
+- `GET /v1/policy` returns `approval`, `reject`, `ranking_weights`, `shortlist`, `agents`, `customers`, `updated_at`,
   `updated_by`, and `known_warning_codes`. The last three fields are server supplied; initial
   committed defaults have null update metadata. `PUT /v1/policy` accepts
   `{"policy": <editable sections>, "updated_by": "Ada", "comment": "Budget review"}` and returns
@@ -137,7 +142,7 @@ The offline full-flow tests exercise 1,000 L → 200 sales units at 13 EUR each 
   Writes atomically replace the runtime file; committed defaults remain unchanged. REST and MCP
   reread it for subsequent operations without restart. With a custom database path, the runtime
   policy lives beside that database so independent gateway instances stay isolated.
-  PUTs omitting `agents` or `shortlist.live_max` keep the current values, including older frontend
+  PUTs omitting `agents`, `customers` or `shortlist.live_max` keep the current values, including older frontend
   request shapes. Older runtime files missing those fields inherit the committed defaults; an
   explicit `agents: {}` removes all mandates. Reset restores the committed mandates and limits.
 - `GET /v1/stats?since=<ISO datetime>` returns described Pydantic metrics in the OpenAPI contract.
@@ -180,7 +185,8 @@ stays pending and a human can reject it.
 
 ## Fulfilment plans and substitutes (spec 08)
 
-Every lookup adds `plans` alongside the existing offers, using only the returned, already-priced offers.
+Every lookup adds `plans` alongside the existing offers, using all ranked, already-priced offers before
+the returned offer slice. Fit evidence for every priced candidate is stored for later plan quotes.
 No additional Valio or Decisions calls are made. Up to three top-ranked `single` plans cover the whole
 need. A `split` plan combines up to four products when no single can cover it, or when splitting is
 cheaper; the planner compares lot/pack combinations and respects on-time stock after local
@@ -234,8 +240,19 @@ Old stored lookups without preferences/plans remain readable, including through 
   unchanged and Decisions receives the original intent. `RETRIEVAL_BROADENED` names the tried words;
   if no products match, `no_match_reason` names them and suggests `search_terms`. Explicit terms never
   broaden. The small stop-word/unit list is documented in `app/lookup.py`.
-  Required claims and excluded `CONTAINS` allergens are hard filters before shortlisting. Absence from
-  the contains list is catalog evidence, not certification that an allergen is absent.
+  Required claims and allergen exclusions are hard filters before shortlisting. The catalog preserves
+  `contains`, `may_contain`, `undeclared`, `free_from` and `has_allergen_declaration`; `X99` is a declaration
+  marker, never an allergen. Exclusion passes only on an uncontradicted free-from entry or a declaration
+  not listing the excluded code. Missing declarations, contains, may-contain, undeclared and conflicting
+  entries fail. Required claims contradicted by contains/may-contain data also fail (lactose, gluten,
+  egg, soy, wheat and vegan mappings). `exclusion_counts` includes reasons and sources, also shown in
+  `no_match_reason` for empty results. This is catalog evidence, not a safety certification.
+  Allergen/claim codes are trimmed and uppercased; labels match case-insensitively to the build vocabulary.
+  Unknown codes return `422 UNKNOWN_CODE` naming the field, code and valid values, including policy codes.
+  Quantity units are L, KG or SALES_UNIT. `customer_id` is required and non-blank; `deliver_by` is today
+  through +60 days in Europe/Helsinki. Quantities are strict numeric values >0 and <=1,000,000 (no booleans
+  or numeric strings), blank brand entries fail, and pack-size minimum cannot exceed maximum.
+  MCP validation failures use JSON `{code, message}` tool errors as REST does.
 - Decisions screens `shortlist.catalog_pool` (default 40). Every candidate at or above
   `approval.min_fit_probability` is priced, highest fit first, up to `shortlist.live_max` (default 25,
   validated 10–40). If too few pass, the next best fits fill up to `max_candidates`; without fit scores,
@@ -255,27 +272,57 @@ Old stored lookups without preferences/plans remain readable, including through 
 - Conversion computes catalog base content times the sales-unit multiplier, parsed name size times the
   multiplier, and the live catalog/comparison price ratio. Among exact sources confirmed by price,
   catalog content takes precedence over name content. When the ratio agrees within 3% (inclusive), the exact size is used and
-  `size_confirmed_by_price` is true. Without a ratio the exact size is used unconfirmed. A disagreement
+  `size_confirmed_by_price` is true. Without a confirming ratio the exact size carries `SIZE_UNCONFIRMED`
+  and requires approval. MLT/CLT volumes convert to litres; a KI sales case uses CASE content when present.
+  Catalog sizes >100 L, >100 kg, <1 g per base unit or differing from the name by a factor >=10 are
+  stored as `size_suspect` and ignored, falling back to the name or ratio, then `SIZE_UNKNOWN`. A disagreement
   uses the ratio and emits `SIZE_MISMATCH` naming the values; this requires approval by default.
   With no exact content the ratio remains the fallback. Quantities, totals and coverage use the
   reconciled size; quotes retain their explicitly requested sales quantities. KG sales use their lot-size step;
   other sales quantities are whole units. Unknown content never silently becomes one litre/kg.
-- Prices are net `catalogPrice.value`; tax-inclusive values are returned separately. Every quote rechecks
+- Prices are positive net `catalogPrice.value`; missing/zero/negative prices or missing upstream currency
+  give `PRICE_ERROR` and prevent quoting. No EUR fallback is assumed. Tax-inclusive values are returned separately. Every quote rechecks
   both endpoints bypassing the 60-second per-product cache. Order placement rechecks availability only.
   Expiry is the earliest price `validTo`, future cutoff, or local UTC now + 30 minutes. A past cutoff
   warns instead of creating an instantly expired quote. EUR is the MVP policy currency.
 - Availability sums unblocked lines arriving on/before `deliver_by`. Future lines are flagged
   `DATE_SHIFT`, never counted as on-time coverage. `CUTOFF_PASSED` compares cutoff with upstream `timeNow`;
-  its precise meaning is unconfirmed. Provenance uses upstream `timeNow` where supplied, otherwise local
+  its precise meaning is unconfirmed. Missing/unparseable cutoff gives `CUTOFF_UNKNOWN`; naive cutoffs
+  are interpreted in Europe/Helsinki. Missing/different schedule `salesUnit` gives `UNIT_MISMATCH` and
+  that line contributes zero stock. Missing/unknown logistic models give `STOCK_MODEL_UNKNOWN`, are finite,
+  and subtract local reservations. Stock-model zero stock without a date gives rejecting `NO_STOCK`.
+  Provenance uses upstream `timeNow` where supplied, otherwise local
   UTC receipt time (the price response normally has no server clock).
 - Warnings: `PARTIAL_STOCK`, `DATE_SHIFT`, `CUTOFF_PASSED`, `SALES_BLOCK`, `UNKNOWN_PRODUCT`,
-  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_MISMATCH`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, `AVAILABILITY_ERROR`, `RETRIEVAL_BROADENED`, and `POOL_TRUNCATED`. Empty schedule lines signal
+  `PRICE_ERROR`, `SIZE_UNKNOWN`, `SIZE_UNCONFIRMED`, `SIZE_MISMATCH`, `UNIT_MISMATCH`, `STOCK_MODEL_UNKNOWN`,
+  `CUTOFF_UNKNOWN`, `NO_STOCK`, `NO_FIT_SCORE`, `OUTSIDE_PREFERENCE`, `AVAILABILITY_ERROR`,
+  `VARIABLE_WEIGHT`, `DEPOSIT`, `RETRIEVAL_BROADENED`, and `POOL_TRUNCATED`. Variable-weight goods state
+  that final price follows delivered weight; deposits include catalog details. Empty schedule lines signal
   `UNKNOWN_PRODUCT`. Lookup failures remain visible; a quote requires a valid price and successful
   upstream checks. Human approval cannot override sales blocks, unknown products, hard constraints,
   or unverifiable availability.
 - `policy.yaml` defines ranking weights and all approval/rejection thresholds. Every matching rule is
-  reported; rejection takes precedence. Missing ranking metrics score zero; known values are min/max
-  normalized across candidates. CO2 is a product-group average. Top three labels: best/better/good.
+  reported; rejection takes precedence. Every warning outside `reject.on` and `approval.ignored_warnings`
+  requires approval even with empty `warnings_need_approval`. The ignored list defaults empty in the model;
+  committed defaults ignore only VARIABLE_WEIGHT, DEPOSIT, RETRIEVAL_BROADENED and POOL_TRUNCATED.
+  PRICE_ERROR, AVAILABILITY_ERROR, SIZE_UNKNOWN, SIZE_UNCONFIRMED, UNIT_MISMATCH, STOCK_MODEL_UNKNOWN,
+  NO_FIT_SCORE and CUTOFF_UNKNOWN cannot be ignored (PUT returns 422). Disabling hard-violation rejection
+  routes violations to approval. Older runtime policies acquire the new default evidence/reject codes on load.
+- `purchase_total` is units needed times net sales-unit price, rounded in decimal currency arithmetic;
+  `overbuy {amount, unit}` shows whole-pack excess. Both are explained in offer text; `unit_price` remains
+  per sales unit. The price factor uses purchase total when size is known, otherwise per-unit comparison.
+  `score_breakdown {price, coverage, reliability, co2, fit}` contains weighted contributions summing to score.
+  Reliability uses its absolute 0–1 value; CO2 uses the catalog-wide range. Missing values use the global
+  catalog median, with neutral text (0.5 when no global data). CO2 is a product-group average.
+  Reject-coded and SIZE_UNKNOWN/PRICE_ERROR/AVAILABILITY_ERROR/UNIT_MISMATCH offers follow all orderable
+  offers and receive no rank label. Missing-fit offers follow scored offers; within those groups soft
+  preference matches precede substitutes. Eligible top three labels are best/better/good.
+- Policy `customers` maps each customer ID to `required_claims`, `exclude_allergens`, and `note`, default `{}`.
+  Standing constraints are unioned with the request at lookup, quotation, placement and approval, always
+  reading current policy. `effective_constraints` lists `{code, source}` entries with `request` or
+  `customer_policy`; matched evidence, removal counts and hard-violation hits name the source.
+  Updates validate vocabulary and audit customer changes in `POLICY_UPDATED.data.diff`. Approvals also
+  recheck the placing agent's current customer scope. Rejection remains available when constraints tighten.
 - `OPEN` quotes become `ACCEPTED` or `EXPIRED`. Each quote can create only one order.
   `PENDING_APPROVAL` orders become `CONFIRMED`, `REJECTED`, or `EXPIRED`; their approval window is the
   quote expiry. Expiration is evaluated on requests (no background worker).

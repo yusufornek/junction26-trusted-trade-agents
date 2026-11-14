@@ -8,7 +8,8 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
                 autonomous_total=Decimal(0), node_budget=20_000):
     target = Decimal(str(need.quantity.value))
     # Hard filters already ran before pricing. Exclude unverifiable/unsuitable offers as well.
-    invalid = {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT", "AVAILABILITY_ERROR"}
+    invalid = set(policy.reject.on) | {"PRICE_ERROR", "SIZE_UNKNOWN", "SALES_BLOCK", "UNKNOWN_PRODUCT",
+                                      "AVAILABILITY_ERROR", "UNIT_MISMATCH", "NO_STOCK"}
     eligible = [o for o in offers if o.fit is not None and o.fit >= policy.approval.min_fit_probability
                 and o.currency == "EUR" and o.unit_price is not None and o.size_per_sales_unit
                 and not any(w.code in invalid for w in o.warnings)
@@ -22,8 +23,8 @@ def build_plans(need, offers, evaluator, policy, agent_id, catalog, *,
     prices = [Decimal(str(o.unit_price)) * step for o, step in zip(eligible, steps)]
 
     def line_cost(i, lots):
-        # Match offer_for's existing rounding, including prices with more than two decimals.
-        return Decimal(str(round(eligible[i].unit_price * float(lots * steps[i]), 2)))
+        # Same decimal currency rounding as offer_for, including fractional-cent unit prices.
+        return (Decimal(str(eligible[i].unit_price)) * lots * steps[i]).quantize(Decimal("0.01"))
 
     def cost(allocation):
         return sum(line_cost(i, units) for i, units in allocation)

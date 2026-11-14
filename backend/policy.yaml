@@ -12,9 +12,20 @@ approval:
     - PRICE_ERROR
     - AVAILABILITY_ERROR
     - OUTSIDE_PREFERENCE
+    - SIZE_UNCONFIRMED
+    - UNIT_MISMATCH
+    - STOCK_MODEL_UNKNOWN
+    - CUTOFF_UNKNOWN
+  ignored_warnings: [VARIABLE_WEIGHT, DEPOSIT, RETRIEVAL_BROADENED, POOL_TRUNCATED]
 reject:
   on_hard_constraint_violation: true
-  on: [SALES_BLOCK, UNKNOWN_PRODUCT]
+  on: [SALES_BLOCK, UNKNOWN_PRODUCT, NO_STOCK]
+customers: {}
+# customers:
+#   "1":
+#     required_claims: [FREE_FROM_LACTOSE]
+#     exclude_allergens: [AE]
+#     note: "Hotel-chain standing procurement constraints."
 # Fit gates live pricing; rank all suitable candidates before returning max_candidates offers.
 shortlist: {catalog_pool: 40, live_max: 25}
 ranking_weights: {price: 0.4, coverage: 0.25, reliability: 0.15, co2: 0.1, fit: 0.1}

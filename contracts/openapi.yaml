@@ -1174,6 +1174,13 @@ components:
           type: array
           title: Warnings Need Approval
           description: Known warning codes requiring human review.
+        ignored_warnings:
+          items:
+            type: string
+          type: array
+          title: Ignored Warnings
+          description: Only these warnings may be ignored; all other non-reject warnings
+            require approval.
       additionalProperties: false
       type: object
       required:
@@ -1325,6 +1332,23 @@ components:
       required:
       - cancelled_by
       title: CancelRequest
+    ConstraintSource:
+      properties:
+        code:
+          type: string
+          title: Code
+        source:
+          type: string
+          enum:
+          - request
+          - customer_policy
+          title: Source
+      additionalProperties: false
+      type: object
+      required:
+      - code
+      - source
+      title: ConstraintSource
     CoveredQuantity:
       properties:
         value:
@@ -1344,6 +1368,40 @@ components:
       - value
       - unit
       title: CoveredQuantity
+    CustomerConstraints:
+      properties:
+        required_claims:
+          items:
+            type: string
+          type: array
+          title: Required Claims
+        exclude_allergens:
+          items:
+            type: string
+          type: array
+          title: Exclude Allergens
+        note:
+          type: string
+          title: Note
+          default: ''
+      additionalProperties: false
+      type: object
+      title: CustomerConstraints
+    EffectiveConstraints:
+      properties:
+        required_claims:
+          items:
+            $ref: '#/components/schemas/ConstraintSource'
+          type: array
+          title: Required Claims
+        exclude_allergens:
+          items:
+            $ref: '#/components/schemas/ConstraintSource'
+          type: array
+          title: Exclude Allergens
+      additionalProperties: false
+      type: object
+      title: EffectiveConstraints
     ErrorResponse:
       properties:
         code:
@@ -1423,6 +1481,14 @@ components:
         catalog_rows:
           type: integer
           title: Catalog Rows
+        coverage:
+          additionalProperties:
+            additionalProperties:
+              type: integer
+            type: object
+          type: object
+          title: Coverage
+          description: 'Catalog build coverage: filled and empty counts per field.'
       additionalProperties: false
       type: object
       required:
@@ -1469,6 +1535,15 @@ components:
             preserve fit and constraints.
         need:
           $ref: '#/components/schemas/NeedSpec'
+        effective_constraints:
+          $ref: '#/components/schemas/EffectiveConstraints'
+        exclusion_counts:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Exclusion Counts
+          description: Removal counts by constraint source and evidence reason; counts
+            may overlap.
         offers:
           items:
             $ref: '#/components/schemas/OfferCard'
@@ -1479,8 +1554,8 @@ components:
             $ref: '#/components/schemas/FulfilmentPlan'
           type: array
           title: Plans
-          description: Single, split or partial plans from this lookup's returned
-            priced offers only; no extra upstream calls.
+          description: Single, split or partial plans from all ranked priced offers,
+            before the returned offer slice; no extra upstream calls.
         no_match_reason:
           anyOf:
           - type: string
@@ -1543,8 +1618,12 @@ components:
           type: string
           minLength: 1
           title: Customer Id
-          description: Valio customer identifier.
-          default: '1'
+          description: Required non-blank Valio customer identifier.
+        deliver_by:
+          type: string
+          format: date
+          title: Deliver By
+          description: Delivery date between today and today + 60 days, Europe/Helsinki.
         intent:
           type: string
           minLength: 1
@@ -1569,15 +1648,10 @@ components:
             type: string
           type: array
           title: Exclude Allergens
-          description: Exclude products whose catalog allergen CONTAINS includes any
-            ID.
+          description: Requires an uncontradicted free-from entry or a declaration
+            not listing the excluded allergen; missing data never proves absence.
         quantity:
           $ref: '#/components/schemas/Quantity'
-        deliver_by:
-          type: string
-          format: date
-          title: Deliver By
-          description: Latest acceptable delivery date.
         max_candidates:
           type: integer
           maximum: 10.0
@@ -1593,9 +1667,10 @@ components:
       additionalProperties: false
       type: object
       required:
+      - customer_id
+      - deliver_by
       - intent
       - quantity
-      - deliver_by
       title: NeedSpec
     OfferCard:
       properties:
@@ -1662,10 +1737,23 @@ components:
           - type: 'null'
           title: Total
           description: Net line total in currency.
+        purchase_total:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Purchase Total
+          description: Net cost of all sales units needed to cover the request, including
+            overbuy; unit_price is per sales unit.
+        overbuy:
+          anyOf:
+          - $ref: '#/components/schemas/Overbuy'
+          - type: 'null'
         currency:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Currency
-          default: EUR
+          description: Upstream currency; missing currency is a PRICE_ERROR.
         valid_from:
           anyOf:
           - type: string
@@ -1732,6 +1820,13 @@ components:
           type: number
           title: Score
           default: 0
+        score_breakdown:
+          additionalProperties:
+            type: number
+          type: object
+          title: Score Breakdown
+          description: Weighted price, coverage, reliability, co2 and fit contributions;
+            sums to score.
         rank_label:
           anyOf:
           - type: string
@@ -1917,6 +2012,25 @@ components:
       - total_live_calls
       - total_decision_calls
       title: OrderTimeline
+    Overbuy:
+      properties:
+        amount:
+          type: number
+          minimum: 0.0
+          title: Amount
+        unit:
+          type: string
+          enum:
+          - L
+          - KG
+          - SALES_UNIT
+          title: Unit
+      additionalProperties: false
+      type: object
+      required:
+      - amount
+      - unit
+      title: Overbuy
     PackSizePreference:
       properties:
         min:
@@ -2000,6 +2114,13 @@ components:
           title: Agents
           description: Agent identity to mandate; ordering requires a mandate. Lookups
             and quotes are open to unregistered agents.
+        customers:
+          additionalProperties:
+            $ref: '#/components/schemas/CustomerConstraints'
+          type: object
+          title: Customers
+          description: Standing buyer constraints unioned with each request at every
+            step.
         updated_at:
           anyOf:
           - type: string
@@ -2161,6 +2282,22 @@ components:
             type: string
           type: array
           title: Allergens Contains
+        allergen_status:
+          additionalProperties:
+            items:
+              type: string
+              enum:
+              - contains
+              - may_contain
+              - undeclared
+              - free_from
+            type: array
+          type: object
+          title: Allergen Status
+        has_allergen_declaration:
+          type: boolean
+          title: Has Allergen Declaration
+          default: false
         free_from:
           items:
             type: string
@@ -2181,6 +2318,31 @@ components:
           - type: number
           - type: 'null'
           title: Base Net Weight Kg
+        size_suspect:
+          type: boolean
+          title: Size Suspect
+          default: false
+        sales_volume_l:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Sales Volume L
+          description: Content of the CASE record when sold as a case.
+        sales_net_weight_kg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Sales Net Weight Kg
+        variable_unit:
+          type: boolean
+          title: Variable Unit
+          default: false
+        deposits:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Deposits
         delivery_reliability:
           anyOf:
           - type: number
@@ -2228,9 +2390,10 @@ components:
       properties:
         value:
           type: number
+          maximum: 1000000.0
           exclusiveMinimum: 0.0
           title: Value
-          description: Requested positive quantity.
+          description: Requested positive quantity, at most 1,000,000.
         unit:
           type: string
           enum:
@@ -2331,10 +2494,11 @@ components:
           title: Product Id
         quantity_sales_units:
           type: number
+          maximum: 1000000.0
           exclusiveMinimum: 0.0
           title: Quantity Sales Units
-          description: Explicit sales quantity; KG follows allowedLotSize, others
-            are whole sales units.
+          description: Explicit sales quantity, at most 1,000,000; KG follows allowedLotSize,
+            others are whole sales units.
       additionalProperties: false
       type: object
       required:
@@ -2347,11 +2511,12 @@ components:
           type: string
           minLength: 1
           title: Customer Id
-          default: '1'
+          description: Required non-blank Valio customer identifier.
         deliver_by:
           type: string
           format: date
           title: Deliver By
+          description: Delivery date between today and today + 60 days, Europe/Helsinki.
         lines:
           anyOf:
           - items:
@@ -2372,11 +2537,12 @@ components:
           - type: string
           - type: 'null'
           title: Need Ref
-          description: lookup_id to carry verified fit scores and hard constraints
-            into policy.
+          description: 'Required with explicit lines: stored lookup_id binding fit,
+            preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED.'
       additionalProperties: false
       type: object
       required:
+      - customer_id
       - deliver_by
       title: QuoteRequest
     RankingWeights:

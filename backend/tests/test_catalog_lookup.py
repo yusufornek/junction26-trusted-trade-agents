@@ -24,7 +24,9 @@ def test_catalog_build_and_hard_filters(gateway):
     assert p.co2_kg_per_kg == 1.2
     assert p.free_from == ["ML"]
     assert p.labels == ["ORGANIC"]
-    assert not gateway.catalog.search('" OR *', ["ABSENT"], [])[0]
+    from app.db import DomainError
+    with pytest.raises(DomainError, match="UNKNOWN_CODE"):
+        gateway.catalog.search('" OR *', ["ABSENT"], [])
 
 
 @pytest.mark.parametrize("pid,unit,price,expected,source", [
@@ -80,7 +82,9 @@ def test_lookup_batches_filters_and_cache(gateway, need, upstream):
     assert first.size_source == "name_parse" and first.units_needed == 200
     assert first.total == 2600
     assert first.fit == 0.91
-    assert first.matched_because == ["FREE_FROM_LACTOSE from catalog nutritionalClaim", "AE absent from catalog allergen CONTAINS"]
+    assert first.matched_because[:2] == ["FREE_FROM_LACTOSE from catalog nutritionalClaim (request)",
+                                       "AE not listed in the catalog allergen declaration (request)"]
+    assert "Purchase total: 2600.00 EUR" in " ".join(first.matched_because)
     assert [o.rank_label for o in result.offers[:3]] == ["best", "better", "good"]
     second = gateway.find_offers(need)
     assert second.live_calls.price == second.live_calls.availability == 0

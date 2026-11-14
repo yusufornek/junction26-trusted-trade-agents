@@ -5,6 +5,7 @@ import json
 import math
 import re
 import time
+from statistics import median
 from pathlib import Path
 
 from .config import BACKEND, ROOT
@@ -26,9 +27,22 @@ def number(value):
 
 def csv_values(path, column):
     if path is None or not Path(path).is_file():
-        return {}
+        raise ValueError(f"Missing catalog data file: {path}")
     with open(path, newline="", encoding="utf-8-sig") as f:
-        return {str(row["productId"]): number(row.get(column)) for row in csv.DictReader(f)}
+        reader = csv.DictReader(f)
+        for required in ("productId", column):
+            if required not in (reader.fieldnames or []):
+                raise ValueError(f"Catalog data file {path}: missing column {required}")
+        return {str(row["productId"]): number(row.get(column)) for row in reader}
+
+
+def name_size(name, unit):
+    pattern = r"(?<![\d.,])(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(kg|dl|cl|ml|l|g)\b"
+    factors = {"l": 1, "dl": .1, "cl": .01, "ml": .001} if unit == "L" else {"kg": 1, "g": .001}
+    for match in re.finditer(pattern, name, re.IGNORECASE):
+        if match[3].lower() in factors:
+            return float(match[2].replace(",", ".")) * factors[match[3].lower()]
+    return None
 
 
 def extract(raw, reliability, carbon):
@@ -41,10 +55,42 @@ def extract(raw, reliability, carbon):
 
     base = next((c for c in synkka.get("unitConversions", [])
                  if c.get("synkkaPackagingType") == "BASE_UNIT_OR_EACH"), {})
-    vol, weight = base.get("volume") or {}, base.get("netWeight") or {}
-    weight_value = number(weight.get("value"))
-    weight_kg = (weight_value * {"KGM": 1, "GRM": 0.001}.get(weight.get("unit"), 0)
-                 if weight_value is not None else None)
+    case = next((c for c in synkka.get("unitConversions", [])
+                 if c.get("synkkaPackagingType") == "CASE"), {}) if raw.get("salesUnit") in {"KI", "CASE"} else {}
+
+    def content(record, field, factors):
+        value = record.get(field) or {}
+        n = number(value.get("value"))
+        return n * factors[value["unit"]] if n is not None and value.get("unit") in factors else None
+
+    volumes, weights = {"LTR": 1, "MLT": .001, "CLT": .01}, {"KGM": 1, "GRM": .001}
+    volume_l, weight_kg = content(base, "volume", volumes), content(base, "netWeight", weights)
+    case_l, case_kg = content(case, "volume", volumes), content(case, "netWeight", weights)
+    name = localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi")
+    suspect = False
+    for value, unit, lower in ((volume_l, "L", 0), (weight_kg, "KG", .001)):
+        named = name_size(name, unit)
+        if value is not None and (value <= 0 or value > 100 or value < lower
+                                  or (named and value > 0 and max(value / named, named / value) >= 10)):
+            suspect = True
+    multiplier = next((number(u.get("sizeInBaseUnits")) for u in raw.get("units") or []
+                       if u.get("unitId") == raw.get("salesUnit")), 1) or 1
+    for value, unit in ((case_l, "L"), (case_kg, "KG")):
+        named = name_size(name, unit)
+        per_base = value / multiplier if value is not None else None
+        if per_base is not None and (per_base <= 0 or per_base > 100 or (unit == "KG" and per_base < .001)
+                                    or (named and per_base > 0 and max(per_base / named, named / per_base) >= 10)):
+            suspect = True
+    statuses, declaration = {}, False
+    for group in ("allergen", "nonAllergen"):
+        for entry in grouped.get(group, []):
+            code, status = str(entry.get("id", "")).strip().upper(), str(entry.get("unit", "")).lower()
+            if code == "X99":
+                declaration = True
+                continue
+            if code and status in ({"contains", "may_contain", "undeclared"} if group == "allergen" else {"free_from"}):
+                statuses.setdefault(code, set()).add(status)
+                declaration |= status != "free_from"
     return Product(
         id=str(raw["id"]), name_en=localized(synkka.get("names"), "en") or localized(synkka.get("names"), "fi"),
         name_fi=localized(synkka.get("names"), "fi"), category=str(raw["category"]) if raw.get("category") else None,
@@ -54,9 +100,12 @@ def extract(raw, reliability, carbon):
         temperature_condition=raw.get("temperatureCondition"),
         units={u["unitId"]: n for u in (raw.get("units") or [])
                if (n := number(u.get("sizeInBaseUnits"))) is not None},
-        claims=ids("nutritionalClaim"), allergens_contains=ids("allergen", "CONTAINS"),
-        free_from=ids("nonAllergen"), labels=ids("packagingMarkedLabel"),
-        base_volume_l=number(vol.get("value")) if vol.get("unit") == "LTR" else None,
+        claims=[c.strip().upper() for c in ids("nutritionalClaim")],
+        allergens_contains=sorted(c for c, s in statuses.items() if "contains" in s),
+        allergen_status={c: sorted(s) for c, s in statuses.items()}, has_allergen_declaration=declaration,
+        free_from=sorted(c for c, s in statuses.items() if "free_from" in s), labels=ids("packagingMarkedLabel"),
+        base_volume_l=volume_l, size_suspect=suspect, sales_volume_l=case_l, sales_net_weight_kg=case_kg,
+        variable_unit=bool(synkka.get("variableUnit") or raw.get("variableUnit")), deposits=raw.get("deposits") or [],
         base_net_weight_kg=weight_kg or None, delivery_reliability=reliability.get(str(raw["id"])),
         co2_kg_per_kg=carbon.get(str(raw["id"])),
     )
@@ -73,10 +122,25 @@ def build(db, source=ROOT / "data/product_data.json.gz", reliability_path=ROOT /
     with db.connect(write=True) as conn:
         conn.execute("DELETE FROM products")
         conn.execute("DELETE FROM products_fts")
-        count = 0
+        count, deleted = 0, 0
+        coverage = {field: {"filled": 0, "empty": 0} for field in Product.model_fields}
+        vocabulary = {"required_claims": set(), "exclude_allergens": set(), "preferences.labels": set()}
+        ranking = {"reliability": [], "co2": []}
         for raw in raw_products:
+            if raw.get("deleted"):
+                deleted += 1
+                continue
             product = extract(raw, reliability, carbon)
             values = product.model_dump()
+            for field, value in values.items():
+                filled = value is not None and value != "" and value != [] and value != {} and value is not False
+                coverage[field]["filled" if filled else "empty"] += 1
+            vocabulary["required_claims"].update(product.claims)
+            vocabulary["exclude_allergens"].update(product.allergen_status)
+            vocabulary["preferences.labels"].update(product.labels)
+            for key, value in (("reliability", product.delivery_reliability), ("co2", product.co2_kg_per_kg)):
+                if value is not None:
+                    ranking[key].append(value)
             columns = list(values)
             row = [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for v in values.values()]
             conn.execute(f"INSERT INTO products({','.join(columns)},data) VALUES({','.join('?' for _ in range(len(row)+1))})",
@@ -86,17 +150,81 @@ def build(db, source=ROOT / "data/product_data.json.gz", reliability_path=ROOT /
                 product.id, product.name_en, product.name_fi,
                 localized(synkka.get("keyIngredients"), "en"), localized(synkka.get("marketingTexts"), "en")))
             count += 1
-    return {"rows": count, "seconds": round(time.perf_counter() - start, 3)}
+        metadata = {"coverage": coverage, "vocabulary": {k: sorted(v) for k, v in vocabulary.items()},
+                    "ranking": {k: {"median": median(v), "min": min(v), "max": max(v)}
+                                for k, v in ranking.items() if v}}
+        for key, value in metadata.items():
+            conn.execute("INSERT OR REPLACE INTO catalog_metadata VALUES(?,?)", (key, json.dumps(value)))
+    return {"rows": count, "deleted_skipped": deleted, "seconds": round(time.perf_counter() - start, 3),
+            "coverage": coverage}
 
 
-def hard_violations(product, required_claims, exclude_allergens):
-    return ([f"{product.id}: missing required claim {c}" for c in required_claims if c not in product.claims]
-            + [f"{product.id}: contains excluded allergen {a}" for a in exclude_allergens if a in product.allergens_contains])
+CLAIM_CONTRADICTIONS = {
+    "FREE_FROM_LACTOSE": {"ML"}, "FREE_FROM_GLUTEN": {"AW", "UW", "GB", "NR", "GS", "GK"},
+    "FREE_FROM_EGGS": {"AE"}, "FREE_FROM_SOY": {"AY"}, "FREE_FROM_WHEAT": {"UW"},
+    "VEGAN": {"AM", "ML", "AE", "AF", "AC", "AN"},
+}
+
+
+def allergen_evidence(product, code):
+    statuses = set(product.allergen_status.get(code, []))
+    if "contains" in statuses:
+        return False, "contains"
+    if "may_contain" in statuses:
+        return False, "may contain"
+    if "undeclared" in statuses:
+        return False, "undeclared"
+    if "free_from" in statuses:
+        return True, f"{code} declared free-from (catalog nonAllergen)"
+    if product.has_allergen_declaration:
+        return True, f"{code} not listed in the catalog allergen declaration"
+    return False, "no allergen data"
+
+
+def constraint_failures(product, required_claims, exclude_allergens):
+    failures = []
+    for code in required_claims:
+        reason = None
+        if code not in product.claims:
+            reason = "missing required claim"
+        elif any(set(product.allergen_status.get(a, [])) & {"contains", "may_contain"}
+                 for a in CLAIM_CONTRADICTIONS.get(code, set())):
+            reason = "claim contradicted by allergen data"
+        if reason:
+            failures.append(("required_claims", code, reason))
+    for code in exclude_allergens:
+        passes, reason = allergen_evidence(product, code)
+        if not passes:
+            failures.append(("exclude_allergens", code, reason))
+    return failures
+
+
+def hard_violations(product, required_claims, exclude_allergens, sources=None):
+    return [f"{product.id}: {reason} {code} ({source})"
+            for field, code, reason in constraint_failures(product, required_claims, exclude_allergens)
+            for source in ([v.source for v in getattr(sources, field) if v.code == code] if sources else ["request"])]
 
 
 class Catalog:
     def __init__(self, db):
         self.db = db
+
+    def metadata(self, key):
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT data FROM catalog_metadata WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def normalize_codes(self, values, field, *, location=None):
+        vocabulary = self.metadata("vocabulary").get(field, [])
+        canonical = {v.casefold(): v for v in vocabulary}
+        result = []
+        for value in values:
+            code = canonical.get(value.strip().casefold())
+            if code is None:
+                raise DomainError("UNKNOWN_CODE", f"{location or field}: unknown code {value!r}; valid values: {', '.join(vocabulary)}", 422)
+            if code not in result:
+                result.append(code)
+        return result
 
     def get(self, product_id):
         with self.db.connect() as conn:
@@ -110,12 +238,14 @@ class Catalog:
             return conn.execute("SELECT count(*) FROM products").fetchone()[0]
 
     def search(self, query, required_claims=None, exclude_allergens=None, limit=10, *, max_limit=10,
-               removed_by=None, mode="and", counts=None):
+               removed_by=None, mode="and", counts=None, sources=None):
         """Keep the (products, excluded) API; optional counts includes every hard-filter match.
 
         OR retrieval orders by distinct terms matched, then FTS rank and product ID.
         Quoted hyphenated terms are phrases; callers can also supply their parts.
         """
+        required_claims = self.normalize_codes(required_claims or [], "required_claims")
+        exclude_allergens = self.normalize_codes(exclude_allergens or [], "exclude_allergens")
         if not 1 <= limit <= max_limit:
             raise DomainError("INVALID_LIMIT", f"limit must be between 1 and {max_limit}", 422)
         if mode not in {"and", "or"}:
@@ -145,16 +275,14 @@ class Catalog:
                 "WHERE products_fts MATCH ? ORDER BY " + order + "bm25(products_fts), p.id", (*params, expression))
             for row in rows:
                 p = Product.model_validate_json(row["data"])
-                if hard_violations(p, required_claims or [], exclude_allergens or []):
+                failures = constraint_failures(p, required_claims, exclude_allergens)
+                if failures:
                     excluded += 1
                     if removed_by is not None:
-                        for claim in required_claims or []:
-                            if claim not in p.claims:
-                                key = f"required_claims.{claim}"
-                                removed_by[key] = removed_by.get(key, 0) + 1
-                        for allergen in exclude_allergens or []:
-                            if allergen in p.allergens_contains:
-                                key = f"exclude_allergens.{allergen}"
+                        for field, code, reason in failures:
+                            origins = [v.source for v in getattr(sources, field) if v.code == code] if sources else ["request"]
+                            for origin in origins:
+                                key = f"{field}.{code} ({origin}; {reason})"
                                 removed_by[key] = removed_by.get(key, 0) + 1
                 else:
                     matched += 1
@@ -169,8 +297,14 @@ def main():
     parser = argparse.ArgumentParser(description="Build the local product catalog; no network calls.")
     parser.add_argument("command", choices=["build"])
     parser.add_argument("--db", type=Path, default=BACKEND / "var/app.db")
+    parser.add_argument("--source", type=Path, default=ROOT / "data/product_data.json.gz")
+    parser.add_argument("--reliability", type=Path, default=ROOT / "data/delivery_reliability.csv")
+    parser.add_argument("--carbon", type=Path, default=ROOT / "data/carbon_footprint.csv")
     args = parser.parse_args()
-    print(json.dumps(build(Database(args.db))))
+    try:
+        print(json.dumps(build(Database(args.db), args.source, args.reliability, args.carbon)))
+    except (ValueError, OSError) as error:
+        parser.exit(1, f"Catalog build failed: {error}\n")
 
 
 if __name__ == "__main__":

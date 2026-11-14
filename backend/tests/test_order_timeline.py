@@ -17,10 +17,16 @@ def client(gateway):
 
 
 def place(gateway, need, *, qty=200, with_lookup=True, key="timeline"):
-    lookup = gateway.find_offers(need, actor="agent:buyer") if with_lookup else None
+    lookup = gateway.find_offers(need, actor="agent:buyer")
     quote = gateway.orders.create_quote(
-        quote_request(need, qty=qty, need_ref=lookup.lookup_id if lookup else None), "buyer")
+        quote_request(need, qty=qty, need_ref=lookup.lookup_id), "buyer")
     order = gateway.orders.place_order(quote.id, key, "buyer")
+    if not with_lookup:
+        # Historical stored quotes can predate required need_ref; new quotes always bind a lookup.
+        quote = gateway.orders.get_quote(quote.id)
+        quote.need_ref = None
+        with gateway.db.connect(write=True) as conn:
+            gateway.orders._save_quote(conn, quote)
     return lookup, quote, order
 
 
@@ -58,7 +64,7 @@ def test_timeline_ac1_full_story_with_actors(client, gateway, need, upstream, de
 
 @pytest.mark.parametrize("expired", [False, True])
 @pytest.mark.parametrize("registered_agents", [("buyer",)], indirect=True)
-def test_timeline_ac2_quote_without_lookup(client, gateway, need, upstream, monkeypatch, expired):
+def test_timeline_ac2_legacy_stored_quote_without_lookup(client, gateway, need, upstream, monkeypatch, expired):
     _, quote, order = place(gateway, need, with_lookup=False)
     if expired:
         monkeypatch.setattr(audit, "utcnow", lambda: order.expires_at + timedelta(seconds=1))

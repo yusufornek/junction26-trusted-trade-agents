@@ -8,3 +8,4 @@ respx
 mcp==2.3.0
 cryptography
 xmlschema==3.4.3
+eth-account==0.13.7

@@ -8,7 +8,7 @@ import yaml
 
 from . import audit
 from .db import DomainError
-from .models import Order, PolicyDocument, PolicyResource, PolicyResult, RuleHit
+from .models import ConstraintSource, EffectiveConstraints, Order, PolicyDocument, PolicyResource, PolicyResult, RuleHit
 
 
 class PolicyLoader(yaml.SafeLoader):
@@ -33,6 +33,13 @@ class Policy:
             data.setdefault("shortlist", {})
             data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
             data.setdefault("agents", {key: value.model_dump() for key, value in defaults.agents.items()})
+            data.setdefault("customers", {})
+            for code in ("SIZE_UNCONFIRMED", "UNIT_MISMATCH", "STOCK_MODEL_UNKNOWN", "CUTOFF_UNKNOWN"):
+                if code not in data["approval"]["warnings_need_approval"]:
+                    data["approval"]["warnings_need_approval"].append(code)
+            if "NO_STOCK" not in data["reject"]["on"]:
+                data["reject"]["on"].append("NO_STOCK")
+            data["approval"].setdefault("ignored_warnings", defaults.approval.ignored_warnings)
         return PolicyResource.model_validate(data)
 
     def get(self):
@@ -93,6 +100,13 @@ class Policy:
                     after["shortlist"]["live_max"] = before["shortlist"]["live_max"]
                 if not reset and "agents" not in request.policy.model_fields_set:
                     after["agents"] = before["agents"]
+                if not reset and "customers" not in request.policy.model_fields_set:
+                    after["customers"] = before["customers"]
+                from .catalog import Catalog
+                catalog = Catalog(self.db)
+                for customer_id, customer in after["customers"].items():
+                    for field in ("required_claims", "exclude_allergens"):
+                        customer[field] = catalog.normalize_codes(customer[field], field, location=f"customers.{customer_id}.{field}")
                 resource = PolicyResource(**after, updated_at=audit.utcnow(), updated_by=request.updated_by)
                 audit.append(conn, f"human:{request.updated_by}", "POLICY_UPDATED",
                              "Restored default policy." if reset else "Updated procurement policy.",
@@ -109,6 +123,24 @@ class Policy:
                     self._replace(previous)
             raise
         return self.get()
+
+    def effective_need(self, need, policy=None):
+        """Keep the stored request intact; recompute the current standing union at every step."""
+        from .catalog import Catalog
+        catalog, policy = Catalog(self.db), policy or self.get()
+        customer = policy.customers.get(need.customer_id)
+        effective, updates = EffectiveConstraints(), {}
+        for field in ("required_claims", "exclude_allergens"):
+            entries = []
+            for source, values in (("request", getattr(need, field)),
+                                   ("customer_policy", getattr(customer, field) if customer else [])):
+                for code in catalog.normalize_codes(values, field):
+                    entries.append(ConstraintSource(code=code, source=source))
+            setattr(effective, field, entries)
+            updates[field] = list(dict.fromkeys(entry.code for entry in entries))
+        preferences = need.preferences.model_copy(update={"labels": catalog.normalize_codes(need.preferences.labels, "preferences.labels")})
+        updates["preferences"] = preferences
+        return need.model_copy(update=updates), effective
 
     def check_customer(self, agent_id, customer_id, policy=None):
         mandate = (policy or self.get()).agents.get(agent_id)
@@ -145,6 +177,7 @@ class Policy:
             source = f"mandate for {agent_id}"
         min_fit = policy.approval.min_fit_probability
         approval_codes, reject_codes = set(policy.approval.warnings_need_approval), set(policy.reject.on)
+        ignored_codes = set(policy.approval.ignored_warnings)
         hits, rejected, approval = [], False, False
         if mandate is not None and customer_id is not None and customer_id not in mandate.customer_ids:
             hits.append(RuleHit(rule="CUSTOMER_NOT_IN_MANDATE",
@@ -161,6 +194,7 @@ class Policy:
         for violation in hard_violations:
             hits.append(RuleHit(rule="hard_constraint_violation", detail=violation))
             rejected |= policy.reject.on_hard_constraint_violation
+            approval |= not policy.reject.on_hard_constraint_violation
         if total > max_total:
             hits.append(RuleHit(rule="max_auto_total_eur", detail=f"Net total {total:.2f} exceeds {max_total:.2f} EUR ({source})"))
             approval = True
@@ -173,8 +207,8 @@ class Policy:
         for product_id, line_warnings in warning_groups:
             # Stock refresh changes warning insertion order; equivalent evidence must yield identical hits.
             for warning in sorted(line_warnings, key=lambda w: (w.code, w.text)):
-                if warning.code in reject_codes or warning.code in approval_codes:
+                if warning.code in reject_codes or warning.code in approval_codes or warning.code not in ignored_codes:
                     hits.append(RuleHit(rule=warning.code, detail=f"{product_id}: {warning.text}"))
                     rejected |= warning.code in reject_codes
-                    approval |= warning.code in approval_codes
+                    approval |= warning.code not in reject_codes
         return PolicyResult(outcome="REJECTED" if rejected else "PENDING_APPROVAL" if approval else "CONFIRMED", hits=hits)

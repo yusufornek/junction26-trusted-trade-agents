@@ -15,6 +15,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
     tokenize='unicode61 remove_diacritics 2'
 );
 CREATE TABLE IF NOT EXISTS lookups (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS catalog_metadata (key TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS lookup_offers (lookup_id TEXT PRIMARY KEY REFERENCES lookups(id), data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS quotes (
     id TEXT PRIMARY KEY, status TEXT NOT NULL, expires_at TEXT NOT NULL, data TEXT NOT NULL
 );
@@ -46,6 +48,13 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            # Additive catalog migration: a subsequent build replaces catalog rows only.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
+            for name, kind in {"allergen_status": "TEXT", "has_allergen_declaration": "INTEGER",
+                               "size_suspect": "INTEGER", "sales_volume_l": "REAL",
+                               "sales_net_weight_kg": "REAL", "variable_unit": "INTEGER", "deposits": "TEXT"}.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE products ADD COLUMN {name} {kind}")
 
     @contextmanager
     def connect(self, write=False):

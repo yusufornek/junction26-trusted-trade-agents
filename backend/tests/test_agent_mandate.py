@@ -168,8 +168,9 @@ def test_ac_6_effective_per_order_limit_reports_source(gateway, need, upstream):
 
 def test_ac_7_customer_scope_rejects_quotes_and_orders_with_audit(gateway, need, upstream):
     other_need = need.model_copy(update={"customer_id": "2"})
+    lookup = gateway.find_offers(other_need)
     with TestClient(create_app(gateway)) as client:
-        request = quote_request(other_need, qty=1).model_dump(mode="json")
+        request = quote_request(other_need, qty=1, need_ref=lookup.lookup_id).model_dump(mode="json")
         calls = len(upstream.price_calls), len(upstream.availability_calls)
         denied = client.post("/v1/quotes", json=request, headers={"X-Agent-Id": AGENT})
         assert denied.status_code == 403 and denied.json()["code"] == "CUSTOMER_NOT_IN_MANDATE"

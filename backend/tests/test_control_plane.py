@@ -137,8 +137,8 @@ def test_policy_applies_shortlist_and_ranking(gateway, need, upstream, monkeypat
     result = gateway.find_offers(need)
     assert searches[0][0][-1] == searches[0][1]["max_limit"] == 10
     assert result.offers[0].product_id == "1"
-    assert result.offers[0].score == 1
-    assert all(o.score == 0 for o in result.offers[1:])
+    assert result.offers[0].score == .97
+    assert all(o.score == .97 for o in result.offers[1:])  # Missing reliability uses the global median.
 
 
 @pytest.mark.parametrize("registered_agents", [("hotel",)], indirect=True)

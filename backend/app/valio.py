@@ -63,7 +63,7 @@ class ValioClient:
             for pid in missing:
                 row = copy.deepcopy(by_id.get(pid, {"productId": pid, "error": True}))
                 row["_fetched_at"] = fetched
-                row["_currency"] = body.get("currency", "EUR")
+                row["_currency"] = body.get("currency")
                 result[pid] = row
             with self.lock:
                 for pid in missing:

@@ -22,8 +22,17 @@ SIZES = {"1": 1, "2": 10, "3": 6, "4": 4, "5": 1, "6": 1}
 
 @pytest.fixture
 def product_rows():
-    return [raw_product(pid, f"Milk {size} L", volume=size, multiplier=1,
+    rows = [raw_product(pid, f"Milk {size} L", volume=size, multiplier=1,
                         brand="Valio" if int(pid) % 2 else "Arla") for pid, size in SIZES.items()]
+    rows[-1]["synkkaData"]["classifications"][0]["values"].append({"id": "FREE_FROM_GLUTEN"})
+    rows[-1]["synkkaData"]["classifications"][3]["values"].append({"id": "FAIRTRADE"})
+    return rows
+
+
+@pytest.fixture
+def need(need):
+    # These planning fixtures declare milk but have no AE entries in the catalog vocabulary.
+    return need.model_copy(update={"exclude_allergens": []})
 
 
 @pytest.fixture(autouse=True)
@@ -167,7 +176,7 @@ def test_exceptions_ac_4_preview_uses_shared_limits_and_placement_is_authoritati
     assert order.status == "PENDING_APPROVAL" and any(h.rule == "PARTIAL_STOCK" for h in order.policy.hits)
     upstream.amounts["1"], upstream.prices["1"] = 10000, 2.675
     fractional = find(gateway, need, quantity={"value": 1, "unit": "L"})
-    assert fractional.plans[0].total == 2.67
+    assert fractional.plans[0].total == 2.68
     assert quote(gateway, need, fractional).total == fractional.plans[0].total
 
 
@@ -180,7 +189,7 @@ def test_exceptions_ac_5_brand_substitute_ranking_approval_and_old_policy(gatewa
     arla = next(o for o in result.offers if o.product_id == "2")
     warning, = [w for w in arla.warnings if w.code == "OUTSIDE_PREFERENCE"]
     assert "Arla" in warning.text and "Valio" in warning.text
-    q = gateway.orders.create_quote(QuoteRequest(deliver_by=need.deliver_by, need_ref=result.lookup_id,
+    q = gateway.orders.create_quote(QuoteRequest(customer_id="1", deliver_by=need.deliver_by, need_ref=result.lookup_id,
         lines=[{"product_id": "2", "quantity_sales_units": arla.units_needed}]), AGENT)
     order = gateway.orders.place_order(q.id, "substitute", AGENT)
     assert order.status == "PENDING_APPROVAL" and [h.rule for h in order.policy.hits] == ["OUTSIDE_PREFERENCE"]
@@ -239,8 +248,8 @@ def test_exceptions_ac_7_plan_ref_rest_mcp_and_validation(gateway, need, upstrea
 def test_exceptions_ac_8_no_hard_match_explains_constraint_counts(gateway, need, upstream):
     result = find(gateway, need, required_claims=["FREE_FROM_GLUTEN"], exclude_allergens=["AM"])
     assert result.offers == [] and result.plans == [] and result.excluded_count == 6
-    assert "required_claims.FREE_FROM_GLUTEN removed 6" in result.no_match_reason
-    assert "exclude_allergens.AM removed 6" in result.no_match_reason
+    assert "required_claims.FREE_FROM_GLUTEN (request; missing required claim) removed 5" in result.no_match_reason
+    assert "exclude_allergens.AM (request; contains) removed 6" in result.no_match_reason
     assert "overlap" in result.no_match_reason
     assert result.live_calls.price == result.live_calls.availability == result.decision_calls == 0
 
@@ -296,6 +305,7 @@ def test_exceptions_ac_11_stock_limited_search_is_fast_and_valid(gateway, need, 
     rows = [dict(raw_product(str(i), f"Milk bulk {i}", sales="KG", base="KG", multiplier=1),
                  allowedLotSize=1) for i in range(1, 11)]
     replace_products(gateway, tmp_path, rows)
+    upstream.sales_units = {str(i): "KG" for i in range(1, 11)}
     upstream.amount = 3000
     upstream.prices = {str(i): round(3 + (i - 1) / 100, 2) for i in range(1, 11)}
     start = perf_counter()
@@ -384,6 +394,7 @@ def test_exceptions_ac_14_preview_rejects_customer_outside_mandate(gateway, need
 def test_exceptions_ac_15_kg_plans_follow_fractional_lots(gateway, need, upstream, tmp_path):
     replace_products(gateway, tmp_path, [dict(raw_product("1", "Milk bulk", sales="KG", base="KG", multiplier=1),
                                               allowedLotSize=0.5)])
+    upstream.sales_units["1"] = "KG"
     upstream.amounts, upstream.prices = {"1": 10.75}, {"1": 2.675}
     result = find(gateway, need, quantity={"value": 10.25, "unit": "KG"})
     plan, = result.plans

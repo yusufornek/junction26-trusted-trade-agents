@@ -119,7 +119,9 @@ def test_pending_expiry_releases_stock(gateway, need, upstream, monkeypatch):
 
 @pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_no_fit_needs_approval_and_no_override_of_sale_block(gateway, need, upstream):
-    quote = gateway.orders.create_quote(quote_request(need, qty=1))
+    gateway.decisions.key = ""
+    lookup = gateway.find_offers(need)
+    quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     order = gateway.orders.place_order(quote.id, "no-fit")
     assert order.status == "PENDING_APPROVAL"
     upstream.sales_block = True
@@ -141,11 +143,12 @@ def test_hard_constraint_violation_rejected(gateway, need, upstream):
 @pytest.mark.parametrize("registered_agents", [("external",)], indirect=True)
 def test_unknown_upstream_rejected_and_bad_price_cannot_quote(gateway, need, upstream):
     upstream.unknown = True
-    quote = gateway.orders.create_quote(quote_request(need, qty=1))
+    lookup = gateway.find_offers(need)
+    quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     assert gateway.orders.place_order(quote.id, "unknown").status == "REJECTED"
     upstream.price_error = True
     with pytest.raises(DomainError) as error:
-        gateway.orders.create_quote(quote_request(need, qty=1))
+        gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     assert error.value.code == "PRICE_ERROR"
     assert gateway.audit()[-1].data["live_calls"] == {"price": 1, "availability": 1}
 
@@ -186,7 +189,8 @@ def test_quote_expiry_earliest_bound(gateway, need, upstream, respx_mock, price_
         return httpx.Response(200, json=body)
 
     respx_mock.post("https://valio.test/api/price").mock(side_effect=price_response)
-    quote = gateway.orders.create_quote(quote_request(need, qty=1))
+    lookup = gateway.find_offers(need)
+    quote = gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     assert abs((quote.expires_at - (now + timedelta(minutes=expected_minutes))).total_seconds()) < 1
 
 
@@ -218,8 +222,9 @@ def test_multiline_quote_sums_and_reserves_each_line(gateway, need, upstream):
 
 
 def test_quote_without_known_price_fails_audited(gateway, need, upstream, respx_mock):
+    lookup = gateway.find_offers(need)
     respx_mock.post("https://valio.test/api/price").respond(503)
     with pytest.raises(DomainError) as error:
-        gateway.orders.create_quote(quote_request(need, qty=1))
+        gateway.orders.create_quote(quote_request(need, qty=1, need_ref=lookup.lookup_id))
     assert error.value.code == "VALIO_UNAVAILABLE"
     assert gateway.audit()[-1].data["live_calls"] == {"price": 1, "availability": 0}

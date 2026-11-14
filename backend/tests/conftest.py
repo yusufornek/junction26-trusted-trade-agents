@@ -84,7 +84,7 @@ def gateway(tmp_path, registered_agents, product_rows):
 
 @pytest.fixture
 def need():
-    return NeedSpec(intent="lactose-free milk", search_terms=["milk"], required_claims=["FREE_FROM_LACTOSE"],
+    return NeedSpec(customer_id="1", intent="lactose-free milk", search_terms=["milk"], required_claims=["FREE_FROM_LACTOSE"],
                     exclude_allergens=["AE"], quantity={"value": 1000, "unit": "L"},
                     deliver_by=audit.utcnow().date() + timedelta(days=3))
 
@@ -109,6 +109,7 @@ class Upstream:
         self.sizes = {}
         self.fits = {}
         self.shifts = {}
+        self.sales_units = {"7": "KG"}
 
     def price_response(self, request):
         body = json.loads(request.content)
@@ -135,7 +136,7 @@ class Upstream:
              "logisticModel": self.model, "scheduleLines": [] if self.unknown else [
                  {"availableAmount": self.amounts.get(pid, self.amount),
                   "availableDate": (self.need.deliver_by + timedelta(days=self.shifts[pid])).isoformat() if pid in self.shifts else delivery,
-                  "salesUnit": "KI", "salesBlock": False}]}
+                  "salesUnit": self.sales_units.get(pid, "KI"), "salesBlock": False}]}
             for pid in body["products"]]})
 
     def decisions_response(self, request):
@@ -159,3 +160,30 @@ def upstream(respx_mock, need):
 def quote_request(need, *, qty=200, need_ref=None, product_id="1"):
     return QuoteRequest(customer_id=need.customer_id, deliver_by=need.deliver_by, need_ref=need_ref,
                         lines=[QuoteLineRequest(product_id=product_id, quantity_sales_units=qty)])
+
+
+def rebuild_catalog(gateway, tmp_path, rows):
+    """Rebuild only a fixture catalog, including vocabulary and global ranking statistics."""
+    source = tmp_path / "products.json.gz"
+    with gzip.open(source, "wt") as file:
+        json.dump(rows, file)
+    gateway.valio.cache.clear()
+    return build(gateway.db, source, tmp_path / "reliability.csv", tmp_path / "carbon.csv")
+
+
+def set_customers(gateway, customers):
+    from app.models import PolicyUpdateRequest
+    body = gateway.policy.get().model_dump(mode="json")
+    body["customers"] = customers
+    return gateway.policy.update(PolicyUpdateRequest(policy=body, updated_by="Ada"))
+
+
+def demo_catalog(gateway, tmp_path, upstream):
+    """Recorded demo product identities/sizes with deterministic, synthetic price/stock responses."""
+    rows = [raw_product("464306", "Valio Arki Eila Milk 1 l lactose free", sales="ST", volume=1, multiplier=1),
+            raw_product("462626", "Valio coffee milk 5 dl lactose free", multiplier=10),
+            raw_product("eggs", "Egg declaration vocabulary", egg=True)]
+    rebuild_catalog(gateway, tmp_path, rows)
+    upstream.sales_units["464306"] = "ST"
+    upstream.prices.update({"464306": 1.01, "462626": 13})
+    upstream.sizes.update({"464306": 1, "462626": 5})
