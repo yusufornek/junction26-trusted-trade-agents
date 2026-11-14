@@ -107,6 +107,8 @@ class Buyer:
                 if self.visible(principal, o.agent_id, [o.customer_id])]
 
     def spend(self, principal):
+        self.scope(principal)
+        self.gateway.orders.expire()
         now = audit.utcnow()
         start = now - timedelta(hours=24)
         agents = self.agents(principal)
@@ -118,7 +120,19 @@ class Buyer:
             for agent in agents:
                 agent_id = agent["agent_id"]
                 # The latest successfully used VC is the same authority used for the next headerless bound command.
-                vc = next((m for m in mandates if m["agent_id"] == agent_id), None)
+                vc = None
+                for stored in conn.execute("SELECT jwt FROM mandate_credentials ORDER BY last_used DESC"):
+                    try:
+                        claims = decode(stored[0])[1]
+                        customer = claims["vc"]["credentialSubject"]["customer_id"]
+                        if claims["sub"] != agent_id:
+                            continue
+                        _, subject = self.gateway.mandates.verify(conn, stored[0], agent_id, customer)
+                        if self.visible(principal, agent_id, [customer]):
+                            vc = subject
+                            break
+                    except DomainError:
+                        continue
                 policy_row = self.gateway.policy.get().agents.get(agent_id)
                 policy_limit = policy_row.max_auto_daily_total_eur if policy_row else None
                 vc_limit = vc["max_auto_daily_total_eur"] if vc else None
@@ -175,17 +189,14 @@ class Buyer:
         return self.envelope(principal, revoked=[jti])
 
     def activity(self, principal):
-        scope = self.scope(principal)
+        self.scope(principal)
+        from .visibility import event_visible
         with self.db.connect() as conn:
             result = []
             for row in conn.execute("SELECT e.*,a.summary FROM events e JOIN audit a ON a.id=e.audit_id ORDER BY e.rowid DESC"):
                 event = dict(row)
                 event["payload"] = json.loads(event["payload"])
-                context = event["payload"].get("context", {})
-                customers = [event["customer_id"]] if event["customer_id"] else context.get("customer_ids", [])
-                organisation = context.get("organisation_id")
-                if principal.operator or (customers and set(customers).issubset(scope["customer_ids"]) and
-                        (not organisation or organisation == principal.organisation_id)):
+                if event_visible(self.gateway, conn, event, principal):
                     result.append(event)
         return result
 

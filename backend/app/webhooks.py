@@ -12,6 +12,8 @@ import re
 import secrets
 import socket
 import threading
+import time
+from contextvars import ContextVar
 from datetime import timedelta
 from typing import Literal
 from urllib.parse import urlsplit
@@ -105,6 +107,8 @@ def verify_webhook(body, headers, jwks, *, now=None, tolerance=300):
 class Webhooks:
     max_attempts = 5
     base_delay = 2
+    challenge_max_bytes = 16 * 1024
+    response_deadline = 5
 
     def __init__(self, gateway):
         self.gateway, self.db = gateway, gateway.db
@@ -112,6 +116,8 @@ class Webhooks:
         self.client = httpx.Client(timeout=5, follow_redirects=False, trust_env=False)
         self.resolver = socket.getaddrinfo
         self.jitter = random.random
+        self.clock = time.monotonic
+        self.prepared = ContextVar("verified_webhook_destination", default=None)
 
     def _destination(self, url):
         try:
@@ -134,26 +140,67 @@ class Webhooks:
         except (ValueError, OSError):
             raise DomainError("WEBHOOK_DESTINATION_UNSAFE", "Use a public HTTPS destination (sandbox permits localhost).", 422) from None
 
-    def _post(self, url, body, event_id, extra_headers=None):
+    def _post(self, url, body, event_id, extra_headers=None, *, challenge=False):
+        deadline = self.clock() + self.response_deadline
         parsed, address = self._destination(url)
         original = httpx.URL(url)
         pinned = original.copy_with(host=address)
         headers = signed_headers(self.gateway.signing, event_id, body)
         headers.update(extra_headers or {})
         headers["Host"] = original.netloc.decode()
-        return self.client.post(pinned, content=body, headers=headers,
-                                extensions={"sni_hostname": parsed.hostname})
+        headers["Accept-Encoding"] = "identity"
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            raise ValueError("Webhook deadline exceeded")
+        with self.client.stream("POST", pinned, content=body, headers=headers, timeout=remaining,
+                                extensions={"sni_hostname": parsed.hostname}) as response:
+            content = bytearray()
+            if challenge:
+                if response.headers.get("Content-Encoding", "identity") != "identity":
+                    raise ValueError("Challenge must use an uncompressed JSON response")
+                chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
+                for chunk in chunks:
+                    if self.clock() >= deadline or len(content) + len(chunk) > self.challenge_max_bytes:
+                        raise ValueError("Webhook challenge response exceeds limits")
+                    content.extend(chunk)
+            if self.clock() >= deadline:
+                raise ValueError("Webhook deadline exceeded")
+            # Deliveries use only the status; closing never buffers their body.
+            return httpx.Response(response.status_code, content=bytes(content))
 
     def _challenge(self, url, extra_headers=None):
+        if self.prepared.get() == (url, extra_headers or {}):
+            return
         challenge = secrets.token_urlsafe(32)
         try:
-            response = self._post(url, canonical_json({"type": "webhook.challenge", "challenge": challenge}), "challenge_" + uuid4().hex, extra_headers)
+            response = self._post(url, canonical_json({"type": "webhook.challenge", "challenge": challenge}), "challenge_" + uuid4().hex, extra_headers, challenge=True)
             if not 200 <= response.status_code < 300 or response.json().get("challenge") != challenge:
                 raise ValueError()
         except DomainError:
             raise
         except (httpx.HTTPError, ValueError, AttributeError):
             raise DomainError("WEBHOOK_CHALLENGE_FAILED", "Destination must echo the subscription challenge.", 422) from None
+
+    def prepare(self, route, arguments, principal):
+        """Verify outside the shared keyed-command transaction; writes recheck scope."""
+        from .buyer import check_suspension
+        if principal.kind == "agent":
+            check_suspension(self.db, principal.id)
+        body = arguments["body"]
+        if route == "webhooks.create":
+            self._scope(principal, body.customer_ids, body.audience)
+            url, headers = body.url, notification_headers(arguments.get("push_config") or {})
+        else:
+            with self.db.connect() as conn:
+                sub = self._get(arguments["subscription_id"], principal, conn)
+            changes = body.model_dump(exclude_unset=True)
+            if "url" not in changes and not changes.get("enabled"):
+                return None
+            proposed = {**sub, **changes}
+            self._scope(principal, proposed["customer_ids"], proposed["audience"])
+            url, headers = proposed["url"], {}
+        self._challenge(url, headers)
+        return self.prepared.set((url, headers))
 
     @staticmethod
     def _scope(principal, customers, audience="agent"):
@@ -205,6 +252,8 @@ class Webhooks:
         with self.db.connect(write=True) as conn:
             conn.execute("UPDATE webhook_subscriptions SET data=? WHERE id=?", (json.dumps(sub), subscription_id))
             conn.execute("UPDATE event_consumers SET enabled=? WHERE name=?", (int(sub["enabled"]), "webhook:" + subscription_id))
+            if not sub["enabled"]:
+                conn.execute("UPDATE outbox SET status='skipped' WHERE consumer=? AND status='pending'", ("webhook:" + subscription_id,))
         return self._public(sub)
 
     def disable(self, subscription_id, principal):
@@ -254,10 +303,16 @@ class Webhooks:
         if not self.lock.acquire(blocking=False):
             return
         try:
+            # Retire disabled backlog left by older releases as well as new disables.
+            with self.db.connect(write=True, notify=False) as conn:
+                conn.execute("UPDATE outbox SET status='skipped' WHERE status='pending' AND consumer IN "
+                             "(SELECT 'webhook:'||id FROM webhook_subscriptions WHERE json_extract(data,'$.enabled')=0)")
             with self.db.connect() as conn:
-                rows = conn.execute("SELECT o.*,e.customer_id,e.type,e.payload,s.data FROM outbox o "
+                rows = conn.execute("SELECT * FROM (SELECT o.*,e.customer_id,e.type,e.payload,s.data,e.rowid AS event_row, "
+                    "ROW_NUMBER() OVER (PARTITION BY o.consumer ORDER BY e.rowid) AS queue_position FROM outbox o "
                     "JOIN events e ON e.id=o.event_id JOIN webhook_subscriptions s ON o.consumer='webhook:'||s.id "
-                    "WHERE o.status='pending' AND o.next_attempt_at<=? ORDER BY e.rowid LIMIT ?",
+                    "WHERE o.status='pending' AND json_extract(s.data,'$.enabled')=1 AND o.next_attempt_at<=?) "
+                    "ORDER BY queue_position,event_row LIMIT ?",
                     (audit.utcnow().isoformat(), limit)).fetchall()
             for row in rows:
                 sub = json.loads(row["data"])
@@ -278,6 +333,12 @@ class Webhooks:
                     agent = policy.agents.get(sub["owner"])
                     customers = organisation.customer_ids if organisation else agent.customer_ids if agent else []
                     matches = matches and event["customer_id"] in customers
+                    from .visibility import event_visible
+                    subscriber = Principal(sub["owner"], kind=sub["owner_kind"],
+                        organisation_id=identity.organisation_id if identity else None, customer_ids=tuple(customers),
+                        role=identity.role if identity else "agent")
+                    with self.db.connect() as conn:
+                        matches = matches and event_visible(self.gateway, conn, event, subscriber)
                 if not matches:
                     with self.db.connect(write=True, notify=False) as conn:
                         conn.execute("UPDATE outbox SET status='skipped' WHERE event_id=? AND consumer=?", (row["event_id"], row["consumer"]))

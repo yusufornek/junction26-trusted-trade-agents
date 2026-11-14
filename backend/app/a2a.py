@@ -187,7 +187,19 @@ class ProcurementA2A:
             if params.configuration.accepted_output_modes and not set(params.configuration.accepted_output_modes) & {"application/json", "text/plain"}:
                 from a2a.utils.errors import ContentTypeNotSupportedError
                 raise ContentTypeNotSupportedError()
-            task = self._send(params, principal, mandate)
+            from .commands import ADMISSION, failure_audit
+            admission_token = ADMISSION.set(None)
+            try:
+                task = self._send(params, principal, mandate)
+            except DomainError as error:
+                parts = [MessageToDict(part).get("data", {}) for part in params.message.parts if part.WhichOneof("content") == "data"]
+                name = parts[0].get("command") if parts else None
+                route = {"lookup": "gateway.find_offers", "select_plan": "orders.create_quote",
+                         "place_order": "orders.place_order", "cancel": "orders.cancel"}.get(name, "a2a.command")
+                failure_audit(self.gateway, route, {}, principal.id, error)
+                raise
+            finally:
+                ADMISSION.reset(admission_token)
             if params.configuration.HasField("task_push_notification_config"):
                 config = t.TaskPushNotificationConfig()
                 config.CopyFrom(params.configuration.task_push_notification_config)
@@ -200,8 +212,71 @@ class ProcurementA2A:
                 task.history.extend(history)
             return task
 
+    def _reauthorize(self, conn, command, key, task, principal, mandate):
+        """Use the original command result, not a later task's mutable selection.
+
+        Old messages need no schema migration: shared command envelopes already
+        contain their immutable result. Lifecycle-only messages use owned bindings.
+        """
+        from .commands import replay_authorization
+        from .buyer import check_suspension
+        check_suspension(self.db, principal.id)
+        previous = conn.execute("SELECT * FROM commands WHERE principal=? AND key=?",
+                                (f"{principal.kind}:{principal.id}", key)).fetchone() if key is not None else None
+        if previous:
+            saved = json.loads(previous["result"])
+            value, name = saved["value"], previous["command"]
+            arguments = {"mandate": mandate, "agent_id": principal.id, "operator": principal.operator}
+            if name == "find_offers":
+                arguments["need"] = NeedSpec.model_validate(value["need"], context={"stored": True})
+                route = "gateway.find_offers"
+            elif name == "create_quote":
+                arguments["request"] = QuoteRequest.model_validate({"customer_id": value["customer_id"],
+                    "deliver_by": value["deliver_by"], "need_ref": value["need_ref"],
+                    "lines": [{"product_id": line["product_id"], "quantity_sales_units": line["units_needed"]} for line in value["lines"]]},
+                    context={"stored": True})
+                route = "orders.create_quote"
+            elif name == "place_order":
+                arguments.update(quote_id=value["quote_id"], idempotency_key=key)
+                route = "orders.place_order"
+            elif name == "cancel":
+                arguments.update(order_id=value["id"], actor=f"agent:{principal.id}")
+                route = "orders.cancel"
+            else:
+                raise DomainError("VALIDATION_ERROR", "Unsupported original command binding", 422)
+            replay_authorization(self.gateway, route, conn, arguments, principal, saved)
+            return
+        # Historical/lifecycle-only messages still recheck the recorded resource.
+        meta = metadata(task)
+        # Pre-adapter messages may lack a shared command row. Their immutable
+        # event snapshot retains the original binding after subsequent lookups.
+        snapshot = conn.execute("SELECT payload FROM events WHERE aggregate_type='task' AND aggregate_id=? AND causation_id=? ORDER BY aggregate_revision DESC LIMIT 1",
+                                (task.id, key)).fetchone() if key is not None else None
+        if snapshot:
+            meta = json.loads(snapshot[0])["task"].get("metadata", meta)
+        if command["command"] == "lookup" and "need" in command:
+            customer = command["need"].get("customer_id")
+        else:
+            customer = (meta.get("context") or {}).get("customer_id")
+        kind, object_id, products = None, None, []
+        for field, table, candidate in (("order_id", "orders", "order"), ("quote_id", "quotes", "quote"), ("request_id", "lookups", "lookup")):
+            if meta.get(field):
+                row = conn.execute(f"SELECT data FROM {table} WHERE id=?", (meta[field],)).fetchone()
+                if not row:
+                    continue
+                obj = json.loads(row[0])
+                if obj.get("agent_id") != principal.id:
+                    raise DomainError("TASK_NOT_FOUND", "Task was not found", 404)
+                if command["command"] != "lookup":
+                    customer = obj.get("customer_id") or obj.get("need", {}).get("customer_id")
+                kind, object_id = candidate, meta[field]
+                products = [line["product_id"] for line in obj.get("lines", obj.get("offers", []))]
+                break
+        if customer:
+            self.gateway.mandates.authorize(conn, mandate, principal.id, customer, products=products,
+                bound=(kind, object_id) if kind else None)
+
     def _send(self, params, principal, mandate=None):
-        self._ensure_consumers()
         message = params.message
         if not message.message_id or message.role != t.Role.ROLE_USER:
             raise InvalidParamsError("A user message with a nonempty messageId is required")
@@ -214,11 +289,34 @@ class ProcurementA2A:
         digest = sha256(canonical_json(MessageToDict(message))).hexdigest()
         error = None
         scope = f"{principal.kind}:{principal.id}"
+        with self.db.connect() as conn:
+            previous = conn.execute("SELECT * FROM a2a_messages WHERE owner=? AND message_id=?", (scope, message.message_id)).fetchone()
+            old_task = self._load(conn, previous["task_id"], principal) if previous else None
+        complete_replay = old_task is not None and metadata(old_task).get("retry_message_id") != message.message_id
+        category = "lookup" if command["command"] == "lookup" else "read" if command["command"] == "get_evidence" else "mutation"
+        self.gateway.limiter.consume(principal.id, "read" if complete_replay else category)
+        if previous:
+            if previous["digest"] != digest:
+                raise DomainError("IDEMPOTENCY_CONFLICT", "Message id belongs to a changed command", 409)
+            replay_error = None
+            with self.db.connect(write=True) as conn:
+                try:
+                    self._reauthorize(conn, command, message.message_id, old_task, principal, mandate)
+                except DomainError as caught:
+                    replay_error = caught
+            if replay_error:
+                raise replay_error
+            if complete_replay:
+                return old_task
+        from .buyer import check_suspension
+        check_suspension(self.db, principal.id)
+        from .commands import ADMISSION
+        ADMISSION.set({"identity": principal.id, "category": category, "used": False})
+        self._ensure_consumers()
         with self.db.connect(write=True) as conn:
             previous = conn.execute("SELECT * FROM a2a_messages WHERE owner=? AND message_id=?", (scope, message.message_id)).fetchone()
             retry_task = None
             if previous:
-                self.gateway.limiter.consume(principal.id, "read")
                 if previous["digest"] != digest:
                     raise DomainError("IDEMPOTENCY_CONFLICT", "Message id belongs to a changed command", 409)
                 retry_task = self._load(conn, previous["task_id"], principal)
@@ -297,9 +395,9 @@ class ProcurementA2A:
         if name == "lookup":
             if command.get("skill") == "find_basket_offers":
                 arguments = command.get("arguments", {})
-                result = shared_tool(self.gateway, principal, "find_basket_offers", arguments, mandate)
-                if result is None:
-                    raise DomainError("VALIDATION_ERROR", "The shared basket adapter is not installed", 422)
+                from .baskets import BasketRequest, find_basket_offers
+                result = find_basket_offers(self.gateway, BasketRequest.model_validate(arguments.get("request", arguments)), principal.id, mandate)
+                self._clear_selection(task, meta)
                 context = result.get("context") or {}
                 scope = arguments.get("request", arguments)
                 meta.update(request_id=result["basket_lookup_id"], offers_ref=result["basket_lookup_id"], context=context,
@@ -312,6 +410,7 @@ class ProcurementA2A:
                 return
             need = NeedSpec.model_validate(command.get("need", {}))
             result = self.gateway.find_offers(need, actor=f"agent:{principal.id}", mandate=mandate, command_key=key)
+            self._clear_selection(task, meta)
             meta.update(request_id=result.lookup_id, context=result.context, offers_ref=result.lookup_id)
             task.metadata.update(meta)
             artifact(task, "request", need.model_dump(mode="json"))
@@ -321,13 +420,12 @@ class ProcurementA2A:
             if not meta.get("request_id"):
                 raise DomainError("NEED_REF_REQUIRED", "Lookup is required before selecting a plan", 422)
             if meta.get("basket_ref"):
-                arguments = {"customer_id": meta["customer_id"], "deliver_by": meta["deliver_by"],
-                             "basket_ref": meta["basket_ref"], "idempotency_key": key}
-                quote = shared_tool(self.gateway, principal, "create_quote", arguments, mandate)
-                meta.update(quote_id=quote["id"], selected_plan=meta["basket_ref"])
+                request = QuoteRequest.model_validate({"customer_id": meta["customer_id"], "deliver_by": meta["deliver_by"], "basket_ref": meta["basket_ref"]})
+                quote = self.gateway.orders.create_quote(request, principal.id, operator=principal.operator, mandate=mandate, command_key=key)
+                meta.update(quote_id=quote.id, selected_plan=meta["basket_ref"])
                 task.metadata.update(meta)
                 artifact(task, "selected_plan", meta["basket_ref"])
-                artifact(task, "quote", quote)
+                artifact(task, "quote", quote.model_dump(mode="json"))
                 self._update(conn, task, t.TaskState.TASK_STATE_INPUT_REQUIRED, "Place the selected basket quote", {"next_action": "PLACE_ORDER"})
                 return
             lookup = self.gateway.lookup.get(meta["request_id"], principal.owner)
@@ -343,18 +441,25 @@ class ProcurementA2A:
         elif name == "place_order":
             if not meta.get("quote_id"):
                 raise DomainError("NEED_REF_REQUIRED", "Select a plan before placement", 422)
+            quote = self.gateway.orders._quote(conn, meta["quote_id"])
+            if quote.need_ref != meta.get("request_id"):
+                self._clear_selection(task, meta)
+                raise DomainError("NEED_REF_REQUIRED", "Select a plan for the current lookup before placement", 422)
             order = self.gateway.orders.place_order(meta["quote_id"], key, principal.id, operator=principal.operator, mandate=mandate)
             self._order_result(conn, task, order)
         elif name == "cancel":
             order_id = meta.get("order_id") or command.get("order_id")
             if not order_id:
-                self.gateway.limiter.consume(principal.id, "mutation")
+                self._reauthorize(conn, command, None, task, principal, mandate)
+                from .commands import charge
+                charge(self.gateway, principal.id, "mutation")
                 self._update(conn, task, t.TaskState.TASK_STATE_CANCELED, "Procurement task canceled before ordering")
             else:
                 self.gateway.orders.get_order(order_id, principal.id)
-                order = self.gateway.orders.cancel(order_id, actor=f"agent:{principal.id}", reason=command.get("reason", ""), command_key=key)
+                order = self.gateway.orders.cancel(order_id, actor=f"agent:{principal.id}", reason=command.get("reason", ""), mandate=mandate, command_key=key)
                 self._order_result(conn, task, order)
         else:
+            self._reauthorize(conn, command, None, task, principal, mandate)
             terminal_state = task.status.state if task.status.state in TERMINAL else None
             if not meta.get("order_id"):
                 raise DomainError("ORDER_NOT_FOUND", "Task has no order evidence", 404)
@@ -362,9 +467,19 @@ class ProcurementA2A:
             # Share the evidence core on this transaction's thread; the MCP SDK
             # dispatches synchronous tools to a different SQLite-incompatible thread.
             evidence = build_bundle(self.gateway, meta["order_id"], principal)[0]
-            order = self.gateway.orders.get_order(meta["order_id"], principal.id)
+            order = self.gateway.orders._order(conn, meta["order_id"])
             artifact(task, "evidence", evidence)
             self._order_result(conn, task, order, state=terminal_state)
+
+    @staticmethod
+    def _clear_selection(task, meta):
+        for field in ("quote_id", "selected_plan", "basket_ref", "customer_id", "deliver_by"):
+            meta.pop(field, None)
+            if field in task.metadata:
+                del task.metadata[field]
+        retained = [item for item in task.artifacts if item.name not in {"quote", "selected_plan"}]
+        del task.artifacts[:]
+        task.artifacts.extend(retained)
 
     def create_push(self, params, principal):
         task = self.gateway.a2a.get(params.task_id, principal)
@@ -376,20 +491,31 @@ class ProcurementA2A:
         config = t.TaskPushNotificationConfig()
         config.CopyFrom(params)
         config.id = config.id or uuid4().hex
-        with self.gateway.db.connect(write=True) as conn:
+        with self.gateway.db.connect() as conn:
             previous = conn.execute("SELECT * FROM a2a_push_configs WHERE task_id=? AND id=?", (task.id, config.id)).fetchone()
             if previous:
                 if json.loads(previous["data"]) == MessageToDict(config):
                     return config
-                self.gateway.webhooks.disable(previous["subscription_id"], principal)
-            sub = self.gateway.webhooks.create(
-                SubscriptionCreate(url=config.url, customer_ids=[customer], event_types=sorted(EVENT_TYPES)), principal,
-                task_id=task.id, push_config=MessageToDict(config))
-            conn.execute("INSERT INTO a2a_push_configs VALUES(?,?,?,?) ON CONFLICT(task_id,id) DO UPDATE SET subscription_id=excluded.subscription_id,data=excluded.data",
-                         (task.id, config.id, sub["id"], json.dumps(MessageToDict(config))))
-            conn.execute("INSERT OR IGNORE INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
-                         "SELECT id,?,'pending',0,? FROM events WHERE aggregate_type='task' AND aggregate_id=? ORDER BY aggregate_revision DESC LIMIT 1",
-                         ("webhook:" + sub["id"], audit.utcnow().isoformat(), task.id))
+        body = SubscriptionCreate(url=config.url, customer_ids=[customer], event_types=sorted(EVENT_TYPES))
+        from .commands import ADMISSION
+        self.gateway.limiter.consume(principal.id, "mutation")
+        prepared = self.gateway.webhooks.prepare("webhooks.create", {"body": body, "push_config": MessageToDict(config)}, principal)
+        credit = ADMISSION.set({"identity": principal.id, "category": "mutation", "used": False})
+        try:
+            with self.gateway.db.connect(write=True) as conn:
+                self._load(conn, task.id, principal)
+                previous = conn.execute("SELECT * FROM a2a_push_configs WHERE task_id=? AND id=?", (task.id, config.id)).fetchone()
+                if previous:
+                    self.gateway.webhooks.disable(previous["subscription_id"], principal)
+                sub = self.gateway.webhooks.create(body, principal, task_id=task.id, push_config=MessageToDict(config))
+                conn.execute("INSERT INTO a2a_push_configs VALUES(?,?,?,?) ON CONFLICT(task_id,id) DO UPDATE SET subscription_id=excluded.subscription_id,data=excluded.data",
+                             (task.id, config.id, sub["id"], json.dumps(MessageToDict(config))))
+                conn.execute("INSERT OR IGNORE INTO outbox(event_id,consumer,status,attempts,next_attempt_at) "
+                             "SELECT id,?,'pending',0,? FROM events WHERE aggregate_type='task' AND aggregate_id=? ORDER BY aggregate_revision DESC LIMIT 1",
+                             ("webhook:" + sub["id"], audit.utcnow().isoformat(), task.id))
+        finally:
+            self.gateway.webhooks.prepared.reset(prepared)
+            ADMISSION.reset(credit)
         return config
 
 
@@ -544,6 +670,7 @@ class Handler(RequestHandler):
                         # Convert domain errors using the same recovery mapping
                         # before leaving this authentication context.
                         await job
+                        rows = gateway.a2a.updates(row[0], principal, after) if row else []
                 for row in rows:
                     snapshot, event = self._event(row)
                     after = row["aggregate_revision"]
@@ -591,7 +718,7 @@ class Handler(RequestHandler):
                 if task.status.state != t.TaskState.TASK_STATE_WORKING:
                     for item in task.artifacts:
                         yield t.TaskArtifactUpdateEvent(task_id=task.id, context_id=task.context_id, artifact=item, last_chunk=True)
-            if current.status.state in TERMINAL or current.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED:
+            if (current.status.state in TERMINAL or current.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED) and after >= int(metadata(current).get("aggregate_revision", 0)):
                 return
             await asyncio.sleep(.1)
 

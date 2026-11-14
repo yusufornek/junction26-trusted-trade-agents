@@ -60,7 +60,7 @@ def test_mcp_tools_use_shared_core(gateway, need, upstream):
 
     async def run():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {"search_products", "find_offers", "create_quote", "place_order", "get_order_status", "cancel_order", "get_order_ubl", "get_order_evidence", "get_agent_context"}
+        assert {t.name for t in tools} == {"search_products", "find_offers", "find_basket_offers", "create_quote", "place_order", "get_order_status", "cancel_order", "get_order_ubl", "get_order_evidence", "get_agent_context"}
         assert all(t.input_schema and t.output_schema for t in tools)
         result = await server.call_tool("search_products", {"query": "milk", "required_claims": ["FREE_FROM_LACTOSE"], "exclude_allergens": ["AE"]})
         assert not result.is_error
@@ -92,8 +92,8 @@ def test_streamable_http_transport(gateway):
         listed = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert listed.status_code == 200
         tools = listed.json()["result"]["tools"]
-        assert len(tools) == 9
-        assert {"get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools}
+        assert len(tools) == 10
+        assert {"find_basket_offers", "get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools}
 
 
 def test_stdio_transport(gateway):
@@ -128,8 +128,8 @@ finally:
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        assert len(tools["result"]["tools"]) == 9
-        assert {"get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools["result"]["tools"]}
+        assert len(tools["result"]["tools"]) == 10
+        assert {"find_basket_offers", "get_order_evidence", "get_agent_context"} <= {tool["name"] for tool in tools["result"]["tools"]}
         search = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
             "name": "search_products", "arguments": {"query": "milk", "limit": 2}}})
         assert not search["result"].get("isError", False)
@@ -146,7 +146,7 @@ finally:
 
 def test_contract_all_routes_have_response_schema():
     schema = create_app(keys=TEST_KEYS).openapi()
-    assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
+    assert set(schema["paths"]) == {"/health", "/v1/offers", "/v1/basket-lookups", "/v1/products/{id}", "/v1/quotes", "/v1/quotes/{id}",
                                     "/v1/orders", "/v1/orders/{id}", "/v1/approvals", "/v1/approvals/{order_id}/approve",
                                     "/v1/approvals/{order_id}/reject", "/v1/audit", "/v1/lookups/{lookup_id}",
                                     "/v1/policy", "/v1/policy/reset", "/v1/stats", "/v1/orders/{order_id}/cancel",

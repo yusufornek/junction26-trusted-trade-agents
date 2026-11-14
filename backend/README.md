@@ -926,13 +926,14 @@ same principal, command route (including every target/path parameter) and payloa
 The shared replay guard rechecks current authorization before exposing any saved result: ownership,
 customer mandates, buyer organisation/role, trusted revocation issuer and operator permissions as applicable.
 Revoked/invalid credentials are rejected again at the transport boundary. Quote/order/approval guards
-also reverify their bound buyer VC. Cancellation and rejection retain their original authorization rules;
-they do not require a still-valid purchasing VC. New keyed commands cannot register without a replay guard.
+also reverify their bound buyer VC. Agent cancellation rechecks original order authority on fresh calls
+and replays. Operator cancellation and human rejection retain their reviewer/ownership permission.
+New keyed commands cannot register without a replay guard.
 Exact successful replays use read tokens and return the stored result;
 order replays still revalidate any bound buyer credential and retain the historical `ORDER_REPLAY`
 audit. Spec 06 R-2's existing-order exception remains: removing a policy-row mandate alone does not deny
 the original order retry; ownership and any signed buyer credential still apply, and an existing row's
-changed customer scope is enforced. Rejection/cancellation still need no purchasing credential.
+changed customer scope is enforced. Human rejection needs no purchasing credential.
 Autonomy replay never repeats a promotion/demotion, and rechecks the target's current organisation,
 customers and existence. Changing the autonomy target under the same key returns `409 IDEMPOTENCY_CONFLICT`.
 Buyer control replays likewise recheck the administrator role and the target's current organisation/customer
@@ -1084,16 +1085,25 @@ with HTTP 2xx and `{"challenge":"…"}` containing exactly the same challenge. O
 subscription enabled. HTTPS and public addresses are required. Each attempt resolves DNS again,
 rejects any nonpublic answer, and pins the connection to a checked address while retaining the
 original Host and TLS SNI. Redirects are never followed and environment proxies are disabled.
+Challenge responses must be uncompressed JSON, at most 16 KiB, with a five-second overall deadline
+checked during streaming as well as HTTP timeouts. Challenge I/O runs before the database writer is acquired,
+including keyed registration/update and A2A push registration. Delivery responses close after status
+headers without reading their bodies.
 Only explicit `WEBHOOK_SANDBOX=true` permits `http://localhost` resolved to loopback.
 
 `GET /v1/webhook-subscriptions` lists owned subscriptions. `PATCH /v1/webhook-subscriptions/{id}`
 changes the destination, customer/event filters or enabled state; changed destinations and re-enabling
-require a new challenge. `DELETE` disables and retains history. All writes accept `Idempotency-Key`.
+require a new challenge. `DELETE` disables and retains history, atomically marking pending deliveries `skipped`.
+Dispatch also retires disabled backlog from earlier releases. Only enabled subscriptions enter the batch,
+round-robin by subscription. The generic outbox selects enabled consumers with installed handlers.
+All writes accept `Idempotency-Key`.
 Keys bind the principal, command route, subscription/delivery targets and payload. Exact replays
 recheck current ownership, customer scope and reviewer authority before returning the saved result,
 without repeating the challenge or redelivery. Previously stored command envelopes remain replayable.
 An approver audience requires an operator or buyer approver/admin credential. Customer scope is checked
-at subscription time and again at delivery against the current policy.
+at subscription time and again at delivery against the current policy. Recorded aggregate ownership also
+applies: two agents sharing a customer never share procurement events. Buyer subscriptions require an
+explicit agent organisation assignment. Unowned historical records remain operator-only.
 
 Supported event types: `order.approval_required`, `order.evidence_changed`, `order.confirmed`,
 `order.rejected`, `order.cancelled`, `order.expired`, `mandate.revoked`, `proposal.received`.
@@ -1150,6 +1160,44 @@ The page submits approval only through the existing authenticated POST with `evi
 No credential appears in the link. Fetch/display the review with the reviewer Bearer credential;
 the approval form requests that credential for its POST.
 
+## Buyer reporting and portable evidence (review corrections)
+
+Buyer activity resolves each procurement event's agent from its order, quote, lookup or task and applies
+the same organisation/customer scope as the order view. Customer-number overlap grants no ownership;
+agents without an organisation assignment remain operator-only in buyer views. Historical aggregates
+without context still load and resolve by their stored agent. Evidence bundles keep foreign denied
+attempts as hash-only chain links; timelines omit those payloads. Safe immutable snapshots remain available;
+old snapshots containing a foreign denied payload return 404 and must be regenerated from the current endpoint.
+The original audit and stored orders/quotes/lookups remain intact.
+The spending view expires pending orders before its snapshot and verifies issuer trust, signature,
+validity and revocation before selecting a VC limit; invalid credentials leave the policy limit in effect.
+
+## Ingredient baskets (spec 32; shared with A2A)
+
+`POST /v1/basket-lookups` and MCP `find_basket_offers(request)` accept
+`{customer_id, deliver_by, manifest:{version:1, recipe_name, servings, base_servings:1, ingredients:[...]}}`.
+Ingredient quantities describe `base_servings` portions; multiplying by `servings/base_servings` gives the
+scaled manifest. Units are G, KG, ML, L and SALES_UNIT. Each ingredient supplies name, quantity, optional
+search terms, claims/allergen exclusions and `substitutions_allowed`. Strict catalog search and hard
+constraints remain in force; unrelated ingredient substitutes are never silently introduced. Explicit
+`density_kg_per_l` permits mass/volume conversion; missing conversion evidence leaves an ingredient uncovered.
+Standing constraints apply per ingredient. Distinct candidate SKUs share one price batch and one stock
+batch; overlapping ingredients share a purchase line. Uncovered ingredients require partial-basket review.
+The result includes ranked ingredient offers, scaled quantities, coverage, overbuy, total and policy preview.
+
+Quote with `basket_ref:{basket_lookup_id}` instead of lines/plan_ref. The signed quote preserves per-SKU
+request constraints for current-policy revalidation at placement/approval. One simulated order commits all
+reservations in one transaction; its context states that atomicity applies to the local gateway, with no
+supplier transmission. Historical single-need lookups, signatures and order records retain their stored shape.
+
+Agent-side example (lasagne for 200; `AGENT_TOKEN` holds an issued agent key):
+
+```sh
+.venv/bin/python demo/run_recipe_order.py --customer 1 --deliver-by YYYY-MM-DD
+# Override the agent's decomposition with --manifest /path/to/manifest.json.
+.venv/bin/python -m pytest tests/test_basket_recipe.py -q
+```
+
 ## A2A service (spec 34)
 
 The REST API also serves public `GET /.well-known/agent-card.json` and authenticated
@@ -1170,10 +1218,16 @@ SDK clients send a user Message with a stable `messageId` and one structured dat
 `message.contextId`, a new message ID, and `{version:1, command:"select_plan", plan_index:0}`, then
 `{version:1, command:"place_order"}`. Quote and order use the message ID as their shared command
 idempotency key. Repeating an identical message returns the same task; changed content with the
-same ID conflicts. Retryable failures retain the task and resume on the same message ID.
+same ID conflicts. Exact replays use read cost and reauthorize the original command binding against current
+scope, suspension and bound VC. Refusals retain failure audits without repeating purchases. Fresh commands
+pay admission cost before any task/message/event is persisted, including invalid request details; admitted
+core commands are not charged twice. Admission throttles return recovery data without creating a task.
+Retryable failures after admission retain the task and resume on the same message ID.
 Protobuf Value represents numbers as doubles, so integral numbers are restored to integers before
 the shared strict validators; strings and booleans are never coerced.
 
+A successful replacement lookup clears selected-plan/quote references and artifacts, including basket
+references when changing back to a single need. Placement also rejects stale bindings from older releases.
 Tasks retain principal/context and request, offers, selected-plan, quote, order and evidence references.
 Artifacts contain both a structured data part and a text summary. `WORKING` is durable before supplier
 I/O; plan selection/missing input gives `INPUT_REQUIRED`; purchasing approval gives `AUTH_REQUIRED`;
@@ -1199,7 +1253,8 @@ is terminal: cancel its confirmed order using a **new** message without taskId,
 runs. `SubscribeToTask` replays the outbox-backed task events and follows pending human approval until a
 terminal state; an input-required task closes so the client can supply its next message. Resume with
 `Last-Event-ID` from update metadata's `event_id`, or `X-A2A-After-Revision` from `aggregate_revision`.
-Without a cursor it replays all retained revisions. Consumers can deduplicate by event ID/revision.
+Without a cursor it replays all retained revisions. Subscriptions drain through the current aggregate revision
+before closing, including approval committed between polling reads. Consumers can deduplicate by event ID/revision.
 
 All 1.0 push configuration methods are installed: `CreateTaskPushNotificationConfig`,
 `GetTaskPushNotificationConfig`, `ListTaskPushNotificationConfigs`, `DeleteTaskPushNotificationConfig`.

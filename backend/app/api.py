@@ -96,6 +96,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     from .buyer import router as buyer_router
     from .evidence import router as evidence_router
     app.include_router(buyer_router)
+    from .baskets import router as baskets_router
+    app.include_router(baskets_router)
     app.include_router(evidence_router)
     install_discovery(app)
     from .developer_docs import install_routes as install_developer_docs
@@ -342,10 +344,10 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     @app.post("/v1/orders/{order_id}/cancel", response_model=Order,
               summary="Cancel a confirmed order before every known cutoff; fixed prices remain unchanged")
     def cancel_order(order_id: str, body: CancelRequest, request: Request, principal: Principal = Depends(resolve_principal),
-                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None):
+                     idempotency_key: Annotated[str | None, Header(min_length=1)] = None, mandate=Depends(presented_mandate)):
         return svc(request).orders.cancel(order_id,
             actor="human:operator" if principal.operator else f"agent:{principal.agent_id}", reason=body.reason,
-            stated_name=body.cancelled_by if principal.operator else None, command_key=idempotency_key)
+            stated_name=body.cancelled_by if principal.operator else None, mandate=mandate, command_key=idempotency_key)
 
     @app.get("/v1/approvals", response_model=list[ApprovalItem], summary="Pending approval inbox with quote evidence and all rule hits")
     def approvals(request: Request, principal: Principal = Depends(require_reviewer)):

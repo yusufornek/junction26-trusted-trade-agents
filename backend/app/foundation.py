@@ -136,9 +136,14 @@ class Outbox:
             return
         try:
             with self.db.connect() as conn:
+                consumers = tuple(self.handlers)
+                if not consumers:
+                    return
                 rows = conn.execute("SELECT o.*,e.payload FROM outbox o JOIN events e ON e.id=o.event_id "
-                                    "WHERE o.status='pending' AND o.next_attempt_at<=? ORDER BY e.rowid LIMIT ?",
-                                    (utcnow().isoformat(), limit)).fetchall()
+                                    "JOIN event_consumers c ON c.name=o.consumer "
+                                    "WHERE c.enabled=1 AND o.consumer IN (" + ",".join("?" for _ in consumers) + ") "
+                                    "AND o.status='pending' AND o.next_attempt_at<=? ORDER BY e.rowid LIMIT ?",
+                                    (*consumers, utcnow().isoformat(), limit)).fetchall()
             for row in rows:
                 handler = self.handlers.get(row["consumer"])
                 if handler is None:

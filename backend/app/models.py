@@ -235,7 +235,7 @@ class PolicyResult(Model):
 
 class FulfilmentPlan(Model):
     kind: Literal["single", "split", "partial"]
-    lines: list[PlanLine] = Field(min_length=1, max_length=4)
+    lines: list[PlanLine] = Field(min_length=1, max_length=10)
     total: float = Field(ge=0, description="Sum of fixed net EUR line totals at lookup time.")
     coverage: CoveredQuantity = Field(description="Sum of line covers in the need's unit; whole packs may over-cover.")
     uncovered: CoveredQuantity = Field(description="Requested quantity still missing by the deadline; zero for a complete plan.")
@@ -249,6 +249,8 @@ class Retrieval(Model):
 
 
 class LookupResult(Model):
+    basket: dict | None = Field(default=None, exclude_if=lambda v: v is None,
+                                description="Ingredient basket and per-line request bindings; absent on historical single needs.")
     links: dict = Field(default_factory=dict, exclude_if=lambda v: not v)
     context: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     correlation_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -281,15 +283,25 @@ class PlanRef(Model):
     plan_index: int = Field(ge=0, description="Zero-based index in the stored lookup's plans.")
 
 
+class BasketRef(Model):
+    basket_lookup_id: str = Field(min_length=1)
+
+
 class QuoteRequest(RequestScope):
+    basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None,
+                                        description="Quote the selected lines of a stored ingredient basket.")
     lines: list[QuoteLineRequest] | None = Field(default=None, min_length=1, max_length=10)
     plan_ref: PlanRef | None = Field(default=None, description="Alternative to explicit lines; recheck a stored plan live. Exactly one of lines or plan_ref is required.")
     need_ref: str | None = Field(default=None, description="Required with explicit lines: stored lookup_id binding fit, preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED.")
 
     @model_validator(mode="after")
     def unique_lines(self):
-        if (self.lines is None) == (self.plan_ref is None):
-            raise ValueError("Exactly one of lines or plan_ref is required")
+        if sum(value is not None for value in (self.lines, self.plan_ref, self.basket_ref)) != 1:
+            raise ValueError("Exactly one of lines, plan_ref or basket_ref is required")
+        if self.basket_ref:
+            if self.need_ref is not None and self.need_ref != self.basket_ref.basket_lookup_id:
+                raise ValueError("need_ref must match basket_ref.basket_lookup_id")
+            self.need_ref = self.basket_ref.basket_lookup_id
         if self.plan_ref:
             if self.need_ref is None:
                 self.need_ref = self.plan_ref.lookup_id

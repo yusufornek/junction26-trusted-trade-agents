@@ -28,7 +28,9 @@ def buyer_scope(policy, principal, agent_id, customer_ids):
     if target and target.organisation_id:
         return bool(principal.organisation_id and principal.organisation_id == target.organisation_id
                     and set(customer_ids).issubset(principal.customer_ids))
-    return bool(principal.organisation_id and customer_ids and set(customer_ids).issubset(principal.customer_ids))
+    # A shared customer number does not assign an unowned agent to a buyer.
+    # Historical records remain available to the operator until ownership is known.
+    return False
 
 
 def authorize_review(policy, principal, order):
