@@ -109,8 +109,41 @@ export type LookupResult = {
 
 export type QuoteLine = OfferCard & { quantity_sales_units?: number };
 
+/** One history check on a quote or order (spec 45). Only status "anomaly" is a warning; the gateway raises none
+ *  with fewer than four past orders. */
+export type AnomalyFix = {
+  id: string;
+  kind: string;
+  description: string;
+  product_id?: string | null;
+  quantity_sales_units?: number | null;
+  remainder_sales_units?: number | null;
+  /** Set for fixes a buyer admin performs elsewhere (suspend the agent), not for re-quotes. */
+  action_url?: string | null;
+};
+export type Anomaly = {
+  code: string;
+  status: "normal" | "anomaly" | "insufficient_history";
+  product_id?: string | null;
+  observed: number | string | null;
+  unit?: string | null;
+  expected_band?: { lower?: number; upper?: number; median?: number; last_paid?: number } | null;
+  history_window?: { start?: string; end?: string; points?: number; weekday?: number | null; categories?: string[] } | null;
+  band_source?: "statistical" | "forecast";
+  explanation_text?: string | null;
+  fixes: AnomalyFix[];
+};
+
+/** A second supplier is synthetic: it shows the gateway is not tied to one catalogue. */
+export type Supplier = {
+  supplier_id: string;
+  synthetic: boolean;
+  capabilities: { currencies: string[]; pricing: string; stock: string[]; execution: { mode: string; atomicity: string; partial_acceptance: boolean } };
+};
+
 export type Quote = {
   id: string;
+  anomalies?: Anomaly[];
   signature?: string | null;
   price_commitment?: string;
   agent_id?: string | null;
@@ -133,6 +166,7 @@ export type OrderStatus = "PENDING_APPROVAL" | "CONFIRMED" | "REJECTED" | "EXPIR
 
 export type Order = {
   id: string;
+  anomalies?: Anomaly[];
   customer_id?: string | null;
   quote_id: string;
   agent_id: string;
@@ -351,6 +385,22 @@ export type Connection = {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** "oauth": approved through the sign-in window (ChatGPT, claude.ai); no key, and key_prefix is just a label. */
+  credential_kind?: "api_key" | "oauth";
+};
+
+/** A sign-in an MCP client started (ChatGPT, claude.ai): what it asked for and what the operator may grant. */
+export type ConsentRequest = {
+  id: string;
+  client_name: string;
+  /** Where the answer is sent; shown so the person can see it is the client they started from. */
+  redirect_host: string;
+  resource: string;
+  scopes: string[];
+  expires_at: string;
+  status: string;
+  customer_ids: string[];
+  agents: string[];
 };
 
 /** The key is returned once, at creation; the gateway keeps only a hash. */
@@ -413,7 +463,7 @@ async function send(path: string, init?: RequestInit): Promise<{ res: Response; 
   return { res, text: await res.text() };
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+export async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (MOCK) return (await import("./mock")).mockCall(path, init) as Promise<T>;
   const { res, text } = await send(path, init);
   let body: any = null;
@@ -472,6 +522,20 @@ export const api = {
       headers: { "Idempotency-Key": idempotencyKey },
     }),
   orders: () => call<Order[]>("/v1/orders"),
+  /** Re-quotes with the proposed correction; the source order's pending promise is cancelled. Places nothing. */
+  applyAnomalyFix: (quoteId: string, fixId: string) =>
+    call<{ source_quote_id: string; fix_id: string; quotes: Quote[] }>(
+      `/v1/quotes/${quoteId}/anomaly-fixes/${encodeURIComponent(fixId)}`,
+      { method: "POST" },
+    ),
+  suppliers: () => call<Supplier[]>("/v1/suppliers"),
+  consentRequest: (id: string) => call<ConsentRequest>(`/v1/oauth/requests/${encodeURIComponent(id)}`),
+  /** redirect_url carries the one-time authorization code: navigate to it once, never store or log it. */
+  consentDecision: (id: string, body: { decision: "deny" } | { decision: "approve"; agent_id: string; customer_ids: string[] }) =>
+    call<{ status: "approved" | "denied"; redirect_url: string }>(`/v1/oauth/requests/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   order: (id: string) => call<Order>(`/v1/orders/${id}`),
   timeline: (id: string) => call<OrderTimeline>(`/v1/orders/${id}/timeline`),
   cancel: (id: string, cancelled_by: string, reason: string) =>

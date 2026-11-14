@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  SITE_URL: https://trustedtrade.vps.webdock.cloud
+  SITE_URL: https://luotsi.online
 
 jobs:
   deploy:
@@ -48,7 +48,7 @@ jobs:
       - name: Build and restart
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "admin@${{ secrets.DEPLOY_HOST }}" \
-            'cd app && GATEWAY_PUBLIC_URL=${{ env.SITE_URL }} docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build --remove-orphans && docker image prune -f'
+            "cd app && GATEWAY_PUBLIC_URL=$SITE_URL docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d --build --remove-orphans && docker image prune -f"
 
       - name: Health check
         run: |
@@ -58,3 +58,19 @@ jobs:
           done
           echo "Gateway did not become healthy at $SITE_URL" >&2
           exit 1
+
+      - name: Smoke check public pages
+        # These pages read files from the image: a folder missing from a Dockerfile answers 500 here
+        # while /health stays green.
+        run: |
+          for path in /developers /developers/tools.json /llms.txt; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$SITE_URL$path")
+            echo "$path $code"
+            [ "$code" = 200 ] || { echo "::error::$SITE_URL$path answered $code"; exit 1; }
+          done
+          # A file missing from the console image still answers 200, with the app page: check the type.
+          for path in /favicon.svg /og-image.png; do
+            type=$(curl -s -o /dev/null -w '%{content_type}' --max-time 10 "$SITE_URL$path")
+            echo "$path $type"
+            case "$type" in text/html*|"") echo "::error::$SITE_URL$path is not in the console image"; exit 1;; esac
+          done

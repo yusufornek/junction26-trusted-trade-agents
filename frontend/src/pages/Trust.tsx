@@ -26,6 +26,7 @@ export default function Trust() {
   const meta = useAsync(() => api.meta(), []);
   const me = useAsync(() => api.me(), []);
   const mcp = useAsync(() => api.mcpExposed(), []);
+  const suppliers = useAsync(() => api.suppliers(), []);
   const [verification, setVerification] = useState<AuditVerification | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState<unknown>(null);
@@ -298,6 +299,31 @@ export default function Trust() {
             {meta.data?.limiter_scope ? ` · rate limiter ${String(meta.data.limiter_scope)}` : ""}
           </div>
         ) : null}
+      </Card>
+      <Card className="flex flex-col gap-4">
+        <div>
+          <h2 className="text-[15px] font-semibold">Suppliers behind the gateway</h2>
+          <p className="label">The same rules and audit trail apply to each. A second supplier shows the gateway is not tied to one catalogue.</p>
+        </div>
+        {suppliers.error ? (
+          <ErrorNote error={suppliers.error} />
+        ) : !suppliers.data ? (
+          <Spinner />
+        ) : (
+          <ul className="flex flex-col divide-y divide-line text-[13px]">
+            {suppliers.data.map((x) => (
+              <li key={x.supplier_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5">
+                <span className="font-medium capitalize">{x.supplier_id}</span>
+                {x.synthetic ? <span className="chip bg-chip text-ink-muted">synthetic test supplier</span> : null}
+                <span className="text-ink-muted">prices {x.capabilities.pricing.replaceAll("-", " ")}</span>
+                <span className="text-ink-muted">{x.capabilities.currencies.join(", ")}</span>
+                <span className="text-ink-muted">
+                  orders {x.capabilities.execution.mode === "simulated" ? "simulated by the gateway" : "sent to the supplier"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
     </div>
   );

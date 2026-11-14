@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Bot, RotateCcw, Save, Users } from "lucide-react";
 import { api, type AgentMandate, type PolicyDocument, type PolicyResource } from "../api";
 import { Avatar } from "../charts";
-import { Card, Empty, ErrorNote, Spinner, eur, useAsync, when } from "../ui";
+import { Card, Empty, ErrorNote, Spinner, eur, ruleLabel, useAsync, when } from "../ui";
 
 const doc = (p: PolicyResource): PolicyDocument => ({
   approval: p.approval,
@@ -399,12 +399,12 @@ function CodeToggles({
               onClick={() => onToggle(c)}
               disabled={off}
               aria-pressed={on}
-              title={off ? "Marked informational — it never blocks an order" : undefined}
+              title={off ? `${c}: marked informational — it never blocks an order` : c}
               className={`chip relative border transition-colors max-sm:before:absolute max-sm:before:inset-x-0 max-sm:before:-inset-y-2 disabled:cursor-not-allowed disabled:opacity-40 ${
                 on ? onStyle : "border-line bg-surface text-ink-muted hover:text-ink"
               }`}
             >
-              {pretty(c)}
+              {ruleLabel(c)}
             </button>
           );
         })}

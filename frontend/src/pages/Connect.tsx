@@ -5,36 +5,39 @@ import { ApiError, api, type ClientKind, type Connection, type NewConnection } f
 import { Card, ErrorNote, Spinner, useAsync, when } from "../ui";
 
 type Client = {
-  id: ClientKind;
+  /** claude.ai is not a key client: its sign-ins reach the connection list as "mcp_other". */
+  id: ClientKind | "claude_ai";
   name: string;
   /** What the person does in that tool, in its own words. */
   how: string;
   transport: "mcp" | "rest";
-  /** claude.ai and ChatGPT add remote tools only through sign-in (OAuth); the gateway issues keys today. */
-  needsSignIn?: boolean;
+  /** Added by address and approved in the gateway's sign-in window (OAuth): no key is created or copied. */
+  oauth?: boolean;
 };
 
 const CLIENTS: Client[] = [
   { id: "claude_desktop", name: "Claude Desktop", how: "Adds the gateway as a tool server in Claude's desktop app.", transport: "mcp" },
+  { id: "claude_ai", name: "claude.ai", how: "Paste the address as a custom connector, then sign in. No key to copy.", transport: "mcp", oauth: true },
+  { id: "chatgpt", name: "ChatGPT", how: "Paste the address as a connector, then sign in. No key to copy.", transport: "mcp", oauth: true },
   { id: "claude_code", name: "Claude Code", how: "One command in your terminal, or a message Claude Code runs for you.", transport: "mcp" },
   { id: "cursor", name: "Cursor", how: "One click installs the server in Cursor.", transport: "mcp" },
   { id: "vscode", name: "VS Code", how: "One click installs it for Copilot's agent mode.", transport: "mcp" },
-  { id: "chatgpt", name: "ChatGPT", how: "ChatGPT adds remote tools through a sign-in window.", transport: "mcp", needsSignIn: true },
   { id: "mcp_other", name: "Other MCP client", how: "Any client that speaks MCP over streamable HTTP.", transport: "mcp" },
   { id: "rest", name: "REST API", how: "Your own code or agent framework, with plain HTTPS calls.", transport: "rest" },
 ];
 
 const PLACEHOLDER = "<YOUR_AGENT_KEY>";
-const SERVER_NAME = "valio-aimo";
+const SERVER_NAME = "luotsi";
 const TRY_PROMPT = "Find 50 litres of lactose-free milk for delivery on Monday and show me the best offer. Do not order yet.";
 
 export default function Connect() {
-  const [clientId, setClientId] = useState<ClientKind>("claude_desktop");
+  const [clientId, setClientId] = useState<Client["id"]>("claude_desktop");
   const client = CLIENTS.find((c) => c.id === clientId)!;
   const mcp = useAsync(() => api.mcpExposed(), []);
   const policy = useAsync(() => api.policy(), []);
   const me = useAsync(() => api.me(), []);
-  const connections = useAsync(() => api.connections(), []);
+  // Polled: a sign-in approved in ChatGPT or claude.ai appears here by itself, and "used" moves with each call.
+  const connections = useAsync(() => api.connections(), [], 5000);
   // A 404 on the list means the gateway does not issue keys from the console yet; everything else still works.
   const issuing = !(connections.error instanceof ApiError && connections.error.status === 404);
 
@@ -66,7 +69,11 @@ export default function Connect() {
     setCreating(true);
     setCreateError(null);
     try {
-      const c = await api.createConnection({ agent_id: agentId.trim(), client: client.id, customer_ids: customerId ? [customerId] : [] });
+      const c = await api.createConnection({
+        agent_id: agentId.trim(),
+        client: client.id === "claude_ai" ? "mcp_other" : client.id,
+        customer_ids: customerId ? [customerId] : [],
+      });
       setCreated(c);
       setStartedAt(c.created_at);
       connections.reload();
@@ -104,7 +111,9 @@ export default function Connect() {
         <TransportStatus client={client} mcpExposed={mcp.data} checking={mcp.loading} />
       </Card>
 
-      <Card className="flex flex-col gap-4">
+      {/* Sign-in clients get no key: the operator picks the agent in the gateway's window. Hidden, not unmounted,
+          so a name typed here survives a look at another client. */}
+      <Card className={`flex flex-col gap-4 ${client.oauth ? "hidden" : ""}`}>
         <StepTitle n={1} title="Who it buys for" text="The key belongs to one agent and the customers it may buy for." />
         <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_220px]">
           <label className="flex flex-col gap-1.5">
@@ -170,14 +179,39 @@ export default function Connect() {
       </Card>
 
       <Card className="flex flex-col gap-4">
-        <StepTitle n={2} title={`Connect ${client.name}`} text={client.how} />
+        <StepTitle
+          n={client.oauth ? 1 : 2}
+          title={client.oauth ? `Add Luotsi to ${client.name}` : `Connect ${client.name}`}
+          text={client.how}
+        />
         <ClientSteps client={client} mcpUrl={mcpUrl} restBase={restBase} agentKey={key} hasKey={!!created} mcpLive={!!mcp.data} />
       </Card>
 
+      {client.oauth ? (
+        <Card className="flex flex-col gap-4">
+          <StepTitle n={2} title="Approve the sign-in" text={`${client.name} opens a Luotsi window. Whoever runs the gateway approves it there.`} />
+          <Steps
+            items={[
+              `Sign in with the operator token. It stays on the gateway; ${client.name} never sees it.`,
+              "Pick an existing agent or name a new one, and the customers it may buy for. A new agent starts with approval first: a person signs each order.",
+              `Approve. The connection appears under Connections below, where revoking it signs ${client.name} out.`,
+            ]}
+          />
+        </Card>
+      ) : null}
+
       <Card className="flex flex-col gap-4">
-        <StepTitle n={3} title="Check it works" text="Ask your agent for an offer. Its first call to the gateway shows up here." />
+        <StepTitle
+          n={3}
+          title="Check it works"
+          text={
+            client.oauth
+              ? "Ask for an offer. Its first call shows as “used” on the new connection below."
+              : "Ask your agent for an offer. Its first call to the gateway shows up here."
+          }
+        />
         <CopyBlock label="Try this in your agent" value={TRY_PROMPT} wrap />
-        <FirstCall agentId={validAgentId ? agentId.trim() : ""} since={startedAt} onSeen={connections.reload} />
+        {client.oauth ? null : <FirstCall agentId={validAgentId ? agentId.trim() : ""} since={startedAt} onSeen={connections.reload} />}
       </Card>
 
       {issuing ? <ConnectionList connections={connections} /> : null}
@@ -201,15 +235,10 @@ function TransportStatus({ client, mcpExposed, checking }: { client: Client; mcp
   if (client.transport === "rest")
     return <StatusLine tone="ok">The REST API is live on this address.</StatusLine>;
   if (checking) return <StatusLine tone="wait">Checking whether this address serves MCP…</StatusLine>;
-  if (client.needsSignIn)
-    return (
-      <StatusLine tone="warn">
-        {client.name} adds remote tools only through a sign-in window (OAuth). This gateway issues per-agent keys today, so
-        {` ${client.name}`} can connect once sign-in is added on the gateway. Until then, use Claude Desktop, Claude Code, Cursor or VS Code.
-      </StatusLine>
-    );
   return mcpExposed ? (
-    <StatusLine tone="ok">MCP is live on this address.</StatusLine>
+    <StatusLine tone="ok">
+      MCP is live on this address.{client.oauth ? ` ${client.name} signs in through the gateway's own window (OAuth).` : ""}
+    </StatusLine>
   ) : (
     <StatusLine tone="warn">
       This address does not serve MCP yet, so the steps below work once the operator enables it. Outside agents can use the REST API now.
@@ -234,7 +263,8 @@ function KeyReveal({ created }: { created: NewConnection }) {
       <div className="flex items-center gap-2 text-[13px] font-semibold text-positive">
         <Check size={15} /> Key created for {created.agent_id}
       </div>
-      <CopyBlock label="Agent key: copy it now, it will not be shown again" value={created.key} />
+      {/* Wrapped: a key shown only once should be readable whole on a phone, not half hidden in a scroll box. */}
+      <CopyBlock label="Agent key: copy it now, it will not be shown again" value={created.key} wrap />
       <p className="text-[12px] text-ink-muted">
         {created.mandate.autonomy === "autonomous_within_limits" ? (
           "This agent may confirm orders within its limits."
@@ -281,7 +311,7 @@ function ClientSteps({
             items={[
               "Open Claude Desktop, then Settings, Developer, Edit config.",
               "Add the server below to claude_desktop_config.json and save.",
-              "Restart Claude Desktop. The Valio Aimo tools appear under the tools icon.",
+              "Restart Claude Desktop. The Luotsi tools appear under the tools icon.",
             ]}
           />
           <CopyBlock
@@ -301,8 +331,8 @@ function ClientSteps({
             )}
           />
           <p className="text-[12px] text-ink-muted">
-            Claude Desktop reaches remote servers through mcp-remote, a small bridge that runs with Node.js. claude.ai in the browser
-            adds remote tools through sign-in only, which the gateway does not offer yet.
+            Claude Desktop reaches remote servers through mcp-remote, a small bridge that runs with Node.js. To connect with sign-in
+            instead of a key, choose claude.ai above.
           </p>
         </>
       );
@@ -313,7 +343,7 @@ function ClientSteps({
           <CopyBlock
             label="Or send this message to Claude Code"
             wrap
-            value={`Connect me to the Valio Aimo purchasing gateway: run \`claude mcp add --transport http ${SERVER_NAME} ${mcpUrl} --header "Authorization: ${header}"\`, then list the ${SERVER_NAME} tools and tell me when you can search offers.`}
+            value={`Connect me to the Luotsi purchasing gateway for Valio Aimo: run \`claude mcp add --transport http ${SERVER_NAME} ${mcpUrl} --header "Authorization: ${header}"\`, then list the ${SERVER_NAME} tools and tell me when you can search offers.`}
           />
         </>
       );
@@ -337,18 +367,30 @@ function ClientSteps({
         </>
       );
     }
+    case "claude_ai":
+      return (
+        <>
+          <Steps
+            items={[
+              "In claude.ai, open Settings, then Connectors, and choose Add custom connector.",
+              "Name it Luotsi, paste the server address below and leave the advanced fields empty.",
+              "Choose Connect. A Luotsi sign-in window opens.",
+            ]}
+          />
+          <CopyBlock label="Server address" value={mcpUrl} />
+        </>
+      );
     case "chatgpt":
       return (
         <>
           <Steps
             items={[
               "In ChatGPT, turn on developer mode under Settings, Connectors, Advanced.",
-              "Create a connector with the server address below and choose sign-in (OAuth).",
-              "Sign in to the gateway in the window that opens.",
+              "Create a connector named Luotsi with the server address below and choose OAuth.",
+              "Choose Create. A Luotsi sign-in window opens.",
             ]}
           />
           <CopyBlock label="Server address" value={mcpUrl} />
-          <p className="text-[12px] text-ink-muted">The last step needs sign-in on the gateway, which is not available yet.</p>
         </>
       );
     case "mcp_other":
@@ -486,22 +528,29 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
   return (
     <Card className="flex flex-col gap-3">
       <div>
-        <h3 className="text-[15px] font-semibold">Keys in use</h3>
-        <p className="label mt-0.5">Revoking a key stops that client at its next call. The agent's mandate and history stay.</p>
+        <h3 className="text-[15px] font-semibold">Connections</h3>
+        <p className="label mt-0.5">
+          Revoking stops that client at its next call, sign-ins included. The agent's mandate and history stay.
+        </p>
       </div>
       {connections.loading && !connections.data ? (
         <Spinner />
       ) : connections.error ? (
         <ErrorNote error={connections.error} />
       ) : !list.length ? (
-        <p className="text-[13px] text-ink-muted">No keys created from the console yet.</p>
+        <p className="text-[13px] text-ink-muted">No connections yet.</p>
       ) : (
         <ul className="flex flex-col divide-y divide-line">
           {list.map((c) => (
             <li key={c.connection_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-[13px]">
               <span className="font-medium">{c.agent_id}</span>
               <span className="text-ink-muted">{CLIENTS.find((x) => x.id === c.client)?.name ?? c.client}</span>
-              <code className="text-ink-muted">{c.key_prefix}…</code>
+              {/* An OAuth grant's key_prefix is the word "oauth", not part of any secret. */}
+              {c.credential_kind === "oauth" ? (
+                <span className="text-ink-muted">signed in with OAuth</span>
+              ) : (
+                <code className="text-ink-muted">{c.key_prefix}…</code>
+              )}
               <span className="text-ink-muted">{c.last_used_at ? `used ${when(c.last_used_at)}` : "not used yet"}</span>
               <button className="btn-danger ml-auto h-8 !py-0" onClick={() => revoke(c.connection_id)} disabled={busy === c.connection_id}>
                 <Trash2 size={13} /> {busy === c.connection_id ? "Revoking…" : "Revoke"}

@@ -322,12 +322,12 @@ export function Progress({ value, tone = "brand" }: { value: number; tone?: "ink
   );
 }
 
-// Blue-led and status-free: an avatar's colour must never read as confirmed / pending / rejected.
+// Teal-led and status-free: an avatar's colour must never read as confirmed / pending / rejected.
 const AVATAR_TONES = [
   "bg-brand text-white",
   "bg-brand-soft text-brand",
-  "bg-aimo-soft text-aimo",
-  "bg-aimo text-white",
+  "bg-accent-soft text-accent",
+  "bg-accent text-white",
   "bg-chip text-ink-muted",
 ];
 

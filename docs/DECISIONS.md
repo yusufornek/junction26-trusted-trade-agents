@@ -2,6 +2,26 @@
 
 Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
 
+- 2026-11-14 — **The OAuth sign-in for ChatGPT and claude.ai uses the console's own consent page** (`/consent`,
+  `FRONTEND_CONSENT_URL` on the server) instead of the gateway's plain HTML page. Why: it is the first Luotsi screen a
+  person connecting an assistant sees; it reuses the console's operator sign-in, so the token never leaves the console.
+  Emptying the variable brings the gateway's page back.
+- 2026-11-14 — **The live server gets the synthetic purchase history without a demo reset.** `reset_demo.py` archives
+  the whole database; only its `seed_anomaly_history` step ran on the live server, after a backup. Why: anomaly
+  warnings and suggestions need history, and a reset would have removed the live orders, keys and OAuth grants.
+- 2026-11-14 — **The console shows only what the operator token can use.** Built: anomaly notes and corrections, recipe
+  basket, suggestions, suppliers, approval links. Left out until accounts land: recurring-order list and runs,
+  proposals inbox, memory preferences (buyer credentials) and sandbox scenarios (separate deployment). Why: an empty
+  list or a button that always answers 403 reads as broken in a demo.
+- 2026-11-14 — **The live address is https://luotsi.online** (bought by the user at Hostinger, pointed at the Webdock
+  server): it is the public URL for MCP host checks, connection URLs and link previews. The Webdock address keeps
+  serving the site for old links, but MCP answers only on luotsi.online, since the gateway allows one public host.
+- 2026-11-14 — **The product is Luotsi; the console takes its colours and marks from the Luotsi brand kit**
+  (`Luotsi-7a-Kit`, the user's request): teal `#005671` for actions, charts, focus and the rail, slate `#2C6A81` as
+  the secondary colour, the galley-and-star mark in the rail, phone bar and favicon, the wordmark on the sign-in card
+  and the dashboard's summary card, and the kit's share image for link previews. This replaces the Valio-blue console
+  theme below; Valio Aimo stays the supplier the agents buy from, and the forest-floor status colours are unchanged.
+  Rail text moved from white/60 to white/75, which keeps 5.4:1 on teal (white/60 drops to 4.0:1).
 - 2026-11-14 — **The console has a Connect page (`/connect`)**: pick the tool the agent works in (Claude Desktop,
   Claude Code, Cursor, VS Code, ChatGPT, another MCP client, REST), create a per-agent key shown once, copy that
   tool's own setup, and see the agent's first call arrive — the user's request, modelled on Higgsfield's connect

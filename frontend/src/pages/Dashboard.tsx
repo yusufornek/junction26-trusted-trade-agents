@@ -4,9 +4,11 @@ import { ChevronLeft, ChevronRight, FileSignature, Inbox, Plus } from "lucide-re
 import { api, type Order } from "../api";
 import { useRange } from "../Shell";
 import { AreaChart, Avatar, Bars, Progress, Ring, Sparkline, type Marker } from "../charts";
-import { Card, Countdown, Empty, ErrorNote, Spinner, StatusChip, eur, num, useAsync, when } from "../ui";
+import { LuotsiWordmark } from "../brand";
+import { Card, Countdown, Empty, ErrorNote, Spinner, StatusChip, eur, num, ruleLabel, useAsync, when } from "../ui";
 
 const POLL = 5000;
+const TEN_MINUTES = 600000;
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 /** A trend line needs this many buckets that actually moved; fewer reads as a broken chart. */
@@ -23,25 +25,29 @@ const MARKER_TONE: Record<Order["status"], Marker["tone"]> = {
   EXPIRED: "muted",
 };
 
-/** "09:00" for hours (the date at midnight), "13 Nov" for UTC days. */
+/** "09:00" or "09:10" within a day (the date at midnight), "13 Nov" for UTC days. */
 function bucketLabel(t: number, size: number) {
   const d = new Date(t);
-  return size === HOUR && d.getHours() !== 0
+  return size < DAY && (d.getHours() !== 0 || d.getMinutes() !== 0)
     ? d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
     : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: size === DAY ? "UTC" : undefined });
 }
 
 /**
- * Running total in buckets from the first event to now. The gateway stores events, not a time series.
- * Hourly while the history is under three days, so a young gateway draws a curve instead of one spike
- * at the right edge; daily after that. `moves` counts the buckets that changed the total.
+ * Running total in buckets from just before the first event to now. The gateway stores events, not a time series.
+ * Ten-minute buckets under three hours of history and hourly under three days, so a young gateway (a demo) draws a
+ * curve instead of one spike at the right edge; daily after that. The leading empty bucket is the zero the total
+ * started from: without it, orders that all fall in one bucket left a single point and "Not enough history yet".
+ * `moves` counts the buckets that changed the total.
  */
 function runningTotal(events: { t: number; v: number }[], fixedSize?: number) {
   if (!events.length) return { values: [] as number[], labels: [] as string[], index: () => 0, moves: 0 };
   const first = Math.min(...events.map((e) => e.t));
-  const size = fixedSize ?? (Date.now() - first < 3 * DAY ? HOUR : DAY);
-  const start = Math.floor(first / size) * size;
-  const count = Math.floor((Date.now() - start) / size) + 1;
+  // A server clock slightly ahead of this one must not drop events past the last bucket.
+  const end = Math.max(Date.now(), ...events.map((e) => e.t));
+  const size = fixedSize ?? (end - first < 3 * HOUR ? TEN_MINUTES : end - first < 3 * DAY ? HOUR : DAY);
+  const start = Math.floor(first / size) * size - size;
+  const count = Math.floor((end - start) / size) + 1;
   const index = (t: number) => Math.min(count - 1, Math.max(0, Math.floor((t - start) / size)));
   const per = new Array<number>(count).fill(0);
   for (const e of events) per[index(e.t)] += e.v;
@@ -159,7 +165,7 @@ export default function Dashboard() {
             <span aria-hidden className="pointer-events-none absolute -right-20 -top-24 size-56 rounded-full bg-white/10 blur-2xl" />
             <div className="relative flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[13px] text-white/70">Trusted Trade Agents</div>
+                <LuotsiWordmark className="block h-4 w-auto text-white" />
                 <div className="num mt-3 whitespace-nowrap text-[34px] font-semibold leading-none">
                   {eur(s.confirmed_spend_total_eur)}
                 </div>
@@ -328,7 +334,7 @@ export default function Dashboard() {
                       <div className="min-w-0 flex-1 basis-48">
                         <div className="text-[14px] font-medium leading-snug">{order.lines[0]?.name ?? order.id}</div>
                         <div className="mt-0.5 text-[12px] text-ink-muted">
-                          {order.agent_id} · {order.policy?.hits.map((h) => h.rule).join(", ") || "policy hit"}
+                          {order.agent_id} · {order.policy?.hits.map((h) => ruleLabel(h.rule)).join(", ") || "policy hit"}
                         </div>
                       </div>
                       <div className="ml-auto flex shrink-0 items-center gap-3">
@@ -347,7 +353,8 @@ export default function Dashboard() {
           </Card>
 
           <Card className="flex flex-1 flex-col gap-4">
-            <CardHead title="Why humans got involved" sub="Policy rules, most frequent first" />
+            {/* The counts include rejections, where no human was asked, so the title names both. */}
+            <CardHead title="Why the policy stepped in" sub="Rules that held or rejected orders, most frequent first" />
             {!s.top_rule_hits.length ? (
               <Empty>No rule has fired yet.</Empty>
             ) : (
@@ -355,7 +362,9 @@ export default function Dashboard() {
                 {s.top_rule_hits.slice(0, 4).map((r) => (
                   <li key={r.rule} className="flex flex-col gap-2">
                     <div className="flex items-baseline justify-between gap-3 text-[13px]">
-                      <span className="min-w-0 break-words font-medium">{r.rule}</span>
+                      <span className="min-w-0 break-words font-medium" title={r.rule}>
+                        {ruleLabel(r.rule)}
+                      </span>
                       <span className="num shrink-0 text-ink-muted">
                         {r.count} {r.count === 1 ? "hit" : "hits"}
                       </span>

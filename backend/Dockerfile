@@ -15,6 +15,11 @@ RUN python -m pip install -r backend/requirements.txt
 COPY backend/app/ ./backend/app/
 COPY backend/scripts/ ./backend/scripts/
 COPY backend/vendor/ ./backend/vendor/
+# /developers, /developers/tools.json and /llms.txt read these generated files on every request.
+COPY backend/static/ ./backend/static/
+COPY backend/sandbox/ ./backend/sandbox/
+COPY backend/suppliers/ ./backend/suppliers/
+COPY backend/docs/ ./backend/docs/
 COPY backend/policy.yaml ./backend/policy.yaml
 COPY backend/guardrail_presets.yaml ./backend/guardrail_presets.yaml
 COPY data/ ./data/

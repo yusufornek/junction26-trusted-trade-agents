@@ -1,5 +1,5 @@
 {$SITE_ADDRESS::80} {
-    @gateway path /v1 /v1/* /health /.well-known/* /mcp* /a2a* /developers* /llms.txt /docs /docs/* /openapi.json
+    @gateway path /v1 /v1/* /health /.well-known/* /oauth/* /mcp* /a2a* /developers* /llms.txt /docs /docs/* /openapi.json
     handle @gateway {
         reverse_proxy backend:8000 {
             # Flush streaming MCP/A2A responses immediately; preserve request paths.

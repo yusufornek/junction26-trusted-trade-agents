@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
-  Activity,
   Bell,
+  ChefHat,
+  Repeat,
   Bot,
   ChevronDown,
   CircleHelp,
@@ -21,11 +22,17 @@ import {
 } from "lucide-react";
 import { api, hasToken, onAuthChange, setToken } from "./api";
 import { Avatar } from "./charts";
+import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { Card, ErrorNote, useAsync } from "./ui";
+
+/** Set at build time from the server's DEMO_OPERATOR_TOKEN (deploy/docker-compose.yml); never committed. */
+const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
 
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
   { to: "/buyer", icon: Search, label: "Buyer flow" },
+  { to: "/basket", icon: ChefHat, label: "Recipe basket" },
+  { to: "/repeat", icon: Repeat, label: "Repeat buying" },
   { to: "/approvals", icon: Inbox, label: "Approvals" },
   { to: "/orders", icon: Package, label: "Orders" },
   { to: "/audit", icon: ScrollText, label: "Audit trail" },
@@ -38,6 +45,9 @@ const NAV = [
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Good day, operator", sub: "Here is what the purchasing agent did on your behalf." },
   "/buyer": { title: "Buyer flow", sub: "Describe the need, compare offers, lock a price, order." },
+  "/basket": { title: "Recipe basket", sub: "Turn a recipe and a number of portions into one priced basket." },
+  "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
+  "/consent": { title: "Connect an assistant", sub: "An assistant asks to buy through this gateway. You decide as which agent, and for which customers." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },
@@ -64,6 +74,10 @@ export default function Shell() {
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<unknown>(null);
   const [rangeIndex, setRangeIndex] = useState(1);
+  // The range counts back from page load. Counted from Date.now() on every render, `since` changed each time the
+  // shell re-rendered (the 10 s approvals poll, opening a menu), so the dashboard refetched behind a spinner, the page
+  // shrank to the spinner's height and the browser scrolled back to the top.
+  const [loadedAt] = useState(Date.now);
   const [rangeOpen, setRangeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -71,12 +85,11 @@ export default function Shell() {
   // A phone menu that stays open after navigating would cover the page the person just asked for.
   useEffect(() => setMenuOpen(false), [pathname]);
 
-  const signIn = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const signInWith = async (value: string) => {
     setSigningIn(true);
     setSignInError(null);
     // Keep the outlet unmounted until the token is verified as an operator token.
-    setToken(tokenInput);
+    setToken(value);
     setTokenInput("");
     try {
       await api.policy();
@@ -88,16 +101,22 @@ export default function Shell() {
       setSigningIn(false);
     }
   };
+  const signIn = (event: React.FormEvent) => {
+    event.preventDefault();
+    signInWith(tokenInput);
+  };
 
   const health = useAsync(() => api.health(), []);
   const approvals = useAsync(() => (signedIn ? api.approvals() : Promise.resolve([])), [signedIn], 10000);
   const head =
     TITLES[pathname] ??
-    (pathname.startsWith("/products/")
+    (pathname.startsWith("/approvals/")
+      ? TITLES["/approvals"]
+      : pathname.startsWith("/products/")
       ? { title: "Product", sub: "Catalog facts the agent judged this product on." }
       : { title: "Order", sub: "Commitment detail" });
   const range = RANGES[rangeIndex];
-  const since = range.days ? new Date(Date.now() - range.days * 86400000).toISOString() : undefined;
+  const since = range.days ? new Date(loadedAt - range.days * 86400000).toISOString() : undefined;
   const waiting = approvals.data?.length ?? 0;
 
   return (
@@ -112,10 +131,10 @@ export default function Shell() {
         >
           <div className="mb-1 flex h-10 items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
-              <Activity size={18} strokeWidth={2.4} />
+              <LuotsiMark className="block h-6 w-auto" />
             </span>
             <RailLabel>
-              <span className="text-[14px] font-semibold text-white">Trusted Trade</span>
+              <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
           </div>
           <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3`}>
@@ -170,13 +189,13 @@ export default function Shell() {
         </nav>
       </div>
 
-      {/* Phone: one bar with the page name and a menu that lists every destination by name. */}
+      {/* Phone: one bar with the brand and a menu that lists every destination by name. The page name stays in the
+          page's own heading right below; repeating it here said it twice. */}
       <div className="sticky top-0 z-30 md:hidden">
         <div className="flex items-center gap-3 bg-rail px-4 py-3 text-white">
-          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white text-rail">
-            <Activity size={16} strokeWidth={2.4} />
+          <span className="min-w-0 flex-1">
+            <LuotsiWordmark className="block h-5 w-auto text-white" />
           </span>
-          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{head.title}</span>
           <button
             onClick={() => navigate("/approvals")}
             className="relative grid size-10 place-items-center rounded-xl text-white/80 hover:bg-white/10"
@@ -200,7 +219,8 @@ export default function Shell() {
           </button>
         </div>
         {menuOpen ? (
-          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100vh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,47,109,0.35)]">
+          // dvh, not vh: on iPhones vh includes the space under Safari's toolbar, which hid the last rows.
+          <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100dvh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
             <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
               <Plus size={18} /> New request
             </button>
@@ -262,8 +282,11 @@ export default function Shell() {
             <h1 className="text-[28px] font-semibold leading-tight tracking-tight">{head.title}</h1>
             <p className="label mt-1">{head.sub}</p>
           </div>
-          {/* Only the dashboard reads the range; elsewhere it would be a control that does nothing. */}
-          <div className={`relative ${pathname === "/" ? "" : "hidden"}`}>
+          {/* Only the signed-in dashboard reads the range; elsewhere it would be a control that does nothing. */}
+          <div
+            className={`relative ${pathname === "/" && signedIn ? "" : "hidden"}`}
+            onKeyDown={(e) => e.key === "Escape" && setRangeOpen(false)}
+          >
             <button
               className={`flex h-9 items-center gap-2 rounded-full border bg-surface px-4 text-[13px] font-medium transition-colors hover:border-brand/30 hover:text-brand ${
                 rangeOpen ? "border-brand/30 text-brand" : "border-line"
@@ -275,22 +298,27 @@ export default function Shell() {
               <ChevronDown size={14} className={`transition-transform ${rangeOpen ? "rotate-180" : ""}`} />
             </button>
             {rangeOpen ? (
-              <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,47,109,0.10)]">
-                {RANGES.map((r, i) => (
-                  <button
-                    key={r.label}
-                    className={`block w-full rounded-[10px] px-3 py-2 text-left text-[13px] transition-colors ${
-                      i === rangeIndex ? "bg-brand-soft font-semibold text-brand" : "text-ink-muted hover:bg-brand-soft/60 hover:text-ink"
-                    }`}
-                    onClick={() => {
-                      setRangeIndex(i);
-                      setRangeOpen(false);
-                    }}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
+              <>
+                {/* A tap anywhere else closes the menu: touch browsers do not focus buttons, so blur never fires. */}
+                <div className="fixed inset-0 z-10" onClick={() => setRangeOpen(false)} />
+                {/* As wide as its button: a wider menu reached past the screen edge once the header wrapped on phones. */}
+                <div className="absolute right-0 z-20 mt-2 w-max min-w-full overflow-hidden rounded-[var(--radius-tile)] border border-line bg-surface p-1 shadow-[0_10px_40px_rgba(0,67,87,0.10)]">
+                  {RANGES.map((r, i) => (
+                    <button
+                      key={r.label}
+                      className={`block w-full rounded-[10px] px-3 py-2 text-left text-[13px] transition-colors ${
+                        i === rangeIndex ? "bg-brand-soft font-semibold text-brand" : "text-ink-muted hover:bg-brand-soft/60 hover:text-ink"
+                      }`}
+                      onClick={() => {
+                        setRangeIndex(i);
+                        setRangeOpen(false);
+                      }}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : null}
           </div>
         </header>
@@ -300,10 +328,8 @@ export default function Shell() {
         ) : (
           <Card className="mx-auto mt-10 w-full max-w-md">
             <form className="flex flex-col gap-4" onSubmit={signIn}>
-              <div className="flex items-center gap-3">
-                <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-rail text-white">
-                  <Activity size={18} strokeWidth={2.4} />
-                </span>
+              <div className="flex flex-col gap-4">
+                <LuotsiWordmark className="block h-8 w-auto self-start text-brand" />
                 <div className="min-w-0">
                   <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
                   <p className="label">The token lives in memory only, so a reload asks again.</p>
@@ -323,7 +349,15 @@ export default function Shell() {
               <button className="btn-dark" disabled={signingIn}>
                 {signingIn ? "Signing in…" : "Sign in"}
               </button>
+              {/* Demo builds only: the server bakes its operator token into this bundle so a judge gets in with one click.
+                  Anyone who opens the site can then act as the operator; an empty variable leaves the button out. */}
+              {DEMO_TOKEN ? (
+                <button type="button" className="btn-ghost" disabled={signingIn} onClick={() => signInWith(DEMO_TOKEN)}>
+                  Sign in with the admin account
+                </button>
+              ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
+              <p className="text-center text-[12px] text-ink-muted">For the best experience, use a computer.</p>
             </form>
           </Card>
         )}
@@ -334,7 +368,7 @@ export default function Shell() {
 
 // 40px rows: the icon keeps its place on the collapsed rail, the name slides in beside it.
 const RAIL_ROW = "flex h-10 w-full items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
-const RAIL_IDLE = "text-white/60 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
+const RAIL_IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
 const PHONE_ROW = "flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] font-medium";
 
 /** Hidden while the rail is collapsed but still in the accessibility tree, so the icon-only rail has names. */

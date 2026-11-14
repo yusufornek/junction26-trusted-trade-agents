@@ -5,6 +5,7 @@
  * Never imported by production builds (see MOCK in api.ts).
  */
 import type {
+  Anomaly,
   AgentTrackRecord,
   AuditEntry,
   Connection,
@@ -20,6 +21,8 @@ import type {
   TimelineStep,
   Warning,
 } from "./api";
+import { mockRepeat } from "./repeat";
+import { mockBasket } from "./basket";
 
 const NOW = Date.now();
 const ago = (min: number) => new Date(NOW - min * 60000).toISOString();
@@ -32,6 +35,7 @@ const W = {
   PARTIAL_STOCK: { code: "PARTIAL_STOCK", text: "Only part of the requested quantity is available by the delivery date." },
   DATE_SHIFT: { code: "DATE_SHIFT", text: "The earliest available date is after the requested delivery date." },
   OUTSIDE_PREFERENCE: { code: "OUTSIDE_PREFERENCE", text: "brand Arla, preferred Valio; 10 L pack, preferred <= 1 L" },
+  NOT_AVAILABLE: { code: "NOT_AVAILABLE", text: "Valio reports this product as not available" },
 } satisfies Record<string, Warning>;
 
 type Row = [
@@ -51,6 +55,8 @@ const ROWS: Row[] = [
   ["464768", "12 x Arla Whole milk drink 1 L UHT lactose free", "KI", 12, 84, 30.42, "Stock", 300, 0.89, 1.3, [W.OUTSIDE_PREFERENCE], null, 0.8],
   ["466279", "Arla 10 L Novobox Suomi semi skimmed lactose free milk drink ESL", "ST", 10, 100, 27.22, "Stock", 400, 0.86, 1.1, [W.DATE_SHIFT, W.OUTSIDE_PREFERENCE], null, 0.84],
   ["462775", "Arla Milkdrink 1L lactose free fat free UHT Suomesta", "ST", 1, 1000, 2.57, "Stock", 51, 0.9, 1.1, [W.PARTIAL_STOCK, W.OUTSIDE_PREFERENCE], null, 0.83],
+  // Empty availability from Valio: listed, but the policy rejects it, so the console offers no Add to quote.
+  ["466104", "Valio Eila® semi skimmed milk drink 1,5 l lactose free", "ST", 1.5, 667, 1.62, "Stock", 0, null, 1.1, [W.NOT_AVAILABLE, W.PARTIAL_STOCK], null, 0.78],
 ];
 
 const NEED = 1000;
@@ -206,6 +212,8 @@ const line = (id: string, units: number): QuoteLine => {
 type Seed = {
   id: string; status: OrderStatus; agent: string; minutesAgo: number; lines: [string, number][];
   hits?: { rule: string; detail: string }[]; approver?: string; comment?: string; cancelReason?: string;
+  /** Rejected by the policy at placement rather than by a person. */
+  outcome?: "REJECTED";
 };
 
 const AUTONOMY_HIT = { rule: "autonomy_level", detail: "This agent's orders need sign-off until autonomy is granted." };
@@ -219,6 +227,11 @@ const SEEDS: Seed[] = [
   { id: "5b9d4e2a-8c3f-4a1b-b6d7-0e9f8a7c6b52", status: "REJECTED", agent: "hotel-chain-agent", minutesAgo: 60 * 14, lines: [["466279", 100]],
     hits: [{ rule: "DATE_SHIFT", detail: "466279: earliest delivery is two days after the requested date" }, { rule: "max_auto_total_eur", detail: "Net total 2722.00 exceeds 1500.00 EUR" }],
     approver: "Ada", comment: "Too late for the Monday booking" },
+  { id: "9e3b7c1d-4f2a-4d8e-b5c6-1a2b3c4d5e6f", status: "REJECTED", agent: "hotel-chain-agent", minutesAgo: 60 * 8, lines: [["466104", 667]],
+    outcome: "REJECTED",
+    hits: [{ rule: "min_fit_probability", detail: "466104: 0.780 < 0.800" },
+      { rule: "NOT_AVAILABLE", detail: "466104: Valio reports this product as not available" },
+      { rule: "PARTIAL_STOCK", detail: "466104: On-time available stock covers only part of the requested quantity." }] },
   { id: "57077558-efd5-4e3e-a07d-258fb3af57c5", status: "CONFIRMED", agent: "web-console", minutesAgo: 190, lines: [["464308", 1000], ["464407", 1000]],
     hits: [{ rule: "max_auto_total_eur", detail: "Net total 2110.00 exceeds 1500.00 EUR" }], approver: "Ada", comment: "approved in console" },
   { id: "d7333e82-3a71-4204-b89c-9a65240f6ece", status: "CONFIRMED", agent: "web-console", minutesAgo: 120, lines: [["464308", 1000]] },
@@ -251,12 +264,12 @@ const ORDERS: Order[] = SEEDS.map((s, i) => {
     created_at: ago(s.minutesAgo),
     expires_at: s.status === "PENDING_APPROVAL" ? ahead(30 - s.minutesAgo) : ago(s.minutesAgo - 30),
     decided_at: decided ? ago(Math.max(0, s.minutesAgo - 4)) : null,
-    decided_by_kind: !decided ? null : byHuman ? "operator" : s.status === "CANCELLED" ? "operator" : "agent",
+    decided_by_kind: !decided ? null : byHuman || s.status === "CANCELLED" ? "operator" : s.outcome ? "system" : "agent",
     total,
     currency: "EUR",
     lines,
     warnings: lines.flatMap((l) => l.warnings),
-    policy: { outcome: s.hits?.length ? "PENDING_APPROVAL" : "CONFIRMED", hits: s.hits ?? [] },
+    policy: { outcome: s.outcome ?? (s.hits?.length ? "PENDING_APPROVAL" : "CONFIRMED"), hits: s.hits ?? [] },
     live_calls: { price: 1, availability: 1 },
     evidence_revision: 1,
     approver: s.approver ?? null,
@@ -272,6 +285,16 @@ const ORDERS: Order[] = SEEDS.map((s, i) => {
     next_action: s.status === "PENDING_APPROVAL" ? "WAIT_FOR_APPROVAL" : "STOP",
   };
 });
+
+// Spec 45: the pending novobox order is far above this buyer's usual quantity; the gateway proposes a split.
+const UNUSUAL: Anomaly = {
+  code: "QUANTITY_ANOMALY", status: "anomaly", product_id: "463038", observed: 100, unit: "SALES_UNIT",
+  expected_band: { lower: 38, upper: 46, median: 42 }, band_source: "statistical",
+  history_window: { start: ago(60 * 24 * 84), end: ago(60 * 24 * 7), points: 12, weekday: 5 },
+  fixes: [{ id: "463038:split", kind: "split", product_id: "463038", quantity_sales_units: 42, remainder_sales_units: 58,
+    description: "Quote the usual quantity now and hold the remainder for human approval." }],
+};
+ORDERS.find((o) => o.id === "a41c7e90-2d58-4f3b-8e16-7c0d9b5a3f28")!.anomalies = [UNUSUAL];
 
 const quoteFor = (o: Order): Quote => ({
   id: o.quote_id,
@@ -297,7 +320,10 @@ const quoteFor = (o: Order): Quote => ({
 const EXTRA_AUDIT: Omit<AuditEntry, "id">[] = [];
 const CONNECTIONS: Connection[] = [
   { connection_id: "con_5d1e7a2b", agent_id: "hotel-chain-agent", client: "claude_desktop", key_prefix: "vak_3f9c",
-    created_at: ago(60 * 30), last_used_at: ago(6), revoked_at: null },
+    created_at: ago(60 * 30), last_used_at: ago(6), revoked_at: null, credential_kind: "api_key" },
+  // An operator approved ChatGPT's sign-in: no key exists, so the prefix is only a label.
+  { connection_id: "con_9a4f0c6e", agent_id: "events-buyer-agent", client: "chatgpt", key_prefix: "oauth",
+    created_at: ago(60 * 3), last_used_at: ago(40), revoked_at: null, credential_kind: "oauth" },
 ];
 
 function auditFor(): AuditEntry[] {
@@ -509,7 +535,11 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     };
   if (p === "/.well-known/jwks.json")
     return { keys: [{ kid: "gateway-1", kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" }] };
-  if (p === "/v1/offers" && method === "POST") return { ...LOOKUP, need: { ...LOOKUP.need, ...body } };
+  if (p === "/v1/offers" && method === "POST")
+    // The gateway's rule: search terms when there are any, otherwise words from the intent (broadened here).
+    return { ...LOOKUP, need: { ...LOOKUP.need, ...body }, retrieval: body.search_terms?.length
+      ? { mode: "terms", terms_used: body.search_terms }
+      : { mode: "intent_broadened", terms_used: String(body.intent ?? "").toLowerCase().match(/[a-z]{4,}/g) ?? [] } };
   if ((m = p.match(/^\/v1\/lookups\/([^/]+)$/))) return { ...LOOKUP, lookup_id: m[1] };
   if ((m = p.match(/^\/v1\/products\/([^/]+)$/))) return product(m[1]);
   if (p === "/v1/stats") return stats();
@@ -530,7 +560,7 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
       note: "connected from the console" });
     const key = `vak_${crypto.randomUUID().replaceAll("-", "")}`;
     const c: Connection = { connection_id: `con_${crypto.randomUUID().slice(0, 8)}`, agent_id: id, client: body.client,
-      key_prefix: key.slice(0, 8), created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+      key_prefix: key.slice(0, 8), created_at: new Date().toISOString(), last_used_at: null, revoked_at: null, credential_kind: "api_key" };
     CONNECTIONS.unshift(c);
     // The new agent "calls" a few seconds later so the Check-it-works step can be reviewed turning green.
     setTimeout(() => {
@@ -554,6 +584,30 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     if (!mandate) throw new Error(`mock: no mandate for ${id}`);
     mandate.autonomy = body.level;
     return { agent_id: id, level: body.level, reason: body.reason, track_record: trackRecord(id, 30) };
+  }
+  if (p.startsWith("/v1/oauth/requests/") && method === "GET") return { id: "req_demo", client_name: "ChatGPT", redirect_host: "chatgpt.com",
+    resource: `${location.origin}/mcp`, scopes: ["mcp"], expires_at: ahead(10), status: "pending", customer_ids: ["1", "42"],
+    agents: Object.keys(POLICY.agents ?? {}) };
+  if (p.startsWith("/v1/oauth/requests/") && method === "POST") return { status: body.decision === "approve" ? "approved" : "denied", redirect_url: "/connect" };
+  if (p === "/v1/suppliers") return [
+    { supplier_id: "valio", synthetic: false, capabilities: { currencies: ["EUR"], pricing: "sale-unit", stock: ["finite", "unknown"],
+      execution: { mode: "simulated", atomicity: "atomic", partial_acceptance: false } } },
+    { supplier_id: "nordfood", synthetic: true, capabilities: { currencies: ["EUR", "SEK"], pricing: "case; minimum case quantity", stock: ["finite"],
+      execution: { mode: "supplier_backed", atomicity: "atomic", partial_acceptance: false } } },
+  ];
+  if ((m = p.match(/^\/v1\/quotes\/([^/]+)\/anomaly-fixes\/([^/]+)$/)) && method === "POST") {
+    const source = ORDERS.find((o) => o.quote_id === m![1]);
+    if (source?.status === "PENDING_APPROVAL") source.status = "CANCELLED";
+    const fix = UNUSUAL.fixes[0];
+    const quotes = [fix.quantity_sales_units!, fix.remainder_sales_units!].map((units, i): Quote => {
+      const l = line(fix.product_id!, units);
+      const q: Quote = { id: `q-${Math.random().toString(16).slice(2, 10)}`, customer_id: "1", deliver_by: DELIVER_BY, need_ref: LOOKUP_ID,
+        status: "OPEN", created_at: new Date().toISOString(), expires_at: ahead(30), lines: [l], total: l.total ?? 0, currency: "EUR",
+        hard_constraint_violations: [], live_calls: { price: 1, availability: 1 }, anomalies: i ? [{ ...UNUSUAL, observed: units, fixes: [] }] : [] };
+      QUOTES.set(q.id, q);
+      return q;
+    });
+    return { source_quote_id: m[1], fix_id: decodeURIComponent(m[2]), quotes };
   }
   if (p === "/v1/quotes" && method === "POST") {
     const plan = body.plan_ref ? PLANS[body.plan_ref.plan_index] : null;
@@ -619,6 +673,11 @@ export async function mockCall(path: string, init?: RequestInit): Promise<unknow
     const all = auditFor();
     const order = url.searchParams.get("order_id");
     return order ? all.filter((e) => e.order_id === order) : all;
+  }
+  // Pages added later keep their fixtures beside their own API module.
+  for (const handle of [mockRepeat, mockBasket]) {
+    const result = handle(method, p, body);
+    if (result !== undefined) return result;
   }
   throw new Error(`mock: no fixture for ${method} ${p}`);
 }

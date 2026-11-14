@@ -13,6 +13,9 @@ import Agents from "./pages/Agents";
 import Trust from "./pages/Trust";
 import ProductDetail from "./pages/ProductDetail";
 import Connect from "./pages/Connect";
+import Repeat from "./pages/Repeat";
+import Basket from "./pages/Basket";
+import Consent from "./pages/Consent";
 import { MOCK } from "./api";
 import "./index.css";
 
@@ -31,6 +34,12 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/" element={<Dashboard />} />
           <Route path="/buyer" element={<Buyer />} />
           <Route path="/approvals" element={<Approvals />} />
+          {/* Webhook and e-mail approval links carry the order id: /approvals/{order_id}?revision=N. */}
+          <Route path="/approvals/:id" element={<Approvals />} />
+          <Route path="/repeat" element={<Repeat />} />
+          <Route path="/basket" element={<Basket />} />
+          {/* The gateway sends an OAuth sign-in here (FRONTEND_CONSENT_URL) with ?request_id=. */}
+          <Route path="/consent" element={<Consent />} />
           <Route path="/orders" element={<Orders />} />
           <Route path="/orders/:id" element={<OrderDetail />} />
           <Route path="/products/:id" element={<ProductDetail />} />

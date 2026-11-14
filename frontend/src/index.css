@@ -1,20 +1,22 @@
 @import "tailwindcss";
+/* Icons are not markup: scanning their text (an SVG's transform="…") invents utility classes. */
+@source not "../public";
 
 /* Design language — see docs/DECISIONS.md.
-   Valio Aimo: blue-and-white. Brand values come from valioaimo.fi's own CSS.
+   Luotsi: teal and slate on white, from the Luotsi brand kit (Luotsi-7a-Kit/README.md).
    Status colours are taken from the Finnish forest floor instead of a stock green/amber/red:
    spruce (confirmed), cloudberry (pending), lingonberry (rejected), birch (cancelled / expired).
    They keep their status meaning and never stand in for the brand. */
 @theme {
-  --color-brand: #003388; /* Valio blue: primary actions, charts, focus — white on it is 11.5:1 */
-  --color-brand-strong: #002f6d; /* navy: rail, hover and pressed states */
-  --color-brand-soft: #e6edf8; /* tint: hover rows, selected chips — brand text on it is 9.8:1 */
-  --color-aimo: #005670; /* brand-aimo */
-  --color-aimo-soft: #d1dde3; /* brand-aimo-light */
+  --color-brand: #005671; /* Luotsi teal: primary actions, charts, focus, rail — white on it is 8.2:1 */
+  --color-brand-strong: #004357; /* deeper teal: hover, pressed, gradient end — white on it is 10.8:1 */
+  --color-brand-soft: #e5eef1; /* tint: hover rows, selected chips — brand text on it is 6.9:1 */
+  --color-accent: #2c6a81; /* Luotsi slate, the secondary colour — white on it is 6.0:1 */
+  --color-accent-soft: #d5e4ea; /* slate tint — slate text on it is 4.6:1 */
 
-  --color-page: #f2f7f8; /* light-blue-aimo */
+  --color-page: #f2f7f8;
   --color-surface: #ffffff;
-  --color-rail: #002f6d;
+  --color-rail: #005671; /* the kit's white-on-teal: rail text stays at white/75 or brighter (5.4:1) */
   --color-line: #e2e9ee;
 
   --color-ink: #0f1b2d;
@@ -68,7 +70,7 @@
    Buttons and fields size by padding, so a page's `py-*` / `!px-*` still shrinks them; chips are a fixed 22px (`h-*` overrides). */
 @layer components {
   .card {
-    @apply rounded-[var(--radius-card)] border border-line bg-surface shadow-[0_1px_2px_rgba(0,47,109,0.04)];
+    @apply rounded-[var(--radius-card)] border border-line bg-surface shadow-[0_1px_2px_rgba(0,67,87,0.04)];
   }
   .label {
     @apply text-[13px] text-ink-muted;
@@ -91,7 +93,7 @@
   }
   .btn-dark,
   .btn-primary {
-    @apply bg-brand text-white shadow-[0_1px_2px_rgba(0,47,109,0.16),0_4px_12px_-4px_rgba(0,51,136,0.45)]
+    @apply bg-brand text-white shadow-[0_1px_2px_rgba(0,67,87,0.16),0_4px_12px_-4px_rgba(0,86,113,0.45)]
            hover:bg-brand-strong active:shadow-none;
   }
   .btn-ghost {
@@ -103,7 +105,7 @@
   .field {
     @apply w-full rounded-[var(--radius-tile)] border border-line bg-surface px-3.5 py-[7px] text-[14px] leading-5 text-ink
            outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-ink-soft
-           hover:border-aimo-soft focus:border-brand focus:ring-[3px] focus:ring-brand/15
+           hover:border-accent-soft focus:border-brand focus:ring-[3px] focus:ring-brand/15
            disabled:bg-page disabled:text-ink-muted;
   }
 }
