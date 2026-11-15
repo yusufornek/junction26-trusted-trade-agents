@@ -191,11 +191,10 @@ class ConnectionContract:
             return
         version = version or ECHO.get() or self.state(p.connection_id)["contract_version"]
         if version is None:
-            with self.gateway.db.connect() as conn:
-                legacy = conn.execute("SELECT 1 FROM connection_contract_legacy_connections WHERE connection_id=?", (p.connection_id,)).fetchone()
-            if legacy:
-                version = self.current()["version"]
-                self.acknowledge(p.connection_id, version)
+            # A connection that never acknowledged a contract is on the current one: a person approved the connection,
+            # and spec 63 R-3 reserves CONTRACT_STALE for connections that acknowledged an older version.
+            version = self.current()["version"]
+            self.acknowledge(p.connection_id, version)
         changes = self.changes_since(version)
         if any(c["material"] for c in changes):
             # An explicitly selected, verified signed promise is the only pinning
