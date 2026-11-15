@@ -98,6 +98,98 @@ def test_ac_3_changed_audit_entry_names_entry(gateway, purchase, tmp_path):
     assert any(e["check"] == "audit_consistent" and f"entry {link['seq']}" in e["detail"] for e in report["errors"])
 
 
+def test_ac_1_ac_3_ac_6_interleaved_tenant_bundle(gateway, need, upstream, buyer_setup, tmp_path):
+    foreign_need = need.model_copy(update={"customer_id": "2"})
+    foreign = [place(gateway, foreign_need, agent="agent-b")]
+    own = place(gateway, need)
+    foreign.append(place(gateway, foreign_need, agent="agent-b"))
+    place(gateway, need)
+    foreign.append(place(gateway, foreign_need, agent="agent-b"))
+    # Use the real tenant-scoped endpoint; direct build_bundle calls without a
+    # request principal cannot reproduce the filtered audit view.
+    with TestClient(create_app(gateway), headers=agent_headers("external")) as client:
+        response = client.get(f"/v1/orders/{own.id}/evidence")
+    assert response.status_code == 200, response.text
+    path = tmp_path / "interleaved.zip"
+    path.write_bytes(response.content)
+    with ZipFile(io.BytesIO(response.content)) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    links = json.loads(files["audit.json"])
+    checkpoint = json.loads(files["checkpoint.json"])
+    with gateway.db.connect() as conn:
+        chain = [dict(row) for row in conn.execute(
+            "SELECT id,hash,tenant_id FROM audit WHERE id<=? ORDER BY id", (checkpoint["entries"],))]
+    assert {row["tenant_id"] for row in chain} == {"hotel-aurora", "kaari-hospital"}
+    assert [link["seq"] for link in links] == [row["id"] for row in chain]
+    assert checkpoint["entries"] == links[-1]["seq"]
+    assert checkpoint["head_hash"] == links[-1]["hash"] == chain[-1]["hash"]
+    foreign_seqs = {row["id"] for row in chain if row["tenant_id"] == "kaari-hospital"}
+    assert foreign_seqs
+    assert all(set(link) == {"seq", "prev_hash", "hash"} for link in links if link["seq"] in foreign_seqs)
+    for body in files.values():
+        assert all(order.id.encode() not in body and order.quote_id.encode() not in body for order in foreign)
+    report, code = verify_bundle(path, gateway.signing.jwks())
+    assert code == 0, report
+    assert all(report[check] is True for check in (
+        "signature_valid", "trusted_issuer_match", "audit_consistent", "ubl_schema_valid",
+        "artifact_integrity", "binding_valid"))
+    link = next(link for link in links if "entry" in link)
+    link["entry"]["summary"] = "Changed tenant audit evidence"
+    files["audit.json"] = json.dumps(links).encode()
+    path.write_bytes(zip_bundle(files))
+    report, code = verify_bundle(path, gateway.signing.jwks())
+    assert code != 0 and report["audit_consistent"] is False
+    assert any(error["check"] == "audit_consistent" and f"entry {link['seq']}" in error["detail"]
+               for error in report["errors"])
+
+
+def test_ac_1_ac_3_ac_5_non_genesis_audit_range(gateway, purchase, tmp_path, respx_mock):
+    from hashlib import sha256
+    path, manifest, files = save(gateway, purchase, tmp_path)
+    links = json.loads(files["audit.json"])[1:]
+    assert len(links) >= 2 and links[0]["seq"] > 1
+    files["audit.json"] = json.dumps(links).encode()
+    # An anchor refers to a global chain position, not an index in this range.
+    checkpoint = json.loads(files["checkpoint.json"])
+    anchor = {"entries": checkpoint["entries"], "head_hash": checkpoint["head_hash"],
+              "checkpoint_digest": checkpoint["head_hash"], "chain_id": 137, "tx_hash": "0x" + "a" * 64}
+    files["anchor.json"] = json.dumps(anchor).encode()
+    manifest.pop("signature")
+    manifest["files"] = [{"name": name, "sha256": sha256(body).hexdigest(), "href": name}
+                         for name, body in files.items() if name != "manifest.json"]
+    manifest["signature"] = gateway.signing.sign(manifest)
+    files["manifest.json"] = json.dumps(manifest).encode()
+    path.write_bytes(zip_bundle(files))
+    report, code = verify_bundle(path, gateway.signing.jwks())
+    assert code == 0, report
+
+    def rpc(request):
+        method = json.loads(request.content)["method"]
+        data = "0x" + f"VAIMO-AUDIT-1:{anchor['entries']}:{anchor['head_hash']}".encode().hex()
+        result = {"eth_chainId": "0x89",
+                  "eth_getTransactionByHash": {"hash": anchor["tx_hash"], "input": data, "blockNumber": "0x10"},
+                  "eth_getTransactionReceipt": {"transactionHash": anchor["tx_hash"], "blockNumber": "0x10", "status": "0x1"}}[method]
+        return httpx.Response(200, json={"result": result})
+    respx_mock.post("https://rpc.test").mock(side_effect=rpc)
+    report, code = verify_bundle(path, gateway.signing.jwks(), rpc_url="https://rpc.test")
+    assert code == 0 and report["anchor_status"] == "matched", report
+
+    for damage in ("missing_link", "previous_hash", "hash", "head_hash", "entries"):
+        damaged = dict(files)
+        changed = json.loads(files["audit.json"])
+        if damage == "missing_link":
+            del changed[1]
+        elif damage in {"previous_hash", "hash"}:
+            changed[1]["prev_hash" if damage == "previous_hash" else "hash"] = "f" * 64
+        else:
+            bad_checkpoint = {**checkpoint, damage: "f" * 64 if damage == "head_hash" else len(links)}
+            damaged["checkpoint.json"] = json.dumps(bad_checkpoint).encode()
+        damaged["audit.json"] = json.dumps(changed).encode()
+        path.write_bytes(zip_bundle(damaged))
+        report, code = verify_bundle(path, gateway.signing.jwks())
+        assert code != 0 and report["audit_consistent"] is False, (damage, report)
+
+
 def test_ac_4_untrusted_jwks_fails_even_with_valid_bundled_signature(gateway, purchase, tmp_path):
     path, _, files = save(gateway, purchase, tmp_path)
     assert verify_quote(json.loads(files["quote.json"]), json.loads(files["jwks.json"])) is True

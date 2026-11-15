@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { Avatar } from "../charts";
-import { Card, Empty, ErrorNote, LiveDot, Spinner, useAsync, when } from "../ui";
+import { Card, Empty, ErrorNote, LiveDot, Spinner, actorChainText, useAsync, when } from "../ui";
 
 export default function Audit() {
   const { data, error, loading } = useAsync(() => api.audit(), [], 5000);
@@ -43,8 +43,8 @@ export default function Audit() {
                       {e.action.replaceAll("_", " ").toLowerCase()}
                     </span>
                     {/* The actor is evidence: it wraps to its own line on a phone instead of being cut. */}
-                    <span className="min-w-0 break-all text-[12px] text-ink-muted md:w-44 md:shrink-0 md:truncate md:break-normal" title={e.actor}>
-                      {e.actor}
+                    <span className="min-w-0 break-all text-[12px] text-ink-muted md:w-44 md:shrink-0 md:truncate md:break-normal" title={actorChainText(e.data) ?? e.actor}>
+                      {actorChainText(e.data) ?? e.actor}
                     </span>
                   </div>
                   {e.summary ? (

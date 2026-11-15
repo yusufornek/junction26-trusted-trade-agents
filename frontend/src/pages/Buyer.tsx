@@ -20,6 +20,7 @@ import {
   Spinner,
   StatusChip,
   WarningChips,
+  allergenName,
   eur,
   num,
   pct,
@@ -607,6 +608,11 @@ function Constraints({ lookup }: { lookup: LookupResult }) {
   const limits = Object.entries(extra.effective_constraints?.nutrient_limits ?? {});
   if (!items.length && !limits.length) return null;
   const removed = lookup.exclusion_counts ?? {};
+  // Keys read "exclude_allergens.AE (request; contains)", one per reason; a product fails one code for one reason.
+  const codeCount = (kind: string, code: string) =>
+    Object.entries(removed)
+      .filter(([k]) => k.startsWith(`${kind === "required" ? "required_claims" : "exclude_allergens"}.${code} `))
+      .reduce((sum, [, n]) => sum + n, 0);
   // Gateway keys read "nutrient_limits.<rule> (customer_policy; <reason>)"; one key per distinct reason.
   const ruleCounts = (rule: string, missing: boolean) =>
     Object.entries(removed)
@@ -624,8 +630,8 @@ function Constraints({ lookup }: { lookup: LookupResult }) {
           className={`chip ${c.source === "customer_policy" ? "bg-brand text-white" : "bg-chip text-ink"}`}
           title={c.source === "customer_policy" ? "Standing constraint from the customer's policy" : "From this request"}
         >
-          {c.kind === "required" ? "must be" : "excludes"} {c.code.replaceAll("_", " ").toLowerCase()}
-          {removed[c.code] ? <span className="opacity-60">−{num(removed[c.code])}</span> : null}
+          {c.kind === "required" ? `must be ${c.code.replaceAll("_", " ").toLowerCase()}` : `excludes ${allergenName(c.code)}`}
+          {codeCount(c.kind, c.code) ? <span className="opacity-60">−{num(codeCount(c.kind, c.code))}</span> : null}
           {c.source === "customer_policy" ? <span className="opacity-60">· standing</span> : null}
         </span>
       ))}

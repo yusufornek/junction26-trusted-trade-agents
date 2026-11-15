@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Bot, RotateCcw, Save, Users } from "lucide-react";
 import { api, type AgentMandate, type PolicyDocument, type PolicyResource, signedInEmail } from "../api";
 import { Avatar } from "../charts";
-import { Card, Empty, ErrorNote, Spinner, eur, ruleLabel, useAsync, when } from "../ui";
+import { Card, Empty, ErrorNote, Spinner, allergenName, eur, ruleLabel, useAsync, when } from "../ui";
 
 const doc = (p: PolicyResource): PolicyDocument => ({
   approval: p.approval,
@@ -390,7 +390,7 @@ export default function Policy() {
                       ))}
                       {(c.exclude_allergens ?? []).map((x) => (
                         <span key={x} className="chip bg-negative-soft text-negative">
-                          excludes {x}
+                          excludes {allergenName(x)}
                         </span>
                       ))}
                       {c.clinical_review === "required" ? (

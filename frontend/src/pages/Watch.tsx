@@ -2,15 +2,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api";
 import { watchApi, type StockoutAlert, type TradeOff, type WatchRun } from "../watch";
-import { Card, Empty, ErrorNote, Spinner, dateOnly, eur, num, ruleLabel, useAsync, when } from "../ui";
+import { Card, Empty, ErrorNote, Spinner, allergenName as allergen, dateOnly, eur, num, ruleLabel, useAsync, when } from "../ui";
 
-// shortcut: copy of the main GS1 allergen names from ProductDetail (not exported there); other codes read "allergen XY".
-const ALLERGENS: Record<string, string> = {
-  AC: "crustaceans", AE: "eggs", AF: "fish", AM: "milk", AN: "tree nuts", AP: "peanuts", AS: "sesame", AU: "sulphites",
-  AW: "cereals with gluten", AY: "soy", BC: "celery", BM: "mustard", ML: "lactose", NL: "lupin", UM: "molluscs", UW: "wheat",
-};
 const UNITS: Record<string, string> = { ST: "piece", KI: "case", PAK: "pack", KG: "kg", L: "litre", SALES_UNIT: "pack" };
-const allergen = (code: string) => ALLERGENS[code] ?? `allergen ${code}`;
 const claim = (code: string) => code.replaceAll("_", " ").toLowerCase();
 const unitWord = (code: string) => UNITS[code] ?? "sales unit";
 const qtyUnit = (unit: string) => (unit === "SALES_UNIT" ? "packs" : unit);

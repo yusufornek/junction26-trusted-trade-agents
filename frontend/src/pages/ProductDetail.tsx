@@ -2,17 +2,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Leaf, Thermometer, Truck } from "lucide-react";
 import { api } from "../api";
 import { Ring } from "../charts";
-import { Card, Empty, ErrorNote, Spinner, num, pct, useAsync } from "../ui";
+import { ALLERGEN_NAMES as ALLERGENS, Card, Empty, ErrorNote, Spinner, num, pct, useAsync } from "../ui";
 
-// GS1 AllergenTypeCode names, only for codes we are sure of (cross-checked with backend/app/catalog.py).
-// Any other code is shown bare: guessing an allergen's meaning is worse than showing the code.
-const ALLERGENS: Record<string, string> = {
-  AC: "crustaceans", AE: "eggs", AF: "fish", AM: "milk", AN: "tree nuts", AP: "peanuts", AS: "sesame",
-  AU: "sulphites", AW: "cereals with gluten", AY: "soy", BC: "celery", BM: "mustard", ML: "lactose", NL: "lupin",
-  UM: "molluscs", UW: "wheat", GB: "barley", NR: "rye", GO: "oats", GS: "spelt", GK: "kamut", SA: "almond",
-  SH: "hazelnut", SW: "walnut", SC: "cashew", SP: "pecan", SR: "brazil nut", ST: "pistachio", SM: "macadamia",
-  PN: "pine nut", X99: "declaration marker",
-};
 
 const STATUS_STYLE: Record<string, string> = {
   contains: "bg-negative-soft text-negative",
