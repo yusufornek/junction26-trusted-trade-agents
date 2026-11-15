@@ -464,8 +464,13 @@ class OAuth:
         if row is None:
             raise OAuthError("invalid_client", 401)
         metadata = json.loads(row["metadata"])
-        if metadata["token_endpoint_auth_method"] != method or (method != "none" and (
-                secret is None or not compare_digest(digest(secret), row["secret_digest"] or ""))):
+        registered = metadata["token_endpoint_auth_method"]
+        # Confidential clients may present their secret in the body or in a Basic header (clients differ on this);
+        # a public client is accepted even if it also sends an empty or unused secret.
+        if registered == "none":
+            if row["secret_digest"]:
+                raise OAuthError("invalid_client", 401)
+        elif secret is None or not compare_digest(digest(secret), row["secret_digest"] or ""):
             raise OAuthError("invalid_client", 401)
         return client_id, metadata
 
