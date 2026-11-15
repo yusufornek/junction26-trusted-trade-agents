@@ -11,12 +11,28 @@ that push is the truth).
 Newest on top. Each entry says what landed, what the console can build on it, and any server step. Continue from the
 top entry; the numbered sections below hold the details.
 
-- **URGENT (14.11 22:10) — approvals do not complete in the console.** Every human decision (approve, reject, cancel,
+- **Done by the console (15.11): approvals now send the confirmation token automatically (api.ts).** Was: approvals did not complete in the console. Every human decision (approve, reject, cancel,
   policy reset, autonomy and governance writes) is two requests: the first answers `confirmation_required` with a
   summary and `confirmation_token`; repeat the identical request with that token within five minutes. The console's
   approve/reject sends only the first request (`frontend/src/pages/Approvals.tsx`), so approvals never finish. Handle
   `CONFIRMATION_INVALID` and `EVIDENCE_CHANGED`. This blocks the brief's third core requirement in the demo.
 
+- **Push 5 (15.11, early morning) — the AI-gateway set: specs 47, 61, 62, 63, 64.**
+  - Purchase intents (47): `POST /v1/intents`, amendments, resume by another agent, partial fulfilment; retries over
+    any protocol give one order; `POSSIBLE_DUPLICATE_DEMAND` when the same need arrives twice.
+  - Notifications to connected agents (61): consent per connection (`GET/PUT /v1/connections/{id}/notifications`;
+    approval and order decisions on by default), delivered over the MCP stream, A2A push and webhooks; agents without a
+    stream read `get_notifications`. Worth a consent checklist on the Connect flow and a "notifications" tab per connection.
+  - Connection trust (62): OAuth clients show verified/unverified; pausing an agent closes its live streams at once;
+    a key used from two places turns read-only (`CONCURRENT_CONTEXT`) and asks the owner; a new connection for an
+    agent with earned autonomy waits for the owner to confirm it is the same agent. Show these states in connection health.
+  - Contract and driving test (63): `GET /v1/trading-profile`; strict arguments (`UNKNOWN_ARGUMENT`,
+    `ARGUMENT_REQUIRED`); `POST /v1/connections/{id}/driving-test` runs the sandbox test and order scope opens only
+    after the unit, retry and approval checks pass (`DRIVING_TEST_REQUIRED`). A "run driving test" button and the
+    signed result per connection fit the Connect page.
+  - Handoff and delegation (64): `POST /v1/intents/{id}/handoff` and `/v1/handoffs/{code}/accept`; one holder at a
+    time (`INTENT_HANDED_OVER`); research-only delegations with an actor chain shown in the timeline.
+  - MCP now lists 109 tools; contracts/openapi.yaml has 259 paths.
 - **Push 4 (15.11, ~00:15) — agent surface (spec 60) + recurring pause.**
   - MCP now exposes 79 tools across buyer/tenant/operator with annotations (read-only, destructive) and output schemas,
     readable resources (`luotsi://orders/{id}`, `luotsi://approvals/pending`, `luotsi://inbox`, …) with subscriptions,
