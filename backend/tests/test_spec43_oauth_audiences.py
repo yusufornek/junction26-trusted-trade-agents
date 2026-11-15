@@ -159,7 +159,8 @@ def test_AC_7_token_binding_rotation_reuse_and_expiry(http, gateway, respx_mock,
 
 def test_AC_8_dcr_and_safe_metadata_registration(http, gateway, respx_mock, monkeypatch):
     body = {"client_name": "Registered Assistant", "redirect_uris": [REDIRECT]}
-    assert http.post("/oauth/register", json=body).status_code == 400
+    defaulted = http.post("/oauth/register", json=body)
+    assert defaulted.status_code == 201 and defaulted.json()["application_type"] == "web"
     response = http.post("/oauth/register", json={**body, "application_type": "web"})
     assert response.status_code == 201, response.text
     credential, _, _, _ = oauth(http, respx_mock, client_id=response.json()["client_id"])
