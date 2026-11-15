@@ -378,7 +378,7 @@ function Report() {
 }
 
 export default function Governance() {
-  const { data, error, loading, reload } = useAsync(loadBoard, [], 20000);
+  const { data, error, loading, reload } = useAsync(loadBoard, [], 60000);
   if (!data) return error ? <ErrorNote error={error} /> : loading ? <Spinner /> : null;
 
   const ids = [...new Set(data.agents.map((a) => a.tenant_id))];

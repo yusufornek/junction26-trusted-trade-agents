@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { ApiError, type OrderStatus, type PolicyResource, type RuleHit, type Warning } from "./api";
 
@@ -251,17 +251,24 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs =
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
+  // A poll never starts while the previous request is still out: on a slow gateway, stacked polls queued behind
+  // each other on its single worker and made every page slower.
+  const inFlight = useRef(false);
 
   const run = useCallback(
     (quiet = false) => {
       if (!quiet) setLoading(true);
+      inFlight.current = true;
       return fn()
         .then((d) => {
           setData(d);
           setError(null);
         })
         .catch(setError)
-        .finally(() => setLoading(false));
+        .finally(() => {
+          inFlight.current = false;
+          setLoading(false);
+        });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     deps,
@@ -272,7 +279,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs =
     if (!pollMs) return;
     // Background refreshes stay quiet so the page never flashes a spinner at the user.
     const id = setInterval(() => {
-      if (!document.hidden) run(true);
+      if (!document.hidden && !inFlight.current) run(true);
     }, pollMs);
     return () => clearInterval(id);
   }, [run, pollMs]);
