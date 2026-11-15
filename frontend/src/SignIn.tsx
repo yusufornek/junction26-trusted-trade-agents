@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Building2, CircleHelp, KeyRound, LogIn, Mail, Sparkles } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, CircleHelp, KeyRound, LogIn, Mail, Sparkles } from "lucide-react";
 import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { ErrorNote } from "./ui";
 
@@ -19,6 +19,9 @@ const ROW = "flex h-10 w-full shrink-0 items-center gap-3 rounded-2xl px-[11px] 
 const IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white";
 const FIELD =
   "h-11 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-[15px] text-white outline-none transition-colors placeholder:text-white/45 focus:border-white/60 focus:bg-white/[0.14]";
+// Sign-in choices must read as buttons at rest, not only on hover: a filled, outlined pill with its icon in a tile.
+const OPTION =
+  "group/option flex h-12 w-full shrink-0 items-center gap-3 rounded-2xl border border-white/15 bg-white/[0.08] pl-1.5 pr-3 text-left text-[14px] font-medium text-white transition-colors hover:border-white/30 hover:bg-white/[0.14] focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60";
 const WIDTH = "w-[min(380px,calc(100vw-2rem))]";
 
 /** Signed-out screen in the rail's design: it opens as the 72 px icon rail and widens to show every way in. */
@@ -104,24 +107,25 @@ export default function SignIn({ demoToken, signingIn, error, onToken, onEmail, 
 
           <div className="my-4 h-px bg-white/15" />
 
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-2">
             {demoToken ? (
-              <Row icon={<Sparkles size={18} />} open={open} onClick={() => onToken(demoToken)} disabled={signingIn}>
+              <Row icon={<Sparkles size={17} />} open={open} onClick={() => onToken(demoToken)} disabled={signingIn}>
                 Junction 2026 Special Account
               </Row>
             ) : null}
             {method === "email" ? (
-              <Row icon={<KeyRound size={18} />} open={open} onClick={() => pick("token")}>
+              <Row icon={<KeyRound size={17} />} open={open} onClick={() => pick("token")}>
                 Use an operator token
               </Row>
             ) : (
-              <Row icon={<ArrowLeft size={18} />} open={open} onClick={() => pick("email")}>
+              <Row icon={<ArrowLeft size={17} />} open={open} onClick={() => pick("email")}>
                 Use e-mail instead
               </Row>
             )}
-            <Link to="/signup" className={`${ROW} ${IDLE}`}>
-              <Building2 size={18} className="shrink-0" />
-              <Label open={open}>Create an organisation account</Label>
+            <Link to="/signup" className={OPTION}>
+              <OptionBody icon={<Building2 size={17} />} open={open}>
+                Create an organisation account
+              </OptionBody>
             </Link>
           </div>
 
@@ -142,10 +146,23 @@ export default function SignIn({ demoToken, signingIn, error, onToken, onEmail, 
 
 function Row({ icon, open, onClick, disabled, children }: { icon: ReactNode; open: boolean; onClick: () => void; disabled?: boolean; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`${ROW} ${IDLE} disabled:opacity-60`}>
-      <span className="shrink-0">{icon}</span>
-      <Label open={open}>{children}</Label>
+    <button type="button" onClick={onClick} disabled={disabled} className={OPTION}>
+      <OptionBody icon={icon} open={open}>
+        {children}
+      </OptionBody>
     </button>
+  );
+}
+
+function OptionBody({ icon, open, children }: { icon: ReactNode; open: boolean; children: ReactNode }) {
+  return (
+    <>
+      <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/[0.14] text-white">{icon}</span>
+      <Label open={open} className="min-w-0 flex-1">
+        {children}
+      </Label>
+      <ChevronRight size={17} className="shrink-0 text-white/60 transition-transform group-hover/option:translate-x-0.5" aria-hidden />
+    </>
   );
 }
 
