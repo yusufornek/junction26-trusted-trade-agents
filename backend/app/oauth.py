@@ -363,9 +363,10 @@ class OAuth:
             raise OAuthError("invalid_target")
         if params.get("code_challenge_method") != "S256" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", params.get("code_challenge", "")):
             raise OAuthError()
-        scopes = params.get("scope", "mcp").split()
-        if "mcp" not in scopes or set(scopes) - {"mcp", "offline_access"}:
-            raise OAuthError("invalid_scope")
+        requested = (params.get("scope") or "mcp").split()
+        # Issue what this resource offers ("mcp", plus "offline_access" when asked) instead of refusing clients that
+        # request every advertised scope; RFC 6749 section 3.3 lets the server grant fewer scopes than requested.
+        params["scope"] = " ".join(["mcp"] + (["offline_access"] if "offline_access" in requested else []))
         if len(params.get("state", "")) > 2048:
             raise OAuthError()
 
