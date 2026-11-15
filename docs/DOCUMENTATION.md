@@ -2,7 +2,7 @@
 
 Luotsi is the gateway through which external AI purchasing agents work with Valio Aimo: look up products, prices and availability, commit at fixed prices, and order within their authority or hand the decision to a human. Live at https://luotsi.online. This document describes every capability, the human sign-off model, the trust model, the interfaces and the choices behind them. Each section links the spec (`docs/specs/NN-*.md`) that defines its requirements (`R-n`) and acceptance criteria (`AC-n`); every acceptance criterion has a test named after it in `backend/tests/`.
 
-Related documents: [README](../README.md) · [Decisions](DECISIONS.md) · [Specs index](specs/README.md) · [Connect an agent](CONNECT-API.md) · [Scenarios](SCENARIOS.md) · [Deploy](DEPLOY.md) · [Challenge](CHALLENGE.md)
+Related documents: [README](../README.md) · [Specs index](specs/README.md) · [Connect an agent](CONNECT-API.md) · [Scenarios](SCENARIOS.md) · [Deploy](DEPLOY.md) · [Challenge](CHALLENGE.md)
 
 ---
 
