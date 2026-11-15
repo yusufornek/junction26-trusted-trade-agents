@@ -119,6 +119,8 @@ export default function Shell() {
   const pages = account ? ROLE_PAGES[account.role] : undefined;
   const allowed = (to: string) => !pages || pages.some((p) => to === p || to.startsWith(p + "/") || (p === "/orders" && to.startsWith("/products/")));
   const nav = NAV.filter((n) => allowed(n.to));
+  // The logo goes home: the dashboard, or an organisation person's first page when the dashboard is not theirs.
+  const home = pages ? pages[0] : "/";
   // Organisation people land on their first page instead of an operator page that would only answer 403.
   useEffect(() => {
     if (signedIn && pages && !allowed(pathname) && pathname !== "/signup") navigate(pages[0], { replace: true });
@@ -199,14 +201,14 @@ export default function Shell() {
           aria-label="Main"
           className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4 [@media(max-height:900px)]:py-3"
         >
-          <div className="mb-1 flex h-10 shrink-0 items-center gap-3">
+          <NavLink to={home} aria-label="Home" className="mb-1 flex h-10 shrink-0 items-center gap-3 rounded-2xl focus-visible:outline-2 focus-visible:outline-white">
             <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
               <LuotsiMark className="block h-6 w-auto" />
             </span>
             <RailLabel>
               <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
-          </div>
+          </NavLink>
           <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3 [@media(max-height:900px)]:mb-1 ${allowed("/buyer") ? "" : "hidden"}`}>
             <Plus size={20} className="shrink-0" />
             <RailLabel>New request</RailLabel>
@@ -266,7 +268,10 @@ export default function Shell() {
       <div className="sticky top-0 z-30 md:hidden">
         <div className="flex items-center gap-3 bg-rail px-4 py-3 text-white">
           <span className="min-w-0 flex-1">
-            <LuotsiWordmark className="block h-5 w-auto text-white" />
+            {/* Padding without moving the logo: a 44 px tall tap target on phones. */}
+            <NavLink to={home} aria-label="Home" className="-my-3 inline-block py-3 pr-4">
+              <LuotsiWordmark className="block h-5 w-auto text-white" />
+            </NavLink>
           </span>
           <button
             onClick={() => navigate("/approvals")}
