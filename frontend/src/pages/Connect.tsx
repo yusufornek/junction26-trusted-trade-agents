@@ -129,8 +129,8 @@ export default function Connect() {
       <div role="note" className="rounded-xl border-2 border-warn bg-warn-soft px-5 py-4 text-warn">
         <p className="text-[20px] font-bold uppercase tracking-wide">Important</p>
         <p className="mt-1 text-[16px] font-semibold text-ink">
-          After you connect claude.ai, ChatGPT or any other client, open the new connection under Connections below
-          and press "Yes, this is the same agent".
+          Connect claude.ai, ChatGPT or any other client as <span className="font-mono">hotel-chain-agent</span>. Then open
+          the new connection under Connections below and press "Yes, this is the same agent".
         </p>
         <p className="mt-1 text-[14px] text-ink">
           Until you do, every order from that connection waits for a human approval, even inside the agent's limits.
@@ -250,7 +250,7 @@ export default function Connect() {
           <Steps
             items={[
               `Sign in with the operator token. It stays on the gateway; ${client.name} never sees it.`,
-              "Pick an existing agent or name a new one, and the customers it may buy for. A new agent starts with approval first: a person signs each order.",
+              "Pick hotel-chain-agent (the demo agent) and the customers it may buy for. A new agent starts with approval first: a person signs each order.",
               `Approve. The connection appears under Connections below, where revoking it signs ${client.name} out.`,
             ]}
           />

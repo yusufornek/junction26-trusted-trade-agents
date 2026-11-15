@@ -37,7 +37,7 @@ export default function Consent() {
   if (!r) return <Spinner />;
 
   // An existing agent is the default when there is one: its mandate is known. One customer needs no choosing.
-  const chosen = agent ?? r.agents[0] ?? NEW;
+  const chosen = agent ?? (r.agents.includes("hotel-chain-agent") ? "hotel-chain-agent" : r.agents[0]) ?? NEW;
   const agentId = chosen === NEW ? newAgent.trim() : chosen;
   const picked = customers ?? (r.customer_ids.length === 1 ? r.customer_ids : []);
   const validAgent = /^[a-z0-9][a-z0-9-]{1,47}$/.test(agentId);
@@ -98,6 +98,16 @@ export default function Consent() {
             <li key={s}>{SCOPE_WORDS[s] ?? s}</li>
           ))}
         </ul>
+      </div>
+
+      <div role="note" className="rounded-xl border-2 border-warn bg-warn-soft px-4 py-3">
+        <p className="text-[16px] font-bold uppercase tracking-wide text-warn">Important</p>
+        <p className="mt-1 text-[14px] font-semibold text-ink">
+          Choose <span className="font-mono">hotel-chain-agent</span> below. It is the demo agent that may order on its own within its limits.
+        </p>
+        <p className="mt-1 text-[13px] text-ink">
+          After approving, open Connect in the console and press "Yes, this is the same agent" on this new connection.
+        </p>
       </div>
 
       <label className="flex flex-col gap-1.5">
