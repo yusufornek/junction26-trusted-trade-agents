@@ -162,6 +162,14 @@ class ConnectionTrust:
         row = conn.execute("SELECT * FROM connections WHERE connection_id=?", (cid,)).fetchone()
         conn.execute("INSERT OR IGNORE INTO connection_trust(connection_id,client_id,tier,order_granted,notification_consent) VALUES(?,?,?,?,?)",
                      (cid, client_id or row["client"], tier, int(order_granted), json.dumps(consent or {})))
+        # All issuance paths (API key and OAuth) share this hook. Startup imports
+        # precede contract initialization and are repaired on first use instead.
+        from .connection_contract import DEMO_AGENTS
+        if (row["audience"] == "buyer" and row["agent_id"] in DEMO_AGENTS
+                and hasattr(self.gateway, "connection_contract")
+                and not conn.execute("SELECT 1 FROM connection_contract_runs WHERE connection_id=?", (cid,)).fetchone()):
+            from .connection_contract_driving import driving
+            driving(self.gateway).seeded(cid, row["agent_id"], row["client"])
 
     def bind_request(self, conn, rid, data):
         """Persist the decision's full binding before deriving a connection or code."""

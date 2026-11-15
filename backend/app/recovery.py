@@ -75,9 +75,10 @@ RECOVERY.update(INTENT_NOT_FOUND=(False, "STOP"),
                 INTENT_RESPONSE_DROPPED=(True, "RETRY_SAME_COMMAND"))
 
 # Keep the published version-1 vocabulary stable. Contract-aware failures use
-# version 2, which adds an explicit refresh transition instead of changing v1.
+# version 2, which adds explicit contract refresh and driving-test transitions.
 RECOVERY_V2 = {**RECOVERY, "CONTRACT_STALE": (False, "REFRESH_CONTRACT"),
-               "REEVALUATION_REQUIRED": (False, "REFRESH_CONTRACT")}
+               "REEVALUATION_REQUIRED": (False, "REFRESH_CONTRACT"),
+               "DRIVING_TEST_REQUIRED": (False, "RUN_DRIVING_TEST")}
 
 
 def problem(error, instance=None):

@@ -32,10 +32,10 @@ def connect(gateway, agent="contract-agent"):
     return connection, surface(gateway).connection_principal(row)
 
 
-async def measured_run(gateway, p, *, wrong_unit=False, optional=False):
+async def measured_run(gateway, p, *, wrong_unit=False, optional=False, server=None):
     token = PRINCIPAL.set(p)
     try:
-        server = create_server(gateway, p.id, full_surface=True)
+        server = server or create_server(gateway, p.id, full_surface=True)
         opened = await server.call_tool("start_driving_test", {})
         assert not opened.is_error, opened
         rid = opened.structured_content["id"]
@@ -259,6 +259,8 @@ def test_AC_5_measured_failed_and_passing_runs_signatures_and_order_gate(gateway
         response = http.post("/v1/orders", headers={**headers, "Idempotency-Key": "denied"}, json={"quote_id": "unused"})
         assert response.status_code == 403 and response.json()["code"] == "DRIVING_TEST_REQUIRED"
         assert response.json()["data"]["checks"] == ["unit"]
+        assert response.json()["next_action"] == "RUN_DRIVING_TEST"
+        assert response.json()["data"]["tool"] == "start_driving_test"
     owner = gateway.accounts.bind(Principal("aurora-director", kind="tenant_user", user_id="aurora-director",
         role="tenant_admin", tenant_id="hotel-aurora", customer_ids=("1",)))
     override = driving(gateway).request_override(p.connection_id, "Supervised pilot exception", owner)
@@ -288,13 +290,68 @@ def test_AC_5_measured_failed_and_passing_runs_signatures_and_order_gate(gateway
         PRINCIPAL.reset(token)
 
 
+@pytest.mark.parametrize("agent,customer", [("hotel-chain-agent", "1"), ("hospital-kitchen-agent", "2")])
+def test_AC_6_new_demo_connection_is_seeded_on_creation_and_first_use(gateway, agent, customer):
+    owner = gateway.accounts.bind(gateway.settings.keys.resolve("test-operator-token", gateway.policy.get()))
+    connection = gateway.connections.create(ConnectionRequest(agent_id=agent, client="rest", customer_ids=[customer],
+        contract_version=manager(gateway).current()["version"]), owner, "http://localhost:8000", True)
+    cid = connection.connection_id
+    with gateway.db.connect() as conn:
+        row = conn.execute("SELECT * FROM connections WHERE connection_id=?", (cid,)).fetchone()
+        assert conn.execute("SELECT 1 FROM connection_contract_runs WHERE connection_id=?", (cid,)).fetchone()
+    p = surface(gateway).connection_principal(row)
+    d = driving(gateway)
+    for client in ("Claude", "ChatGPT"):
+        manager(gateway).acknowledge(cid, manager(gateway).current()["version"], client=client)
+        status = d.status(p)
+        assert status["valid"] and "order" in status["enabled_operations"]
+        verify_jws(status["result"]["signature"], status["result"]["payload"], gateway.signing.jwks())
+        d.require_order(p)
+    # Repair a connection created before this fix on its first use.
+    with gateway.db.connect(write=True, notify=False) as conn:
+        conn.execute("DELETE FROM connection_contract_runs WHERE connection_id=?", (cid,))
+    assert d.status(p)["valid"]
+    # A measured failure must not be replaced by another seeded result.
+    run = d.start(p)
+    d.finish(run["id"], p)
+    assert "order" not in d.status(p)["enabled_operations"]
+
+
+def test_AC_5_new_run_works_after_failed_approval_check(gateway):
+    _, p = connect(gateway)
+    async def run():
+        d = driving(gateway)
+        token = PRINCIPAL.set(p)
+        try:
+            server = create_server(gateway, p.id, full_surface=True)
+            failed = await server.call_tool("start_driving_test", {})
+            assert not failed.is_error, failed
+            rid = failed.structured_content["id"]
+            outcome = await server.call_tool("driving_test_step", {"run_id": rid, "check": "approval",
+                "tool": "get_order_status", "arguments": {"order_id": "missing"}})
+            assert not outcome.is_error, outcome
+            assert outcome.structured_content["status"] == "failed"
+            finished = await server.call_tool("finish_driving_test", {"run_id": rid})
+            assert not finished.is_error, finished
+            assert finished.structured_content["payload"]["checks"]["approval"] == "failed"
+            passed = await measured_run(gateway, p, optional=True, server=server)
+            assert all(passed["payload"]["checks"][check] == "passed" for check in ("unit", "retry", "approval"))
+            old_tools = d.servers[(rid, "approval")]._tool_manager._tools
+            new_tools = d.servers[(passed["payload"]["run_id"], "approval")]._tool_manager._tools
+            assert old_tools is not new_tools
+            assert old_tools["place_order"] is not new_tools["place_order"]
+        finally:
+            PRINCIPAL.reset(token)
+    asyncio.run(run())
+
+
 def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, need, upstream, tmp_path):
     demo_catalog(gateway, tmp_path, upstream)
     connection, p = connect(gateway, "hotel-chain-agent")
     _, existing_other = connect(gateway, "pre-feature-agent")
     _, attempted = connect(gateway, "attempted-agent")
     driving(gateway).start(attempted)
-    assert not driving(gateway).status(p)['valid']  # A new demo-named connection must test too.
+    assert driving(gateway).status(p)['valid']
     # Simulate the pre-feature database at upgrade, without touching live storage.
     with gateway.db.connect(write=True, notify=False) as conn:
         conn.execute("DELETE FROM workspace WHERE key='connection_contract_legacy_seed_v1'")
@@ -302,9 +359,9 @@ def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, nee
     assert driving(gateway).status(existing_other)['valid']
     assert not driving(gateway).status(attempted)['valid']  # An existing attempt is never overwritten.
     _, new_demo = connect(gateway, "hotel-chain-agent")
-    gateway.connection_contract = ConnectionContract(gateway)  # Restart cannot grandfather new keys.
-    assert not driving(gateway).status(new_demo)['valid']
-    assert 'order' not in driving(gateway).status(new_demo)['enabled_operations']
+    gateway.connection_contract = ConnectionContract(gateway)  # Demo proofs survive restart.
+    assert driving(gateway).status(new_demo)['valid']
+    assert 'order' in driving(gateway).status(new_demo)['enabled_operations']
     owner = gateway.accounts.bind(gateway.settings.keys.resolve("test-operator-token", gateway.policy.get()))
     gateway.connection_trust.confirm(connection.connection_id, owner)
     token = PRINCIPAL.set(p)

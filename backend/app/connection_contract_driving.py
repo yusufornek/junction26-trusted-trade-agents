@@ -28,6 +28,7 @@ class DrivingTests:
     def __init__(self, gateway):
         self.gateway = gateway
         self.sandboxes = {}
+        self.servers = {}
         self.lock = threading.RLock()
         self.step_lock = asyncio.Lock()
 
@@ -53,7 +54,8 @@ class DrivingTests:
             raise DomainError("DRIVING_TEST_NOT_FOUND", "Driving test was not found", 404)
         value = json.loads(run[0])
         if value["client"] != self.client(row) or value["agent_id"] != p.id:
-            raise DomainError("DRIVING_TEST_REQUIRED", "Driving result belongs to another client", 403, {"checks": list(REQUIRED)})
+            raise DomainError("DRIVING_TEST_REQUIRED", "Driving result belongs to another client", 403,
+                {"checks": list(REQUIRED), "tool": "start_driving_test"})
         if any(c["material"] for c in manager(self.gateway).changes_since(value["contract_version"])):
             raise DomainError("CONTRACT_STALE", "Driving challenge expired after a material contract change", 409,
                 {"changes": manager(self.gateway).changes_since(value["contract_version"])})
@@ -195,7 +197,12 @@ class DrivingTests:
             from .connection_contract import ECHO, SIGNED_QUOTE
             echo, signed = ECHO.set(None), SIGNED_QUOTE.set(False)
             try:
-                result = await create_server(g, "driving-agent", full_surface=True).call_tool(tool, arguments)
+                # Keep tool registration local to this run/check. Re-registering
+                # tools on each step can mutate schemas retained by the registry.
+                key = (run["id"], check)
+                if key not in self.servers:
+                    self.servers[key] = create_server(g, "driving-agent", full_surface=True)
+                result = await self.servers[key].call_tool(tool, arguments)
             finally:
                 ECHO.reset(echo)
                 SIGNED_QUOTE.reset(signed)
@@ -282,10 +289,12 @@ class DrivingTests:
         inactive = bool(p.connection_id and (row["revoked_at"] or row["expires_at"] and row["expires_at"] <= audit.utcnow().isoformat()))
         with self.gateway.db.connect() as conn:
             legacy = conn.execute("SELECT 1 FROM connection_contract_legacy_connections WHERE connection_id=?", (cid,)).fetchone()
-        seeded = bool(legacy) or not p.connection_id and p.id in DEMO_AGENTS
-        result = self.seeded(cid, p.id, client) if seeded else None
+        seeded = bool(legacy) or p.id in DEMO_AGENTS
+        result = None
         with self.gateway.db.connect() as conn:
             rows = conn.execute("SELECT data FROM connection_contract_runs WHERE connection_id=? ORDER BY rowid DESC", (cid,)).fetchall()
+        if seeded and not rows:
+            result = self.seeded(cid, p.id, client)
         for row in rows:
             candidate = json.loads(row[0]).get("result")
             if candidate:
@@ -319,7 +328,8 @@ class DrivingTests:
         state = self.status(p)
         if "quote" not in state["enabled_operations"]:
             raise DomainError("DRIVING_TEST_REQUIRED", "Repeat failed quote checks in the sandbox", 403,
-                {"checks": state["blocked_operations"]["quote"], "operation": "quote", "connection_id": p.connection_id})
+                {"checks": state["blocked_operations"]["quote"], "operation": "quote", "connection_id": p.connection_id,
+                 "tool": "start_driving_test"})
 
     def require_order(self, p, signed_quote=None):
         # Internal domain jobs and pre-connection local callers preserve their
@@ -340,6 +350,7 @@ class DrivingTests:
         if "order" not in status["enabled_operations"]:
             raise DomainError("DRIVING_TEST_REQUIRED", "Pass driving checks before ordering", 403,
                 {"checks": status["required_checks"], "connection_id": p.connection_id,
+                 "tool": "start_driving_test",
                  "start_url": f"/v1/connections/{p.connection_id}/driving-test"})
 
     def override(self, p, version):
