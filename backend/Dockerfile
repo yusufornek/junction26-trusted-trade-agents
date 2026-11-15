@@ -9,6 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN python -m pip install -r backend/requirements.txt
+# Optional Timestral forecast band (spec 45): CPU-only torch, timestral at the pinned commit, official weights.
+COPY backend/requirements-forecast.txt ./backend/requirements-forecast.txt
+RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu torch \
+ && python -m pip install "timestral @ https://github.com/mistralai/timestral/archive/a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff.zip" huggingface_hub \
+ && HF_HUB_DISABLE_IMPLICIT_TOKEN=1 python -c "from huggingface_hub import snapshot_download; snapshot_download('mistralai/Timestral-28M', local_dir='/app/models/Timestral-28M', token=False)"
+ENV FORECAST_ENABLED=1 FORECAST_MODEL_PATH=/app/models/Timestral-28M
 
 # Both images use the repository root as context. Copy runtime sources explicitly:
 # backend/.dockerignore does not filter a repository-root build context.
