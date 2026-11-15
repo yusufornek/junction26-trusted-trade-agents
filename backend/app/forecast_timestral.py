@@ -1,4 +1,4 @@
-"""Optional CPU Timestral forecaster; importing the gateway never imports torch.
+"""Optional CPU Timestral forecaster (timestral 1.0 API: TimestralForecaster.from_pretrained / forecast); importing the gateway never imports torch.
 
     Local weights must be the official mistralai/Timestral-28M checkpoint. Loading
     happens once during Gateway construction, never while checking an order.
@@ -11,19 +11,19 @@ class TimestralForecaster:
     def __init__(self, model_path):
         if not model_path or not Path(model_path).is_dir():
             raise ValueError("FORECAST_MODEL_PATH must name a local Timestral-28M directory")
-        from timestral import Timestral
-        self.model = Timestral.from_pretrained(str(model_path), local_files_only=True).to("cpu")
-        self.model.eval()
+        from timestral import TimestralForecaster as _Forecaster
+        self.model = _Forecaster.from_pretrained(str(model_path), device="cpu", local_files_only=True)
 
     def predict(self, series, horizon):
         import torch
         with torch.inference_mode():
-            prediction = self.model.predict(torch.tensor([list(series)], dtype=torch.float32, device="cpu"),
-                                            prediction_length=horizon, quantiles=[.05, .95])
-        # Adapter contract is scalar bounds for the final horizon step.
-        values = prediction.quantiles if hasattr(prediction, "quantiles") else prediction
-        values = torch.as_tensor(values).reshape(-1, horizon, 2)
-        return {.05: float(values[0, -1, 0]), .95: float(values[0, -1, 1])}
+            forecast = self.model.forecast([[float(x) for x in series]], prediction_length=horizon)
+        # Adapter contract: scalar lower/upper bounds under the keys .05/.95 for the final horizon step. For anomaly
+        # detection the model's 1 % and 99 % quantiles are used: its 5-95 % band flags ordinary values (checked
+        # against the real Timestral-28M weights on 15.11).
+        low = forecast.quantile(0.01).reshape(-1)[-1]
+        high = forecast.quantile(0.99).reshape(-1)[-1]
+        return {.05: float(low), .95: float(high)}
 
 
 def load_forecaster(enabled, model_path):
