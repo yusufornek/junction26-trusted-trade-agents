@@ -1,4 +1,5 @@
 from .telemetry import traced
+import copy
 import os
 
 from datetime import timedelta
@@ -20,6 +21,20 @@ class PolicyLoader(yaml.SafeLoader):
     }
 
 
+_PARSED = {}
+
+
+def _parse(text):
+    """YAML parsing dominated governance and policy reads (several parses per request); parse each text once."""
+    parsed = _PARSED.get(text)
+    if parsed is None:
+        parsed = yaml.load(text, Loader=PolicyLoader)
+        if len(_PARSED) > 64:
+            _PARSED.clear()
+        _PARSED[text] = parsed
+    return copy.deepcopy(parsed)  # callers fill in defaults; the cached tree stays untouched
+
+
 class Policy:
     def __init__(self, path, runtime_path=None, db=None):
         self.path = Path(path)
@@ -29,7 +44,7 @@ class Policy:
 
     @staticmethod
     def _load(path, defaults=None, *, content=None):
-        data = yaml.load(path.read_text() if content is None else content, Loader=PolicyLoader)
+        data = _parse(path.read_text() if content is None else content)
         if defaults is not None:
             data.setdefault("shortlist", {})
             data["shortlist"].setdefault("live_max", defaults.shortlist.live_max)
