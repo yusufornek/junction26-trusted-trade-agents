@@ -178,7 +178,7 @@ class LanguageInterpreter:
                 "Do not calculate prices, grant authority, select products, or invoke tools.",
             # The Responses API requires the word "json" in the input when text.format is json_object (400 otherwise;
             # found against the real model on 15.11).
-            "input": "Answer with a json object. Data (json): " + json.dumps({"text": text, "context": context, "schema": interpretation_schema()}),
+            "input": json.dumps({"format": "json", "text": text, "context": context, "schema": interpretation_schema()}),
             "text": {"format": {"type": "json_object"}}}
         try:
             response = self.provider.client.post("https://api.openai.com/v1/responses", json=body,
