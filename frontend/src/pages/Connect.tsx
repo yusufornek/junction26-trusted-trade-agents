@@ -126,6 +126,17 @@ export default function Connect() {
 
   return (
     <div className="flex flex-col gap-4">
+      <div role="note" className="rounded-xl border-2 border-warn bg-warn-soft px-5 py-4 text-warn">
+        <p className="text-[20px] font-bold uppercase tracking-wide">Important</p>
+        <p className="mt-1 text-[16px] font-semibold text-ink">
+          After you connect claude.ai, ChatGPT or any other client, open the new connection under Connections below
+          and press "Yes, this is the same agent".
+        </p>
+        <p className="mt-1 text-[14px] text-ink">
+          Until you do, every order from that connection waits for a human approval, even inside the agent's limits.
+          Do it again after each reconnect or new device.
+        </p>
+      </div>
       <Card className="flex flex-col gap-4">
         <div>
           <h2 className="text-[17px] font-semibold">Where does your agent work?</h2>
