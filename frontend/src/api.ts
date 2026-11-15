@@ -448,6 +448,9 @@ let csrf = (() => {
 })();
 /** Organisation people read their own organisation's audit trail at /v1/tenant/audit; /v1/audit is operator-only. */
 let tenantScoped = false;
+// Set while the cookie session is being restored, so tenant-scoped calls wait for it instead of hitting operator routes.
+let sessionRestore: Promise<unknown> | null = null;
+const sessionKnown = async () => { if (sessionRestore) await sessionRestore.catch(() => undefined); };
 const authListeners = new Set<() => void>();
 const notify = () => authListeners.forEach((listener) => listener());
 export const hasToken = () => Boolean(token || csrf);
@@ -492,7 +495,9 @@ export const auth = {
     return account;
   },
   session: async () => {
-    const account = await call<Account>("/v1/auth/session");
+    const pending = call<Account>("/v1/auth/session");
+    sessionRestore = pending;
+    const account = await pending;
     tenantScoped = !!account.tenant_id;
     accountEmail = account.user.email;
     return account;
@@ -650,7 +655,7 @@ export const api = {
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
   // Tenant sign-ins get 403 on the operator routes; the tenant routes take the same bodies.
-  connections: () => call<Connection[]>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections"),
+  connections: async () => { await sessionKnown(); return call<Connection[]>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections"); },
   createConnection: (body: { agent_id: string; client: ClientKind; customer_ids: string[]; label?: string }) =>
     call<NewConnection>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections", {
       method: "POST",
@@ -666,7 +671,7 @@ export const api = {
     const q = new URLSearchParams(
       Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][],
     ).toString();
-    return call<AuditEntry[]>((tenantScoped ? "/v1/tenant/audit" : "/v1/audit") + (q ? `?${q}` : ""));
+    return sessionKnown().then(() => call<AuditEntry[]>((tenantScoped ? "/v1/tenant/audit" : "/v1/audit") + (q ? `?${q}` : "")));
   },
   /**
    * Whether this origin exposes MCP over streamable HTTP. Only a 404 means "no route": a mounted endpoint
