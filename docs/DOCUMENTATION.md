@@ -8,7 +8,40 @@ Related documents: [README](../README.md) · [Specs index](specs/README.md) · [
 
 ## 1. Architecture
 
+```mermaid
+flowchart LR
+  subgraph Agents["AI purchasing agents"]
+    A1[claude.ai / ChatGPT]
+    A2[Claude Desktop / Code]
+    A3[A2A agents]
+    A4[Scripts / REST]
+  end
+  subgraph Luotsi["Luotsi gateway"]
+    I[Identity, mandates, connection trust]
+    L[Lookup and ranking]
+    Q[Signed fixed-price quotes]
+    P[Policy engine]
+    O[Orders and approvals]
+    X[Exceptions, substitution, anomalies]
+    AU[(Hash-chained audit)]
+  end
+  V[Valio Aimo mock APIs]
+  DB[(SQLite + synthetic catalog)]
+  C[Console: approvers and operators]
+  PG[Polygon PoS]
+  Agents -- "MCP · A2A · REST · OAuth 2.1" --> I
+  I --> L --> Q --> O
+  O --> P
+  X --- L
+  L -- "shortlist only" --> V
+  Q -- "live recheck" --> V
+  O --> DB
+  O --> AU
+  AU -- "head hash" --> PG
+  C -- "approve / reject, policy" --> O
 ```
+
+```text
  AI agents (claude.ai, ChatGPT, Claude Desktop/Code, A2A agents, scripts)
         │  MCP /mcp · A2A /a2a · REST /v1 · OAuth 2.1
         ▼
@@ -40,9 +73,49 @@ Related documents: [README](../README.md) · [Specs index](specs/README.md) · [
 4. **Order.** Accepts the quote unchanged, re-checks stock, evaluates policy and returns `CONFIRMED`, `PENDING_APPROVAL` or `REJECTED` with every rule hit. Idempotency keys make retries safe. Cancellation before cut-off is a human decision ([04](specs/04-order-cancel.md)).
 5. **Approval** ([03](specs/03-permissions-approval.md), [17](specs/17-approval-evidence.md)). Pending orders appear in the approval inbox with their evidence; humans approve or reject in two steps.
 
+```mermaid
+sequenceDiagram
+  participant Agent as Buyer agent
+  participant Luotsi
+  participant Valio as Valio Aimo mock API
+  participant Human as Approver (console)
+  Agent->>Luotsi: find_offers(1,000 L lactose-free milk, by Monday)
+  Luotsi->>Luotsi: catalog screening, pack conversion
+  Luotsi->>Valio: price + availability (shortlist only)
+  Valio-->>Luotsi: prices, delivery dates
+  Luotsi-->>Agent: ranked plans with reasons
+  Agent->>Luotsi: create_quote(plan 1)
+  Luotsi->>Valio: live recheck
+  Luotsi-->>Agent: signed fixed-price quote (expires)
+  Agent->>Luotsi: place_order(quote)
+  Luotsi->>Luotsi: policy evaluation, audit entry
+  alt within mandate and limits
+    Luotsi-->>Agent: CONFIRMED
+  else limit, warning, substitute or anomaly
+    Luotsi-->>Agent: PENDING_APPROVAL + reasons
+    Luotsi->>Human: approval inbox with evidence
+    Human->>Luotsi: approve (two-step)
+    Luotsi-->>Agent: notification: order decided, CONFIRMED
+  end
+```
+
 Example from the brief, as run live: *1,000 L of lactose-free milk by Monday* → Valio Eila lactose-free 1 L ranked first, €1,010, arrives in time → order `CONFIRMED` without approval. *3,000 L* → `PENDING_APPROVAL`, "net total €3,030 exceeds €1,500".
 
 ## 3. Human sign-off model
+
+```mermaid
+flowchart TD
+  S[Order request with a fixed-price quote] --> H{Hard constraint fails?<br/>allergen, standing rule, blocked product, outside mandate}
+  H -- yes --> R[REJECTED]
+  H -- no --> T{Verified client confirmed by its owner?}
+  T -- no --> PA[PENDING_APPROVAL]
+  T -- yes --> W{Limit exceeded, warning, substitute,<br/>anomaly or approval-first autonomy?}
+  W -- yes --> PA
+  W -- no --> C[CONFIRMED by the agent]
+  PA --> HU{Human decision, two-step}
+  HU -- approve --> C2[CONFIRMED by a human]
+  HU -- reject --> R2[REJECTED]
+```
 
 | The agent decides alone when… | A human must sign off when… | Luotsi refuses when… |
 |---|---|---|
