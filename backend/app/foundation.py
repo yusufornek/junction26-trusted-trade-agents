@@ -39,6 +39,8 @@ def procurement_context(policy, customer_id, request_ref, constraints, mandate=N
             profile = read_profile(conn, row[0]) if row else None
         if profile:
             context["guardrail_profile"] = profile
+    from .handoff_delegated_hooks import actor_context
+    context.update(actor_context())
     return context
 
 

@@ -608,6 +608,8 @@ class Handler(RequestHandler):
             meta = MessageToDict(params).get("metadata", {}) if params is not None else {}
             if params is not None and isinstance(params, t.SendMessageRequest):
                 meta = {**MessageToDict(params.message).get("metadata", {}), **meta}
+            from .handoff_delegated_surfaces import a2a_principal
+            principal = a2a_principal(gateway, principal, params, headers, meta)
             c = CORRELATION.set(meta.get("correlation_id") or headers.get("x-correlation-id") or correlation_id())
             p = PRINCIPAL.set(principal)
             cause = CAUSATION.set(params.message.message_id if isinstance(params, t.SendMessageRequest) else None)
@@ -649,6 +651,8 @@ class Handler(RequestHandler):
             gateway.limiter.consume(principal.id, "read")
             with gateway.db.connect() as conn:
                 tasks = [proto(t.Task, json.loads(row[0])) for row in conn.execute("SELECT data FROM a2a_tasks WHERE owner=? ORDER BY rowid DESC", (f"{principal.kind}:{principal.id}",))]
+            from .handoff_delegated_surfaces import filter_tasks
+            tasks = filter_tasks(gateway, principal, tasks)
             tasks = [task for task in tasks if (not params.context_id or task.context_id == params.context_id) and
                      (not params.status or task.status.state == params.status) and
                      (not params.HasField("status_timestamp_after") or task.status.timestamp.ToNanoseconds() > params.status_timestamp_after.ToNanoseconds())]

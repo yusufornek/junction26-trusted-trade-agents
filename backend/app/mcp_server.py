@@ -118,7 +118,10 @@ class GatewayMCPServer(MCPServer):
         from .connection_contract_surface import mcp_boundary
         from .connection_notifications_surface import boundary
         async def dispatch(server, name, arguments, context):
-            return await mcp_boundary(server, name, arguments, context, call_tool)
+            from .handoff_delegated_surfaces import mcp_boundary as authority_boundary
+            async def invoke(server, name, arguments, context):
+                return await mcp_boundary(server, name, arguments, context, call_tool)
+            return await authority_boundary(server, name, arguments, context, invoke)
         return await boundary(self, name, arguments, context, dispatch)
 
     async def _call_tool(self, name, arguments, context=None):
@@ -279,6 +282,8 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
 
     from .purchase_intent_surfaces import register_tools as register_intent_tools
     register_intent_tools(server, gateway, current_agent, PRESENTED_MANDATE)
+    from .handoff_delegated_surfaces import register as register_handoffs
+    register_handoffs(server, gateway, current_agent, PRESENTED_MANDATE)
 
     @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
     def get_agent_context() -> AgentContext:

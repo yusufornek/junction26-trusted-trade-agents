@@ -16,6 +16,9 @@ def event_visible(gateway, conn, event, principal):
     if organisation and organisation != principal.organisation_id:
         return False
     kind = event["aggregate_type"]
+    if kind == "intent":
+        from .handoff_delegated_hooks import intent_event_visible
+        return intent_event_visible(gateway, conn, event, principal)
     if kind in {"proposal", "suggestion", "stockout"}:
         # These are customer-wide buyer resources, not unowned historical purchases.
         return principal.kind in {"agent", "buyer_user"}

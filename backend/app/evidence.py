@@ -85,7 +85,9 @@ def build_bundle(gateway, order_id, principal):
             related = (row["order_id"] == order.id or row["quote_id"] == quote.id or
                        (row["action"] == "LOOKUP" and quote.need_ref and data.get("lookup_id") == quote.need_ref))
             link = {"seq": row["id"], "prev_hash": row["prev_hash"], "hash": row["hash"]}
-            if related and audit_visible(row, order.agent_id):
+            from .handoff_delegated_hooks import intent_audit
+            intent_related = intent_audit(row, raw_order.get("intent_id"))
+            if (related and audit_visible(row, order.agent_id)) or intent_related:
                 link["entry"] = audit.entry_payload(row)
             links.append(link)
         checkpoint = {"entries": len(links), "head_hash": links[-1]["hash"] if links else audit.GENESIS,
@@ -104,6 +106,8 @@ def build_bundle(gateway, order_id, principal):
         anchor = anchors[0]
         files["anchor.json"] = canonical_json({**anchor, "checkpoint_digest": anchor["head_hash"],
                                                "confirmation_status": anchor["status"]})
+    if raw_order.get("intent_id"):
+        files["actor-calls.json"] = canonical_json(gateway.handoff_authority.calls(raw_order["intent_id"]))
     base = f"/v1/orders/{order_id}/evidence"
     snapshot = sha256(b"".join(sha256(body).digest() for _, body in sorted(files.items()))).hexdigest()
     manifest = {"schema_version": 1, "order_id": order.id, "quote_id": quote.id, "customer_id": order.customer_id,

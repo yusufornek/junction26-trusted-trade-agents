@@ -25,6 +25,8 @@ class Principal:
     connection_id: str | None = None
     scopes: tuple[str, ...] = ("*",)
     audience: str = "legacy"
+    actor_chain: tuple[str, ...] = ()
+    delegation_id: str | None = None
 
     @property
     def customers(self):
@@ -113,6 +115,8 @@ session_cookie = APIKeyCookie(name="vtg_session", auto_error=False, scheme_name=
 
 
 def resolve_credential(keys, secret, service, resource=None):
+    if secret.startswith("dg64_"):
+        return service.handoff_authority.resolve(secret)
     if keys.recognizes(secret):
         return service.accounts.bind(keys.resolve(secret, service.policy.get()))
     try:
@@ -196,9 +200,12 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
         audience = request.query_params.get("audience", "buyer")
         require_audience(principal, audience, "/tool-pack/"+audience)
     else:
-        service.accounts.guard(principal, request.url.path, request.method)
+        from .handoff_delegated_surfaces import scope_path
+        service.accounts.guard(principal, scope_path(request.url.path), request.method)
     if principal.kind == "agent":
         service.governance.check_active(principal.agent_id)
+    from .handoff_delegated_surfaces import rest_principal
+    principal = rest_principal(service, principal, request)
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)

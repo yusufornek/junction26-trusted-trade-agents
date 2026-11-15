@@ -788,7 +788,9 @@ class Orders:
             quote = self._quote(conn, order.quote_id)
             events = audit.read_timeline(conn, order.id, quote.id, quote.need_ref)
             from .visibility import audit_visible
-            events = [event for event in events if audit_visible(event.model_dump(), order.agent_id)]
+            from .handoff_delegated_hooks import intent_audit
+            events = [event for event in events if audit_visible(event.model_dump(), order.agent_id)
+                      or intent_audit({"data": json.dumps(event.data)}, order.intent_id)]
         stages = {"LOOKUP": "lookup", "CREATE_QUOTE": "quote", "PLACE_ORDER": "order",
                   "ORDER_REPLAY": "order", "APPROVE": "decision", "REJECT": "decision",
                   "EVIDENCE_CHANGED": "decision",

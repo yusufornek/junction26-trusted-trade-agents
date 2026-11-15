@@ -138,6 +138,8 @@ class Gateway:
         connection_contract(self)  # Initialize its schema before any nested command transaction.
         from .purchase_intent_integrity import install as install_intents
         install_intents(self)
+        from .handoff_delegated_hooks import install as install_handoff_authority
+        install_handoff_authority(self)
 
         def after_commit():
             self.connection_trust.after_commit()
