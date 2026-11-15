@@ -11,6 +11,9 @@ services:
     environment:
       # Public origin for MCP host checks and connection URLs; the deploy workflow passes the site URL.
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
+      # Timestral forecast band (spec 45): the image ships the model; this wins over an empty value in .env.
+      FORECAST_ENABLED: "1"
+      FORECAST_MODEL_PATH: /app/models/Timestral-28M
     volumes:
       - gateway_data:/data
     restart: unless-stopped
