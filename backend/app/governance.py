@@ -581,7 +581,7 @@ class Governance:
         with self.db.connect() as conn:
             if agent_id:
                 self.target(conn, agent_id, p)
-            agents = {r["agent_id"] for r in self.register(p)}
+            agents = self.visible_ids(p)
             return [json.loads(r["data"]) for r in conn.execute("SELECT * FROM governance_requests ORDER BY rowid DESC")
                     if r["agent_id"] in agents and (not agent_id or r["agent_id"] == agent_id)]
 
@@ -728,7 +728,22 @@ class Governance:
                 violations.extend(hard_violations(product, claims, allergens))
         return violations, delivery
 
+    def visible_ids(self, p):
+        """The agent ids register(p) would list, without computing each agent's policy, spend and connections."""
+        self.member(p)
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT agent_id,owner_user_id FROM main.tenant_agents WHERE (? OR tenant_id=?)", (int(p.operator), p.tenant_id)).fetchall()
+        return {r["agent_id"] for r in rows if p.operator or p.role == "tenant_admin" or r["owner_user_id"] == p.user_id}
+
     def register(self, p, owner_user_id=None, status=None):
+        from .connection_contract import SNAPSHOT
+        token = SNAPSHOT.set({})
+        try:
+            return self._register(p, owner_user_id, status)
+        finally:
+            SNAPSHOT.reset(token)
+
+    def _register(self, p, owner_user_id=None, status=None):
         self.member(p)
         with self.db.connect() as conn:
             rows = conn.execute("SELECT * FROM main.tenant_agents WHERE (? OR tenant_id=?) ORDER BY agent_id", (int(p.operator), p.tenant_id)).fetchall()
@@ -886,7 +901,7 @@ class Governance:
                 conn.execute("UPDATE connections SET last_address=? WHERE connection_id=?", (address, connection_id))
 
     def alerts(self, p):
-        agents = {a["agent_id"] for a in self.register(p)}
+        agents = self.visible_ids(p)
         with self.db.connect() as conn:
             return [json.loads(r["data"]) for r in conn.execute("SELECT * FROM governance_alerts ORDER BY created_at DESC,rowid DESC") if r["agent_id"] in agents]
 

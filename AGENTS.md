@@ -14,7 +14,7 @@ Read this file, `docs/CHALLENGE.md`, `docs/DECISIONS.md`, `docs/TASKS.md` and th
 ## Team and ownership
 | Area | Owner | Folder |
 |---|---|---|
-| Backend + AI agent | Gökalp (with Claude + Codex) | `backend/` |
+| Backend + AI agent | Yusuf (with Claude) since 15.11; before: Gökalp (with Claude + Codex) | `backend/` |
 | API contract | backend owns, frontend reviews | `contracts/openapi.yaml` |
 | UX + frontend | frontend teammate | `frontend/` |
 | Business case, pitch | business teammate | `docs/` (pitch material) |

@@ -27,7 +27,8 @@ import {
 import { api, auth, hasSession, hasToken, onAuthChange, setToken, type Account } from "./api";
 import { Avatar } from "./charts";
 import { LuotsiMark, LuotsiWordmark } from "./brand";
-import { Card, ErrorNote, useAsync } from "./ui";
+import { useAsync } from "./ui";
+import SignIn from "./SignIn";
 
 /** Set at build time from the server's DEMO_OPERATOR_TOKEN (deploy/docker-compose.yml); never committed. */
 const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
@@ -93,10 +94,6 @@ export default function Shell() {
   const navigate = useNavigate();
   const [signedIn, setSignedIn] = useState(hasToken);
   const [account, setAccount] = useState<Account | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [useToken, setUseToken] = useState(false);
-  const [tokenInput, setTokenInput] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<unknown>(null);
   const [rangeIndex, setRangeIndex] = useState(1);
@@ -140,7 +137,6 @@ export default function Shell() {
     setSignInError(null);
     // Keep the outlet unmounted until the token is verified as an operator token.
     setToken(value);
-    setTokenInput("");
     try {
       await api.policy();
       setSignedIn(true);
@@ -151,14 +147,11 @@ export default function Shell() {
       setSigningIn(false);
     }
   };
-  const signIn = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (useToken) return signInWith(tokenInput);
+  const signInWithEmail = async (email: string, password: string) => {
     setSigningIn(true);
     setSignInError(null);
     try {
-      setAccount(await auth.login(email.trim(), password));
-      setPassword("");
+      setAccount(await auth.login(email, password));
     } catch (error) {
       setSignInError(error);
     } finally {
@@ -181,6 +174,18 @@ export default function Shell() {
   const waiting = approvals.data?.length ?? 0;
   // Signed out, the page is only the sign-in card (or the public sign-up form): no rail, no bars to click into.
   const bare = !signedIn || signingIn;
+
+  if (bare && pathname !== "/signup")
+    return (
+      <SignIn
+        demoToken={DEMO_TOKEN || undefined}
+        signingIn={signingIn}
+        error={signInError}
+        onToken={signInWith}
+        onEmail={signInWithEmail}
+        onClearError={() => setSignInError(null)}
+      />
+    );
 
   return (
     <div className={`flex min-h-screen flex-col ${bare ? "" : "md:flex-row md:gap-4 md:p-4"}`}>
@@ -413,82 +418,7 @@ export default function Shell() {
               </p>
             ) : null}
           </>
-        ) : (
-          <Card className="mx-auto w-full max-w-md">
-            <form className="flex flex-col gap-4" onSubmit={signIn}>
-              <div className="flex flex-col gap-4">
-                <LuotsiWordmark className="block h-8 w-auto self-center text-brand" />
-                <div className="min-w-0">
-                  <h2 className="text-[15px] font-semibold">{useToken ? "Operator sign-in" : "Sign in"}</h2>
-                  <p className="label">
-                    {useToken
-                      ? "The token lives in memory only, so a reload asks again."
-                      : "With the e-mail your organisation or Valio gave you."}
-                  </p>
-                </div>
-              </div>
-              {useToken ? (
-                <label className="flex flex-col gap-1.5">
-                  <span className="label">Operator token</span>
-                  <input
-                    className="field"
-                    type="password"
-                    autoComplete="off"
-                    required
-                    value={tokenInput}
-                    onChange={(event) => setTokenInput(event.target.value)}
-                  />
-                </label>
-              ) : (
-                <>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="label">E-mail</span>
-                    <input className="field" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
-                  </label>
-                  <label className="flex flex-col gap-1.5">
-                    <span className="label">Password</span>
-                    <input
-                      className="field"
-                      type="password"
-                      autoComplete="current-password"
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </label>
-                </>
-              )}
-              <button className="btn-dark" disabled={signingIn}>
-                {signingIn ? "Signing in…" : "Sign in"}
-              </button>
-              {/* Demo builds only: the server bakes its operator token into this bundle so a judge gets in with one click.
-                  Anyone who opens the site can then act as the operator; an empty variable leaves the button out. */}
-              {DEMO_TOKEN ? (
-                <button type="button" className="btn-ghost" disabled={signingIn} onClick={() => signInWith(DEMO_TOKEN)}>
-                  Sign in with Junction 2026 Special Account
-                </button>
-              ) : null}
-              {signInError ? <ErrorNote error={signInError} /> : null}
-              <button
-                type="button"
-                className="self-center text-[13px] font-medium text-brand hover:underline"
-                onClick={() => {
-                  setUseToken(!useToken);
-                  setSignInError(null);
-                }}
-              >
-                {useToken ? "Sign in with e-mail instead" : "Use an operator token instead"}
-              </button>
-              <p className="text-center text-[13px] text-ink-muted">
-                New kitchen?{" "}
-                <NavLink to="/signup" className="font-medium text-brand hover:underline">
-                  Create an organisation account
-                </NavLink>
-              </p>
-              <p className="text-center text-[12px] text-ink-muted">For the best experience, use a computer.</p>
-            </form>
-          </Card>
-        )}
+        ) : null}
       </main>
     </div>
   );

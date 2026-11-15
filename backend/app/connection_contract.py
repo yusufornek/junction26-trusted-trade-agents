@@ -12,6 +12,9 @@ from .db import DomainError
 from .foundation import PRINCIPAL
 
 ECHO = ContextVar("connection_contract_echo", default=None)
+# Set by read-only listings (governance register): the contract cannot change while one listing is computed,
+# so its connections share one current() instead of re-fingerprinting the catalog per connection.
+SNAPSHOT = ContextVar("connection_contract_snapshot", default=None)
 CONTRACT_META = "luotsi/contract"
 DEMO_AGENTS = {"hotel-chain-agent", "hospital-kitchen-agent", "web-console"}
 
@@ -91,6 +94,30 @@ class ConnectionContract:
             profile.update(json.loads(override[0]))
         return profile
 
+    def _inputs_key(self):
+        """Exact fingerprint of everything current() hashes, computed in SQLite without parsing 17k product rows.
+
+        current() ran on every lookup, quote and governance listing; rebuilding the profile and deep-copying every
+        tool schema each time cost ~50 ms per call (seconds per page on the live server)."""
+        with self.gateway.db.connect() as conn:
+            products = conn.execute("SELECT group_concat(v, char(10)) FROM (SELECT id||'|'||coalesce(sales_unit,'')||'|'||"
+                "coalesce(base_unit,'')||'|'||coalesce(units,'')||'|'||coalesce(base_volume_l,'')||'|'||"
+                "coalesce(base_net_weight_kg,'') AS v FROM products ORDER BY id)").fetchone()[0] or ""
+            suppliers = conn.execute("SELECT group_concat(v, char(10)) FROM (SELECT supplier_id||'|'||supplier_sku||'|'||data AS v "
+                "FROM supplier_products ORDER BY supplier_id,supplier_sku)").fetchone()[0] or ""
+            override = conn.execute("SELECT value FROM workspace WHERE key='connection_contract_profile'").fetchone()
+        # Schemas are only ever replaced per audience (connection_contract_surface), never edited in place, so the
+        # serialised form is reused while the same dicts are installed; holding them keeps their ids from being reused.
+        installed = tuple(sorted(self.schemas.items()))
+        cached = getattr(self, "_schemas_text", None)
+        if not cached or len(cached[0]) != len(installed) or any(a[0] != b[0] or a[1] is not b[1] for a, b in zip(cached[0], installed)):
+            cached = self._schemas_text = (installed, json.dumps(self.schemas, sort_keys=True, separators=(",", ":"), default=str))
+        digest = sha256()
+        for part in (products, suppliers, override[0] if override else "", cached[1]):
+            digest.update(part.encode())
+            digest.update(b"\0")
+        return digest.digest()
+
     def ensure_schemas(self):
         if self.building or set(self.schemas) == {"buyer", "tenant", "operator"}:
             return
@@ -104,13 +131,26 @@ class ConnectionContract:
             self.building = False
 
     def current(self):
+        memo = SNAPSHOT.get()
+        if memo is not None and memo.get(id(self)):
+            return dict(memo[id(self)])
+        result = self._current_uncached()
+        if memo is not None:
+            memo[id(self)] = result
+        return dict(result)
+
+    def _current_uncached(self):
         from .recovery import RECOVERY_V2
         with self.lock:
             self.ensure_schemas()
+            key = self._inputs_key()
+            if getattr(self, "_key", None) == key:
+                return dict(self._current)
             document = {"profile": self.profile(), "tools": copy.deepcopy(self.schemas), "recovery_version": 2,
                         "recovery": {k: list(v) for k, v in sorted(RECOVERY_V2.items())}}
             fingerprint = sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).digest()
             if getattr(self, "_fingerprint", None) == fingerprint:
+                self._key = key
                 return dict(self._current)
             digest = sha256(canonical_json(document)).hexdigest()
             version = "contract_" + digest
@@ -118,6 +158,7 @@ class ConnectionContract:
                 last = conn.execute("SELECT * FROM connection_contract_versions ORDER BY seq DESC LIMIT 1").fetchone()
                 if last and last["digest"] == digest:
                     self._fingerprint, self._current = fingerprint, {"version": last["version"], "digest": digest}
+                    self._key = key
                     return dict(self._current)
                 changes = differences(json.loads(last["document"]) if last else {}, document)
                 # Titles/examples/docs are editorial. Field descriptions can
@@ -130,7 +171,7 @@ class ConnectionContract:
                     (version, digest, json.dumps(document), json.dumps(changes), int(material), audit.utcnow().isoformat()))
             if last:
                 self.notify_changed()
-            self._fingerprint, self._current = fingerprint, {"version": version, "digest": digest}
+            self._fingerprint, self._current, self._key = fingerprint, {"version": version, "digest": digest}, key
             return dict(self._current)
 
     def public(self):

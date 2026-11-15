@@ -268,3 +268,12 @@ Agreed decisions, newest first. Format: `YYYY-MM-DD — decision — why`.
   make-or-buy, good-better-best) are deleted from docs/specs; the build covers the AI-gateway specs 60–64 and 47.
   References to them in 60–64 were rewritten to built specs.
 - Why: Gökalp — keep the context clean and judge everything against what we actually build.
+
+## 2026-11-15 — Backend changes move to Yusuf (with Claude)
+- Decision: Gökalp no longer pushes backend changes; Yusuf, working with Claude, owns `backend/` from now on.
+  First change: governance and policy-change reads made fast without changing their results — an exact
+  SQL fingerprint caches the connection contract (`connection_contract.current`), parsed policy YAML is reused,
+  alerts and change requests read visible agent ids instead of the full agent register, and one register listing
+  shares one contract computation.
+- Why: on the live server `/v1/tenant/agents` and `/v1/tenant/alerts` took 5–48 s and the governance page kept the
+  single worker busy; locally on a copy of the live data they dropped from ~0.8 s to 0.01–0.09 s.
