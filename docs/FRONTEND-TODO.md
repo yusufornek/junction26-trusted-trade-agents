@@ -6,7 +6,11 @@ wording are the frontend owner's call. Each item names the endpoints and the cod
 **next push** = built and tested, lands on main tonight (endpoint names may still move slightly — the OpenAPI file in
 that push is the truth).
 
-## Latest changes — read this first after every pull
+## Latest changes
+
+- **15.11 (claude.ai autonomy):** the gateway advertises CIMD again, so claude.ai connects as a *verified* client. After the owner presses "Yes, this is the same agent" on Connect, orders within limits confirm without approval. Reconnect claude.ai once.
+- **Policy page:** the agent mandate has a `recurring` boolean (tekrarlayan sipariş izni) that the Agent mandates card doesn't show. A toggle on each agent card is enough; it saves through `PUT /v1/policy` like the other fields.
+— read this first after every pull
 
 Newest on top. Each entry says what landed, what the console can build on it, and any server step. Continue from the
 top entry; the numbered sections below hold the details.

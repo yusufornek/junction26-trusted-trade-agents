@@ -107,7 +107,7 @@ def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gatew
         assert "offline_access" not in resource["scopes_supported"]
         server = client.get("/.well-known/oauth-authorization-server").json()
         assert server["issuer"] == ORIGIN and server["code_challenge_methods_supported"] == ["S256"]
-        assert server["authorization_response_iss_parameter_supported"] and server["client_id_metadata_document_supported"] is False
+        assert server["authorization_response_iss_parameter_supported"] and server["client_id_metadata_document_supported"]
         if registration == "cimd":
             route = mock.get("https://93.184.216.34/oauth/metadata.json", headers={"host": "client.test"}).mock(
                 return_value=httpx.Response(200, json={"client_id": CIMD, **metadata()}))
