@@ -107,7 +107,7 @@ def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gatew
         assert "offline_access" not in resource["scopes_supported"]
         server = client.get("/.well-known/oauth-authorization-server").json()
         assert server["issuer"] == ORIGIN and server["code_challenge_methods_supported"] == ["S256"]
-        assert server["authorization_response_iss_parameter_supported"] and server["client_id_metadata_document_supported"]
+        assert server["authorization_response_iss_parameter_supported"] and server["client_id_metadata_document_supported"] is False
         if registration == "cimd":
             route = mock.get("https://93.184.216.34/oauth/metadata.json", headers={"host": "client.test"}).mock(
                 return_value=httpx.Response(200, json={"client_id": CIMD, **metadata()}))
@@ -222,13 +222,13 @@ def test_ac_7_pkce_redirect_resource_rotation_reuse_and_expiry(gateway, monkeypa
         assert any(e.action == action for e in gateway.audit())
 
 
-def test_ac_8_dcr_application_type_required_and_registered_flow(gateway):
+def test_ac_8_dcr_application_type_defaults_to_web_and_registered_flow(gateway):
     gateway.settings.public_url = ORIGIN
     with TestClient(create_app(gateway), base_url=ORIGIN) as client:
         value = metadata()
         del value["application_type"]
         response = client.post("/oauth/register", json=value)
-        assert response.status_code == 400 and response.json()["error"] == "invalid_client_metadata"
+        assert response.status_code == 201 and response.json()["application_type"] == "web"
         client_id = register(client)["client_id"]
         body, _, _ = grant(client, client_id)
         assert rpc(client, bearer(exchange(client, body)), "tools/list").status_code == 200
@@ -406,9 +406,20 @@ def test_r9_cimd_metadata_validation_and_bounded_fetch(gateway, case):
         assert response.status_code == 400 and response.json() == {"error": "invalid_client"}
 
 
+def test_r9_unknown_scopes_are_dropped_and_authorization_continues(gateway):
+    gateway.settings.public_url = ORIGIN
+    with TestClient(create_app(gateway), base_url=ORIGIN) as client:
+        client_id = register(client)["client_id"]
+        response = client.get("/oauth/authorize", params={"client_id": client_id, "redirect_uri": CALLBACK,
+            "response_type": "code", "code_challenge_method": "S256", "code_challenge": oauth.challenge(VERIFIER),
+            "resource": RESOURCE, "scope": "mcp admin openid"}, follow_redirects=False)
+        assert response.status_code in (200, 303)
+        assert "error" not in parse_qs(urlsplit(response.headers.get("location", "")).query)
+
+
 @pytest.mark.parametrize("changes", [{"code_challenge_method": "plain"}, {"code_challenge": "bad"},
     {"resource": ORIGIN + "/a2a"}, {"resource": ""}, {"redirect_uri": CALLBACK + "/"},
-    {"scope": "mcp admin"}, {"response_type": "token"}])
+    {"response_type": "token"}])
 def test_r9_reject_unsupported_authorization_parameters_without_redirect(gateway, changes):
     gateway.settings.public_url = ORIGIN
     with TestClient(create_app(gateway), base_url=ORIGIN) as client:
