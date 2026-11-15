@@ -27,6 +27,13 @@ def test_tenant_protocols_keep_human_tools_and_governance(http, gateway):
         card = http.get(path).json()
         assert {"OAuth2", "BearerAuth"} <= card["securitySchemes"].keys()
         assert {"register", "agent_governance", "list_orders", "approve_order"} <= {s["id"] for s in card["skills"]}
+        register = next(s for s in card["skills"] if s["id"] == "register")
+        example = json.loads(register["examples"][0])
+        assert example["skill"] == "agent_governance"
+        assert example["arguments"] == {"operation": "register", "arguments": {}}
+        schemas = next(e["params"]["schemas"] for e in card["capabilities"]["extensions"]
+                       if e["uri"] == "urn:luotsi:agent-surface:v1")
+        assert schemas["register"]["input"]["properties"]["operation"]["const"] == "register"
     for data in ({"operation": "register", "arguments": {}},
                  {"version": 1, "command": "list_orders", "arguments": {}}):
         response = http.post("/a2a/tenant", headers={**bearer(key), "A2A-Version": "1.0"}, json={

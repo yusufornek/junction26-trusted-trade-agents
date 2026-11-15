@@ -100,7 +100,13 @@ def test_AC_1_member_register_ownership_and_connections(http, gateway, people):
     assert new["mandate"]["autonomy"] == "approval_required"
     management = connect(http, people["member"], agent="member-agent", audience="tenant")
     listed = rpc(http, bearer(management), "agent_governance", {"operation": "register", "arguments": {}}, "/mcp/tenant")
+    assert listed.status_code == 200 and not listed.json()["result"].get("isError"), listed.text
     assert {a["agent_id"] for a in listed.json()["result"]["structuredContent"]["items"]} == {AGENT, "member-agent"}
+    # Reopening the database above adds tenant columns to spec 60's usage table;
+    # recording a successful call must still work after that migration.
+    with gateway.db.connect() as conn:
+        assert conn.execute("SELECT tool FROM agent_surface_calls WHERE connection_id=?",
+                            (management["connection_id"],)).fetchone()[0] == "agent_governance"
     assert http.get("/v1/tenant/agents", headers=people["member"], params={"owner_user_id": "member-one", "status": "active"}).json()
     assert http.patch("/v1/tenant/agents/hotel-chain-agent", headers=people["member"], json={"name": "no"}).status_code == 404
     assert http.post("/v1/tenant/connections", headers=people["member"], json={"agent_id": "hotel-chain-agent", "client": "python", "customer_ids": ["1"]}).status_code == 404

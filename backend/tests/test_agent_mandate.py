@@ -274,9 +274,12 @@ def test_ac_9_mcp_uses_fixed_server_identity_for_mandate(gateway, need, upstream
     async def run():
         for server in (registered, unregistered):
             tools = await server.list_tools()
-            purchasing = {t.name: t for t in tools}
-            for name in ("search_products", "find_offers", "create_quote", "place_order", "get_order_status", "cancel_order"):
-                assert "agent_id" not in purchasing[name].input_schema["properties"]
+            # Spec 60 adds target-agent reads (e.g. track record); procurement
+            # identity still comes exclusively from the authenticated server.
+            procurement = {"search_products", "find_offers", "create_quote", "place_order", "cancel_order"}
+            assert procurement <= {t.name for t in tools}
+            assert all("agent_id" not in t.input_schema["properties"] for t in tools if t.name in procurement)
+            assert any("agent_id" in t.input_schema["properties"] for t in tools)
             assert "unregistered" in next(t.description for t in tools if t.name == "place_order").lower()
 
         offers = await registered.call_tool("find_offers", {"need": need.model_dump(mode="json")})

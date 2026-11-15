@@ -3,7 +3,7 @@ import json
 import re
 import sys
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -146,6 +146,33 @@ def upstream_pacer(monkeypatch):
     pacer = valio.UpstreamPacer(clock=clock, sleep=clock.sleep, wall_clock=clock.utcnow)
     monkeypatch.setattr(valio, "UPSTREAM_PACER", pacer)
     return pacer
+
+
+@pytest.fixture
+def fixed_clock(monkeypatch):
+    """Freeze domain and validation clocks across direct, REST and MCP calls.
+
+    Deliberately straddle UTC/Helsinki midnight. Transports reset CLOCK for live
+    gateways, so freeze the validator's wall-clock fallback to the same instant.
+    Historical audit timestamp patches remain independent of delivery validation.
+    """
+    from app import models
+    from app.runtime import CLOCK
+
+    now = datetime(2026, 11, 14, 22, 30, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(audit, "utcnow", lambda: now)
+    monkeypatch.setattr(models, "datetime", FixedDateTime)
+    token = CLOCK.set(lambda: now)
+    try:
+        yield now
+    finally:
+        CLOCK.reset(token)
 
 
 def agent_headers(agent_id):

@@ -7,9 +7,9 @@ from fastapi.testclient import TestClient
 
 from app import audit
 from app.api import create_app
-from app.auth import Principal
+from app.auth import Credentials, Principal
 from app.models import PolicyUpdateRequest
-from conftest import agent_headers
+from conftest import AGENT_TOKENS, OPERATOR_TOKEN, agent_headers
 from test_webhooks import receiver, subscribe, due
 from test_verifiable_mandate import buyer as vc_issuer, issue
 
@@ -61,9 +61,11 @@ def test_ac_1_opt_in_delivery_inbox_mcp_and_outbox_unconsented_recorded(gateway,
     import asyncio
     from app.mcp_server import create_server
     delivered = []
+    tokens = {**AGENT_TOKENS, "hospital-kitchen-agent": "test-proposal-hospital"}
+    keys = Credentials(OPERATOR_TOKEN, ",".join(f"{agent}:{token}" for agent, token in tokens.items()))
     subscribe(gateway, event_types=["proposal.received"])
     gateway.outbox.register("proposal-webhook-test", lambda event: delivered.append(event) if event["type"] == "proposal.received" else None)
-    with TestClient(create_app(gateway), base_url="http://localhost") as client:
+    with TestClient(create_app(gateway, keys=keys), base_url="http://localhost") as client:
         opt_in(client, channels=channels)
         result = submit(client, targets=["1", "2"])
         assert result["delivery_count"] == 1 and result["held_back_count"] == 1
@@ -74,14 +76,16 @@ def test_ac_1_opt_in_delivery_inbox_mcp_and_outbox_unconsented_recorded(gateway,
         assert not tool.is_error and own[0]["id"] in str(tool)
         # The shared HTTP MCP endpoint resolves the caller on every request.
         # Proposal reads must use that identity for both scope and throttling.
-        for agent, expected in (("external", own), ("agent-b", [])):
-            response = client.post("/mcp", headers={**agent_headers(agent),
+        # Spec 60 routes human credentials to the tenant surface; use a buyer
+        # agent for B here, retaining agent-b's admin role for preference tests.
+        for agent, expected in (("external", own), ("hospital-kitchen-agent", [])):
+            response = client.post("/mcp", headers={"Authorization": f"Bearer {tokens[agent]}",
                 "Accept": "application/json, text/event-stream"}, json={
                     "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                     "params": {"name": "list_proposals", "arguments": {}}})
             assert response.status_code == 200, response.text
             result = response.json()["result"]
-            assert not result.get("isError", False)
+            assert not result.get("isError", False), result
             assert result["structuredContent"]["result"] == expected
             assert (agent, "read") in gateway.limiter.buckets
         assert (None, "read") not in gateway.limiter.buckets

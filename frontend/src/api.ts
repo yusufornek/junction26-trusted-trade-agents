@@ -184,6 +184,8 @@ export type Order = {
   live_calls: LiveCalls | null;
   evidence_revision: number;
   approver: string | null;
+  /** A single-restaurant profile lets the person behind the agent approve its own order; the gateway marks it. */
+  self_approved?: boolean;
   comment: string | null;
   cancelled_by?: string | null;
   cancel_reason?: string | null;
@@ -434,12 +436,77 @@ export class ApiError extends Error {
 export const MOCK = import.meta.env.VITE_MOCK === "1";
 
 let token = MOCK ? "mock" : "";
+/** A person signed in with e-mail (spec 43): the session is an HttpOnly cookie, and every state-changing request carries
+ *  this CSRF token. Kept in sessionStorage so a reload keeps the person signed in, as FRONTEND.md asks. */
+const CSRF_KEY = "luotsi.csrf";
+let csrf = (() => {
+  try {
+    return sessionStorage.getItem(CSRF_KEY) ?? "";
+  } catch {
+    return "";
+  }
+})();
+/** Organisation people read their own organisation's audit trail at /v1/tenant/audit; /v1/audit is operator-only. */
+let tenantScoped = false;
 const authListeners = new Set<() => void>();
-export const hasToken = () => Boolean(token);
+const notify = () => authListeners.forEach((listener) => listener());
+export const hasToken = () => Boolean(token || csrf);
+export const hasSession = () => Boolean(csrf);
+/** The signed-in person's e-mail, for forms that record a name (approver, cancelled by); empty for the operator token. */
+let accountEmail = "";
+export const signedInEmail = () => accountEmail;
 export function setToken(value: string) {
   token = value.trim();
-  authListeners.forEach((listener) => listener());
+  notify();
 }
+function setCsrf(value: string) {
+  csrf = value;
+  try {
+    if (value) sessionStorage.setItem(CSRF_KEY, value);
+    else sessionStorage.removeItem(CSRF_KEY);
+  } catch {
+    // Private browsing can refuse storage; the session then lasts until a reload.
+  }
+}
+
+export type Account = {
+  user: { id: string; email: string; role: string; tenant_id: string | null };
+  role: "platform_admin" | "tenant_admin" | "approver" | "viewer" | "member" | string;
+  tenant_id: string | null;
+  tenant: { id: string; name: string } | null;
+  customer_ids: string[];
+  permissions: string[];
+};
+
+export const auth = {
+  login: async (email: string, password: string) => {
+    const account = await call<Account & { csrf_token: string }>("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    token = "";
+    setCsrf(account.csrf_token);
+    tenantScoped = !!account.tenant_id;
+    accountEmail = account.user.email;
+    notify();
+    return account;
+  },
+  session: async () => {
+    const account = await call<Account>("/v1/auth/session");
+    tenantScoped = !!account.tenant_id;
+    accountEmail = account.user.email;
+    return account;
+  },
+  /** Ends the cookie session too; an operator token is simply forgotten. */
+  signOut: async () => {
+    if (csrf) await call("/v1/auth/logout", { method: "POST", body: "{}" }).catch(() => undefined);
+    token = "";
+    setCsrf("");
+    tenantScoped = false;
+    accountEmail = "";
+    notify();
+  },
+};
 export function onAuthChange(listener: () => void) {
   authListeners.add(listener);
   return () => { authListeners.delete(listener); };
@@ -454,16 +521,20 @@ async function send(path: string, init?: RequestInit): Promise<{ res: Response; 
   const res = await fetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(csrf && !token && init?.method && init.method !== "GET" ? { "X-CSRF-Token": csrf } : {}) },
   });
-  if (res.status === 401) {
-    setToken("");
+  if (res.status === 401 && !path.startsWith("/v1/auth/login")) {
+    token = "";
+    setCsrf("");
+    notify();
     throw new AuthenticationError();
   }
   return { res, text: await res.text() };
 }
 
-export async function call<T>(path: string, init?: RequestInit): Promise<T> {
+/** autoConfirm false: the page shows the gateway's confirmation step itself (Policy changes asks before a rollback). */
+export async function call<T>(path: string, init?: RequestInit, autoConfirm = true): Promise<T> {
   if (MOCK) return (await import("./mock")).mockCall(path, init) as Promise<T>;
   const { res, text } = await send(path, init);
   let body: any = null;
@@ -477,6 +548,13 @@ export async function call<T>(path: string, init?: RequestInit): Promise<T> {
     // The gateway returns {code, message, data} for domain errors.
     const message = body?.message ?? (`Gateway answered ${res.status}` + (text && !body ? `: ${text.slice(0, 120)}` : ""));
     throw new ApiError(body?.code ?? "HTTP_" + res.status, message, res.status, body?.data);
+  }
+  // Since spec 43 a human decision (approve, reject, cancel, autonomy, policy) first answers with a summary and a
+  // single-use token, deciding nothing. The console's button press is that person's confirmation, so the identical
+  // body goes back once with the token; without this the inbox showed "approved" while the order stayed pending.
+  if (autoConfirm && body?.confirmation_required === true && body.confirmation_token && init?.body) {
+    const original = JSON.parse(String(init.body));
+    return call<T>(path, { ...init, body: JSON.stringify({ ...original, confirmation_token: body.confirmation_token }) });
   }
   return body as T;
 }
@@ -571,15 +649,16 @@ export const api = {
       body: JSON.stringify({ level, reason }),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
-  connections: () => call<Connection[]>("/v1/connections"),
+  // Tenant sign-ins get 403 on the operator routes; the tenant routes take the same bodies.
+  connections: () => call<Connection[]>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections"),
   createConnection: (body: { agent_id: string; client: ClientKind; customer_ids: string[]; label?: string }) =>
-    call<NewConnection>("/v1/connections", {
+    call<NewConnection>(tenantScoped ? "/v1/tenant/connections" : "/v1/connections", {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Idempotency-Key": crypto.randomUUID() },
     }),
   revokeConnection: (id: string) =>
-    call<Connection>(`/v1/connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    call<Connection>(`${tenantScoped ? "/v1/tenant/connections" : "/v1/connections"}/${encodeURIComponent(id)}`, { method: "DELETE" }),
   revokeMandate: (jwt: string) =>
     call<Record<string, unknown>>("/v1/mandates/revocations", { method: "POST", body: JSON.stringify({ jwt }) }),
   stats: (since?: string) => call<Stats>("/v1/stats" + (since ? `?since=${encodeURIComponent(since)}` : "")),
@@ -587,7 +666,7 @@ export const api = {
     const q = new URLSearchParams(
       Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][],
     ).toString();
-    return call<AuditEntry[]>("/v1/audit" + (q ? `?${q}` : ""));
+    return call<AuditEntry[]>((tenantScoped ? "/v1/tenant/audit" : "/v1/audit") + (q ? `?${q}` : ""));
   },
   /**
    * Whether this origin exposes MCP over streamable HTTP. Only a 404 means "no route": a mounted endpoint

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ApiError } from "../api";
+import { api, ApiError, signedInEmail } from "../api";
 import { ANOMALY_CODES, AnomalyNotes } from "../anomalies";
 import { Avatar, Ring } from "../charts";
 import { Card, Countdown, Empty, ErrorNote, LiveDot, Spinner, WarningChips, eur, num, pct, ruleLabel, useAsync, when } from "../ui";
@@ -9,7 +9,7 @@ export default function Approvals() {
   const { data, error, loading, reload } = useAsync(() => api.approvals(), [], 5000);
   // Approval links in webhooks and messages name the order: /approvals/{order_id}?revision=N.
   const { id: linked } = useParams();
-  const [approver, setApprover] = useState("Ada");
+  const [approver, setApprover] = useState(() => signedInEmail() || "Ada");
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);

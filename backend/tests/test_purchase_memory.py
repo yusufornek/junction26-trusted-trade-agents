@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -165,6 +166,7 @@ def test_ac_4_prepare_only_looks_up_then_normal_quote_and_order_apply_mandate_an
 
 
 @pytest.mark.parametrize("monthly_day", [1, 30])
+@pytest.mark.usefixtures("fixed_clock")
 def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp_pause(gateway, memory_setup, upstream, monthly_day):
     from app.recurring import rule_for
     from app.runtime import CLOCK
@@ -190,12 +192,12 @@ def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp
         assert rule_for(row).after(scheduled, inc=True) == scheduled
         assert not tool(gateway, "list_recurring_orders", {}).is_error
         assert suggestions(client) == []
-        upstream.need.deliver_by = audit.utcnow().date()
+        upstream.need.deliver_by = audit.utcnow().astimezone(ZoneInfo(row["cadence"]["timezone"])).date()
         first = tool(gateway, "run_recurring_order_now", {"recurring_order_id": row["id"]})
         assert not first.is_error and first.structured_content["status"] == "CONFIRMED"
         assert first.structured_content["comparison"]["diff"] == []
         when = audit.utcnow() + timedelta(days=1)
-        upstream.need.deliver_by = when.date()
+        upstream.need.deliver_by = when.astimezone(ZoneInfo(row["cadence"]["timezone"])).date()
         upstream.price *= 1.2
         second = gateway.recurring.run(row["id"], when)
         assert second["status"] == "PENDING_APPROVAL"
@@ -538,6 +540,7 @@ def test_review_month_end_prediction_is_scheduled(gateway, memory_setup, upstrea
     assert datetime.fromisoformat(runs[0]["occurrence_at"]) == predicted
 
 
+@pytest.mark.usefixtures("fixed_clock")
 def test_review_pattern_scaling_does_not_invent_drift(gateway, memory_setup, upstream):
     from app.purchase_memory import MakeRecurring
     principal = Principal("external", customer_ids=("1",))
@@ -553,6 +556,6 @@ def test_review_pattern_scaling_does_not_invent_drift(gateway, memory_setup, ups
     row = gateway.memory.act(pattern["id"], "made_recurring", principal, MakeRecurring())
     assert row["baseline"]["lines"][0]["quantity"] == 200
     assert row["baseline"]["basket_cost"] == 1010
-    upstream.need.deliver_by = audit.utcnow().date()
+    upstream.need.deliver_by = audit.utcnow().astimezone(ZoneInfo(row["cadence"]["timezone"])).date()
     result = gateway.recurring.run(row["id"], principal=principal)
     assert result["status"] == "CONFIRMED" and result["comparison"]["diff"] == []

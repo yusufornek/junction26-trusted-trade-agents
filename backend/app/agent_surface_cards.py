@@ -1,5 +1,6 @@
 """Signed discovery generated from the live SDK registry (spec 60)."""
 import json
+from copy import deepcopy
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -69,20 +70,29 @@ async def enrich_agent_card(card, gateway, audience):
     audience = effective_audience(PRINCIPAL.get(), audience)
     server, tools = await inventory(gateway, audience)
     aliases = {"quote_and_order": "create_quote", "order_status": "get_order_status", "get_evidence": "get_order_evidence"}
-    existing = {skill.id: skill for skill in card.skills}
     del card.skills[:]
     schemas = {}
-    from .connection_contract import manager
     toolmap = {tool.name: tool for tool in tools}
-    if audience == "tenant" and "agents" in toolmap:
-        aliases["register"] = "agents"
+    governance_aliases = set()
+    if audience == "tenant" and "agent_governance" in toolmap:
+        from .governance_api import Operation
+        governance_aliases = set(Operation.__args__) - toolmap.keys()
+        aliases.update({name: "agent_governance" for name in sorted(governance_aliases)})
     for name in [*toolmap, *(name for name, target in aliases.items() if target in toolmap)]:
         tool = toolmap.get(name) or toolmap[aliases[name]]
-        sample = {"version": 1, "command": "tool", "skill": tool.name, "arguments": example(tool.input_schema)}
+        input_schema = tool.input_schema
+        arguments = example(input_schema)
+        if name in governance_aliases:
+            # Preserve the operation vocabulary and route examples through the
+            # typed governance tool, including its human confirmation boundary.
+            input_schema = deepcopy(input_schema)
+            input_schema["properties"]["operation"] = {"type": "string", "const": name}
+            arguments = {"operation": name, "arguments": {}}
+        sample = {"version": 1, "command": "tool", "skill": tool.name, "arguments": arguments}
         card.skills.add(id=name, name=tool.title or name, description=tool.description,
             tags=[audience, "procurement"], input_modes=["application/json", "text/plain"] if audience == "buyer" else ["application/json"], output_modes=["application/json"],
             examples=[json.dumps(sample)])
-        schemas[name] = {"input": tool.input_schema, "output": tool.output_schema}
+        schemas[name] = {"input": input_schema, "output": tool.output_schema}
     card.documentation_url = base + "/developers"
     del card.default_input_modes[:]
     card.default_input_modes.extend(["application/json", "text/plain"] if audience == "buyer" else ["application/json"])
@@ -103,8 +113,6 @@ async def enrich_agent_card(card, gateway, audience):
         card.capabilities.extensions.add(uri=uri, description=description, params={"jwksUrl": base + "/.well-known/jwks.json"})
     ParseDict({"oauth2SecurityScheme": {"oauth2MetadataUrl": base + "/.well-known/oauth-authorization-server",
         "flows": {"authorizationCode": {"authorizationUrl": base + "/oauth/authorize", "tokenUrl": base + "/oauth/token", "scopes": {"*": "Consented " + audience + " operations"}}}}}, card.security_schemes["OAuth2"])
-    card.capabilities.extensions.add(uri="urn:luotsi:connection-contract:v1", description="Versioned trading profile, schemas and recovery vocabulary",
-                                    params=manager(gateway).public())
     del card.signatures[:]
     value = MessageToDict(card)
     protected, _, signature = gateway.signing.sign(value).split(".")
@@ -114,7 +122,6 @@ async def enrich_agent_card(card, gateway, audience):
 
 async def mcp_card(gateway, audience="buyer"):
     from .discovery import server_card, EXTENSION as MCP_EXTENSION
-    from .connection_contract import manager
     base = canonical_origin(gateway)
     audience = effective_audience(PRINCIPAL.get(), audience)
     server, tools = await inventory(gateway, audience)
@@ -123,7 +130,6 @@ async def mcp_card(gateway, audience="buyer"):
     if audience != "buyer":
         card["name"], card["title"] = server.name, server._lowlevel_server.title
     card["_meta"][MCP_EXTENSION].update({"canonicalOrigin": base,
-        "contract": manager(gateway).public(),
         "discovery": discovery_context(gateway, audience),
         "tools": [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools],
         "resources": [r.model_dump(mode="json", by_alias=True, exclude_none=True) for r in await server.list_resources()],
@@ -144,11 +150,9 @@ async def card_response(request: Request, audience="buyer", *, mcp=False):
     try:
         if request.headers.get("authorization"):
             scheme, _, secret = request.headers["authorization"].partition(" ")
-            p = admit_credential(gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "", observe=False)
+            p = admit_credential(gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
             audience = effective_audience(p, audience)
             require_audience(p, audience, ("/mcp" if mcp else "/a2a") + ("" if audience == "buyer" else "/" + audience), auth_origin)
-            from .auth import observe_credential
-            observe_credential(gateway, p, request.client.host if request.client else "unknown")
             PRINCIPAL.set(p)
         elif request.cookies.get("vtg_session"):
             p = gateway.accounts.session(request.cookies["vtg_session"])

@@ -1,8 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, CircleDashed, Copy, ExternalLink, KeyRound, Plug, ShieldAlert, Trash2 } from "lucide-react";
-import { ApiError, api, type ClientKind, type Connection, type NewConnection } from "../api";
-import { Card, ErrorNote, Spinner, useAsync, when } from "../ui";
+import { Activity, Check, CircleDashed, Copy, ExternalLink, KeyRound, Plug, ShieldAlert, Trash2 } from "lucide-react";
+import { ApiError, api, call, type ClientKind, type Connection, type NewConnection } from "../api";
+import { Card, ErrorNote, Spinner, ruleLabel, useAsync, when } from "../ui";
+
+/** GET /v1/connect/clients/{client} (spec 60 R-7): the gateway's own setup for the live address. */
+type ClientSetup = { steps: string[]; snippet: string; secret_placeholder: string; url: string; auth: { method: "oauth" | "bearer" } };
+/** GET /v1/connect/connections/{id}/health (spec 60 R-8). */
+type ConnectionHealth = {
+  last_used_at: string | null;
+  calls_last_24h: Record<string, number>;
+  error_codes: string[];
+  scope: { audience: string; scopes: string[]; customer_ids: string[]; tenant_id: string | null; all_tenants: boolean };
+};
+type ConnectionTest = ConnectionHealth & { successful_read: boolean; result: { message?: string } | null; can_do: string[] };
+
+/** Clients the gateway has a ready setup for, its id for each and where the configuration goes.
+ *  claude.ai and REST keep the hand-written steps. */
+const SETUP: Partial<Record<Client["id"], { id: string; file: string }>> = {
+  claude_desktop: { id: "claude-desktop", file: "claude_desktop_config.json" },
+  claude_code: { id: "claude-code", file: ".mcp.json in your project" },
+  chatgpt: { id: "chatgpt", file: "Server address" },
+  cursor: { id: "cursor", file: ".cursor/mcp.json" },
+  vscode: { id: "vscode", file: ".vscode/mcp.json" },
+  mcp_other: { id: "generic", file: "Configuration" },
+};
 
 type Client = {
   /** claude.ai is not a key client: its sign-ins reach the connection list as "mcp_other". */
@@ -38,6 +60,11 @@ export default function Connect() {
   const me = useAsync(() => api.me(), []);
   // Polled: a sign-in approved in ChatGPT or claude.ai appears here by itself, and "used" moves with each call.
   const connections = useAsync(() => api.connections(), [], 5000);
+  const setupId = SETUP[clientId]?.id;
+  const setup = useAsync(
+    () => (setupId ? call<ClientSetup>(`/v1/connect/clients/${setupId}`) : Promise.resolve(null)),
+    [setupId],
+  );
   // A 404 on the list means the gateway does not issue keys from the console yet; everything else still works.
   const issuing = !(connections.error instanceof ApiError && connections.error.status === 404);
 
@@ -184,7 +211,14 @@ export default function Connect() {
           title={client.oauth ? `Add Luotsi to ${client.name}` : `Connect ${client.name}`}
           text={client.how}
         />
-        <ClientSteps client={client} mcpUrl={mcpUrl} restBase={restBase} agentKey={key} hasKey={!!created} mcpLive={!!mcp.data} />
+        {setupId && setup.loading ? (
+          <Spinner label="Loading setup" />
+        ) : setup.data && !setup.error ? (
+          <GatewaySetup client={client} setup={setup.data} agentKey={created?.key} mcpLive={!!mcp.data} />
+        ) : (
+          // The gateway's setup could not be read: the hand-written steps still work.
+          <ClientSteps client={client} mcpUrl={mcpUrl} restBase={restBase} agentKey={key} hasKey={!!created} mcpLive={!!mcp.data} />
+        )}
       </Card>
 
       {client.oauth ? (
@@ -347,26 +381,20 @@ function ClientSteps({
           />
         </>
       );
-    case "cursor": {
-      const link = `cursor://anysphere.cursor-deeplink/mcp/install?name=${SERVER_NAME}&config=${encodeURIComponent(
-        btoa(JSON.stringify({ url: mcpUrl, headers: { Authorization: header } })),
-      )}`;
+    case "cursor":
       return (
         <>
-          <OneClick href={link} label="Add to Cursor" ready={oneClickReady} reason={blockedReason} />
+          <OneClick href={installLink("cursor", mcpUrl, header)} label="Add to Cursor" ready={oneClickReady} reason={blockedReason} />
           <CopyBlock label="Or add it to .cursor/mcp.json" value={JSON.stringify({ mcpServers: { [SERVER_NAME]: { url: mcpUrl, headers: { Authorization: header } } } }, null, 2)} />
         </>
       );
-    }
-    case "vscode": {
-      const link = `vscode:mcp/install?${encodeURIComponent(JSON.stringify({ name: SERVER_NAME, ...httpConfig }))}`;
+    case "vscode":
       return (
         <>
-          <OneClick href={link} label="Add to VS Code" ready={oneClickReady} reason={blockedReason} />
+          <OneClick href={installLink("vscode", mcpUrl, header)} label="Add to VS Code" ready={oneClickReady} reason={blockedReason} />
           <CopyBlock label="Or add it to .vscode/mcp.json" value={JSON.stringify({ servers: { [SERVER_NAME]: httpConfig } }, null, 2)} />
         </>
       );
-    }
     case "claude_ai":
       return (
         <>
@@ -424,6 +452,46 @@ function ClientSteps({
         </>
       );
   }
+}
+
+/** Deep links that install the server with the key inside, for the clients that offer one. */
+function installLink(client: "cursor" | "vscode", url: string, header: string) {
+  return client === "cursor"
+    ? `cursor://anysphere.cursor-deeplink/mcp/install?name=${SERVER_NAME}&config=${encodeURIComponent(btoa(JSON.stringify({ url, headers: { Authorization: header } })))}`
+    : `vscode:mcp/install?${encodeURIComponent(JSON.stringify({ name: SERVER_NAME, type: "http", url, headers: { Authorization: header } }))}`;
+}
+
+function GatewaySetup({ client, setup, agentKey, mcpLive }: { client: Client; setup: ClientSetup; agentKey?: string; mcpLive: boolean }) {
+  const oauth = setup.auth.method === "oauth";
+  const placeholder = setup.secret_placeholder;
+  // The gateway's snippet names the key as a placeholder. Once step 1 made a key it goes straight in, so the
+  // copy works as pasted. Claude Desktop keeps its env indirection (mcp-remote reads the header from env).
+  const filled = !!agentKey && !oauth;
+  let snippet = setup.snippet;
+  if (filled) {
+    snippet = snippet.replaceAll("<YOUR_CONNECTION_KEY>", agentKey);
+    if (client.id !== "claude_desktop") snippet = snippet.replaceAll("${" + placeholder + "}", agentKey);
+  }
+  // With the key filled in, the gateway's "copy the key / set the variable" steps are already done.
+  const steps = filled
+    ? ["Your new key is already in the configuration below.", ...setup.steps.filter((s) => !s.includes(placeholder) && !/connection key/i.test(s))]
+    : setup.steps;
+  const oneClick = client.id === "cursor" || client.id === "vscode" ? client.id : null;
+  return (
+    <>
+      <Steps items={steps} />
+      {oneClick ? (
+        <OneClick
+          href={installLink(oneClick, setup.url, `Bearer ${agentKey}`)}
+          label={`Add to ${client.name}`}
+          ready={!!agentKey && mcpLive}
+          reason={!mcpLive ? "Available once this address serves MCP." : "Create a key in step 1 first."}
+        />
+      ) : null}
+      {oauth ? <CopyBlock label="Server address" value={setup.url} /> : <CopyBlock label={SETUP[client.id]!.file} value={snippet} />}
+      <p className="text-[12px] text-ink-muted">Configuration from the gateway for {setup.url}.</p>
+    </>
+  );
 }
 
 function Steps({ items }: { items: string[] }) {
@@ -512,6 +580,7 @@ function FirstCall({ agentId, since, onSeen }: { agentId: string; since: string;
 function ConnectionList({ connections }: { connections: ReturnType<typeof useAsync<Connection[]>> }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [open, setOpen] = useState<string | null>(null);
   const revoke = async (id: string) => {
     setBusy(id);
     setError(null);
@@ -552,14 +621,118 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
                 <code className="text-ink-muted">{c.key_prefix}…</code>
               )}
               <span className="text-ink-muted">{c.last_used_at ? `used ${when(c.last_used_at)}` : "not used yet"}</span>
-              <button className="btn-danger ml-auto h-8 !py-0" onClick={() => revoke(c.connection_id)} disabled={busy === c.connection_id}>
-                <Trash2 size={13} /> {busy === c.connection_id ? "Revoking…" : "Revoke"}
-              </button>
+              <span className="ml-auto flex gap-2">
+                <button
+                  className="btn-ghost h-8 !py-0"
+                  aria-expanded={open === c.connection_id}
+                  onClick={() => setOpen(open === c.connection_id ? null : c.connection_id)}
+                >
+                  <Activity size={13} /> Health
+                </button>
+                <button className="btn-danger h-8 !py-0" onClick={() => revoke(c.connection_id)} disabled={busy === c.connection_id}>
+                  <Trash2 size={13} /> {busy === c.connection_id ? "Revoking…" : "Revoke"}
+                </button>
+              </span>
+              {open === c.connection_id ? <HealthPanel id={c.connection_id} /> : null}
             </li>
           ))}
         </ul>
       )}
       {error ? <ErrorNote error={error} /> : null}
     </Card>
+  );
+}
+
+const AUDIENCE: Record<string, string> = { buyer: "Buying agent", tenant: "Organisation agent", operator: "Operator agent" };
+
+/** Loaded when opened, not on the list's 5 s poll: one connection's use, errors and reach (spec 60 R-8). */
+function HealthPanel({ id }: { id: string }) {
+  const path = `/v1/connect/connections/${encodeURIComponent(id)}`;
+  const health = useAsync(() => call<ConnectionHealth>(`${path}/health`), [path]);
+  const [test, setTest] = useState<ConnectionTest | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState<unknown>(null);
+  const run = async () => {
+    setTesting(true);
+    setTestError(null);
+    try {
+      setTest(await call<ConnectionTest>(`${path}/test`, { method: "POST" }));
+      health.reload(); // the test read is itself a call through the connection
+    } catch (e) {
+      setTestError(e);
+    } finally {
+      setTesting(false);
+    }
+  };
+  const h = health.data;
+  const calls = Object.entries(h?.calls_last_24h ?? {}).sort((a, b) => b[1] - a[1]);
+  const s = h?.scope;
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-3 rounded-[var(--radius-tile)] bg-page p-3">
+      {health.loading && !h ? (
+        <Spinner label="Loading health" />
+      ) : health.error ? (
+        <ErrorNote error={health.error} />
+      ) : h && s ? (
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-[150px_1fr]">
+          <dt className="label">Last used</dt>
+          <dd>{h.last_used_at ? when(h.last_used_at) : "Not used yet"}</dd>
+          <dt className="label">Calls in the last 24 h</dt>
+          <dd className="flex flex-wrap gap-1.5">
+            {calls.length
+              ? calls.map(([tool, n]) => (
+                  <span key={tool} className="chip bg-chip text-ink">
+                    {ruleLabel(tool)} · {n}
+                  </span>
+                ))
+              : "None"}
+          </dd>
+          <dt className="label">Errors seen</dt>
+          <dd className="flex flex-wrap gap-1.5">
+            {h.error_codes.length
+              ? h.error_codes.map((code) => (
+                  <span key={code} className="chip bg-warn-soft text-warn">
+                    {ruleLabel(code)}
+                  </span>
+                ))
+              : "None"}
+          </dd>
+          <dt className="label">Can act for</dt>
+          <dd>
+            {AUDIENCE[s.audience] ?? "Agent"}
+            {s.all_tenants ? " for every organisation" : s.tenant_id ? ` for ${s.tenant_id}` : ""}
+            {s.customer_ids.length ? `, customer${s.customer_ids.length > 1 ? "s" : ""} ${s.customer_ids.join(", ")}` : ", no customers"}
+            {s.scopes.includes("*") ? ", everything its mandate allows" : `, limited to: ${s.scopes.map(ruleLabel).join(", ").toLowerCase()}`}
+          </dd>
+        </dl>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="btn-dark h-8 !py-0" onClick={run} disabled={testing}>
+          <Plug size={13} /> {testing ? "Testing…" : "Test connection"}
+        </button>
+        <span className="text-[12px] text-ink-muted">Makes one harmless read as this agent. Nothing is ordered.</span>
+      </div>
+      {testError ? <ErrorNote error={testError} /> : null}
+      {test ? (
+        <div className="flex flex-col gap-2">
+          <StatusLine tone={test.successful_read ? "ok" : "warn"}>
+            {test.successful_read
+              ? "Works. The gateway read the agent's own context through this connection."
+              : `The test read did not work${test.result?.message ? `: ${test.result.message}` : "."}`}
+          </StatusLine>
+          <details className="text-[13px]">
+            <summary className="cursor-pointer font-medium text-brand">The agent can use {test.can_do.length} tools</summary>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {test.can_do.map((tool) => (
+                <span key={tool} className="chip bg-chip text-ink">
+                  {ruleLabel(tool)}
+                </span>
+              ))}
+            </div>
+          </details>
+        </div>
+      ) : null}
+    </div>
   );
 }

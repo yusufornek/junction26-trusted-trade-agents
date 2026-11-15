@@ -16,7 +16,7 @@ from .auth import Principal, resolve_principal
 from .buyer import check_suspension
 from .db import DomainError
 from .foundation import PRINCIPAL
-from .models import InputText, InputTexts, LookupResult, Model, NeedSpec, Quote
+from .models import InputText, InputTexts, LookupResult, Model, NeedSpec, Quote, delivery_today
 from .recurring import Deviations, snapshot
 from .mandates import decode, invalid
 
@@ -301,7 +301,7 @@ class PurchaseMemory:
     def need(self, pattern):
         data = deepcopy(pattern["_latest"]["need"])
         data["quantity"] = pattern["suggested_quantity"]
-        today = audit.utcnow().astimezone(ZoneInfo("Europe/Helsinki")).date()
+        today = delivery_today()
         predicted = date.fromisoformat(pattern["predicted_next_need_date"])
         data["deliver_by"] = max(today, predicted).isoformat()
         try:

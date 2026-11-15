@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import {
   Bell,
+  Radar,
+  Gauge,
+  GitPullRequestArrow,
+  Users,
   ChefHat,
   Repeat,
   Bot,
@@ -20,7 +24,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { api, hasToken, onAuthChange, setToken } from "./api";
+import { api, auth, hasSession, hasToken, onAuthChange, setToken, type Account } from "./api";
 import { Avatar } from "./charts";
 import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { Card, ErrorNote, useAsync } from "./ui";
@@ -28,16 +32,29 @@ import { Card, ErrorNote, useAsync } from "./ui";
 /** Set at build time from the server's DEMO_OPERATOR_TOKEN (deploy/docker-compose.yml); never committed. */
 const DEMO_TOKEN: string = import.meta.env.VITE_DEMO_OPERATOR_TOKEN ?? "";
 
+/** What each role can open: organisation people get 403 on the operator's stats, policy and connection endpoints, so
+ *  those pages are not offered to them. Valio staff and the operator token see everything. */
+const ROLE_PAGES: Record<string, string[]> = {
+  tenant_admin: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/changes", "/team", "/connect", "/audit", "/trust"],
+  approver: ["/approvals", "/orders", "/repeat", "/watch", "/governance", "/audit", "/trust"],
+  viewer: ["/orders", "/repeat", "/watch", "/audit", "/trust"],
+  member: ["/orders", "/repeat", "/audit", "/trust"],
+};
+
 const NAV = [
   { to: "/", icon: LayoutGrid, label: "Dashboard" },
   { to: "/buyer", icon: Search, label: "Buyer flow" },
   { to: "/basket", icon: ChefHat, label: "Recipe basket" },
   { to: "/repeat", icon: Repeat, label: "Repeat buying" },
+  { to: "/watch", icon: Radar, label: "Supply watch" },
   { to: "/approvals", icon: Inbox, label: "Approvals" },
   { to: "/orders", icon: Package, label: "Orders" },
   { to: "/audit", icon: ScrollText, label: "Audit trail" },
   { to: "/policy", icon: ShieldCheck, label: "Policy" },
   { to: "/agents", icon: Bot, label: "Agents" },
+  { to: "/governance", icon: Gauge, label: "Governance" },
+  { to: "/changes", icon: GitPullRequestArrow, label: "Policy changes" },
+  { to: "/team", icon: Users, label: "Team" },
   { to: "/connect", icon: Plug, label: "Connect an agent" },
   { to: "/trust", icon: Fingerprint, label: "Trust" },
 ];
@@ -47,11 +64,16 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/buyer": { title: "Buyer flow", sub: "Describe the need, compare offers, lock a price, order." },
   "/basket": { title: "Recipe basket", sub: "Turn a recipe and a number of portions into one priced basket." },
   "/repeat": { title: "Repeat buying", sub: "What this kitchen buys again and again. A suggestion never orders by itself." },
+  "/signup": { title: "Create an organisation account", sub: "Tell us what kind of kitchen you run. The gateway sets safe starting limits from it." },
   "/consent": { title: "Connect an assistant", sub: "An assistant asks to buy through this gateway. You decide as which agent, and for which customers." },
+  "/watch": { title: "Supply watch", sub: "What will run out before it is due, what to use instead, and new products worth a look." },
   "/approvals": { title: "Approval inbox", sub: "Orders the agent would not confirm on its own." },
   "/orders": { title: "Orders", sub: "Every commitment this gateway has made." },
   "/audit": { title: "Audit trail", sub: "Append-only record of agent and human decisions." },
   "/policy": { title: "Policy", sub: "The guardrails the buyer owns, not the code." },
+  "/governance": { title: "Governance", sub: "Every agent, who answers for it, what it has done, and a switch to stop it." },
+  "/changes": { title: "Policy changes", sub: "Where each limit comes from, and the changes that wait for a second person." },
+  "/team": { title: "Team", sub: "The people who can sign in, what each role may do, and the organisations on this gateway." },
   "/agents": { title: "Agents", sub: "Who may buy, for which customer, and up to what limit." },
   "/connect": { title: "Connect an agent", sub: "Pick the assistant or tool you work in and give it a key to this gateway." },
   "/trust": { title: "Trust", sub: "Verify what the gateway recorded, without taking its word for it." },
@@ -70,6 +92,10 @@ export default function Shell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [signedIn, setSignedIn] = useState(hasToken);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [useToken, setUseToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<unknown>(null);
@@ -81,7 +107,31 @@ export default function Shell() {
   const [rangeOpen, setRangeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  useEffect(() => onAuthChange(() => setSignedIn(hasToken())), []);
+  useEffect(
+    () =>
+      onAuthChange(() => {
+        setSignedIn(hasToken());
+        if (!hasSession()) setAccount(null);
+      }),
+    [],
+  );
+  // A reload keeps an e-mail session (cookie + stored CSRF token): read who it is before showing any page.
+  useEffect(() => {
+    if (hasSession()) auth.session().then(setAccount, () => auth.signOut());
+  }, []);
+  const pages = account ? ROLE_PAGES[account.role] : undefined;
+  const allowed = (to: string) => !pages || pages.some((p) => to === p || to.startsWith(p + "/") || (p === "/orders" && to.startsWith("/products/")));
+  const nav = NAV.filter((n) => allowed(n.to));
+  // Organisation people land on their first page instead of an operator page that would only answer 403.
+  useEffect(() => {
+    if (signedIn && pages && !allowed(pathname) && pathname !== "/signup") navigate(pages[0], { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn, account, pathname]);
+  const signOut = () => {
+    auth.signOut();
+    setAccount(null);
+  };
+  const who = account?.user.email ?? "operator";
   // A phone menu that stays open after navigating would cover the page the person just asked for.
   useEffect(() => setMenuOpen(false), [pathname]);
 
@@ -101,14 +151,25 @@ export default function Shell() {
       setSigningIn(false);
     }
   };
-  const signIn = (event: React.FormEvent) => {
+  const signIn = async (event: React.FormEvent) => {
     event.preventDefault();
-    signInWith(tokenInput);
+    if (useToken) return signInWith(tokenInput);
+    setSigningIn(true);
+    setSignInError(null);
+    try {
+      setAccount(await auth.login(email.trim(), password));
+      setPassword("");
+    } catch (error) {
+      setSignInError(error);
+    } finally {
+      setSigningIn(false);
+    }
   };
 
   const health = useAsync(() => api.health(), []);
-  const approvals = useAsync(() => (signedIn ? api.approvals() : Promise.resolve([])), [signedIn], 10000);
+  const approvals = useAsync(() => (signedIn && allowed("/approvals") ? api.approvals() : Promise.resolve([])), [signedIn, account], 10000);
   const head =
+    (pathname === "/" && account ? { ...TITLES["/"], title: `Good day, ${account.user.email.split("@")[0]}` } : undefined) ??
     TITLES[pathname] ??
     (pathname.startsWith("/approvals/")
       ? TITLES["/approvals"]
@@ -118,18 +179,22 @@ export default function Shell() {
   const range = RANGES[rangeIndex];
   const since = range.days ? new Date(loadedAt - range.days * 86400000).toISOString() : undefined;
   const waiting = approvals.data?.length ?? 0;
+  // Signed out, the page is only the sign-in card (or the public sign-up form): no rail, no bars to click into.
+  const bare = !signedIn || signingIn;
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row md:gap-4 md:p-4">
+    <div className={`flex min-h-screen flex-col ${bare ? "" : "md:flex-row md:gap-4 md:p-4"}`}>
+      {bare ? null : (
+        <>
       {/* Desktop rail: 72px of icons that widens to 236px with names on hover or keyboard focus. The column itself
           widens, so the page beside it moves over and narrows instead of being covered. The short delay on hover
           keeps a pointer that only passes over the rail from shifting the page. */}
       <div className="group/rail hidden w-[72px] shrink-0 transition-[width] duration-200 ease-out hover:w-[236px] hover:delay-150 focus-within:w-[236px] motion-reduce:transition-none md:block">
         <nav
           aria-label="Main"
-          className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4"
+          className="sticky top-4 flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[26px] bg-rail px-4 py-4 [@media(max-height:900px)]:py-3"
         >
-          <div className="mb-1 flex h-10 items-center gap-3">
+          <div className="mb-1 flex h-10 shrink-0 items-center gap-3">
             <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
               <LuotsiMark className="block h-6 w-auto" />
             </span>
@@ -137,13 +202,15 @@ export default function Shell() {
               <LuotsiWordmark className="block h-[18px] w-auto text-white" />
             </RailLabel>
           </div>
-          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3`}>
+          <button onClick={() => navigate("/buyer")} className={`${RAIL_ROW} ${RAIL_IDLE} mb-3 [@media(max-height:900px)]:mb-1 ${allowed("/buyer") ? "" : "hidden"}`}>
             <Plus size={20} className="shrink-0" />
             <RailLabel>New request</RailLabel>
           </button>
 
-          <div className="flex flex-col gap-1">
-            {NAV.map(({ to, icon: Icon, label }) => (
+          {/* Fourteen destinations no longer fit a laptop's height: the list scrolls between the fixed top and bottom
+              rows, and rows tighten below 900 px so most screens need no scrolling at all. */}
+          <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-1 [scrollbar-color:rgba(255,255,255,0.3)_transparent] [scrollbar-width:thin] [@media(max-height:900px)]:gap-0.5">
+            {nav.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -166,20 +233,20 @@ export default function Shell() {
             ))}
           </div>
 
-          <div className="mt-auto flex flex-col gap-1">
+          <div className="flex shrink-0 flex-col gap-1 pt-2 [@media(max-height:900px)]:gap-0.5 [@media(max-height:900px)]:pt-1">
             <a href="/docs" target="_blank" rel="noreferrer" className={`${RAIL_ROW} ${RAIL_IDLE}`}>
               <CircleHelp size={18} className="shrink-0" />
               <RailLabel>API reference</RailLabel>
             </a>
             {signedIn ? (
-              <button onClick={() => setToken("")} className={`${RAIL_ROW} ${RAIL_IDLE}`}>
+              <button onClick={signOut} className={`${RAIL_ROW} ${RAIL_IDLE}`}>
                 <LogOut size={18} className="shrink-0" />
                 <RailLabel>Sign out</RailLabel>
               </button>
             ) : null}
             <div className="mt-1 flex h-10 items-center gap-3">
               <span className="grid size-10 shrink-0 place-items-center rounded-full border border-white/25">
-                <Avatar name="operator" size={28} />
+                <Avatar name={who} size={28} />
               </span>
               <RailLabel>
                 <span className="text-[13px] text-white">Operator</span>
@@ -221,10 +288,10 @@ export default function Shell() {
         {menuOpen ? (
           // dvh, not vh: on iPhones vh includes the space under Safari's toolbar, which hid the last rows.
           <nav id="phone-menu" aria-label="Main" className="absolute inset-x-0 top-full max-h-[calc(100dvh-64px)] overflow-y-auto bg-rail px-3 pb-4 shadow-[0_18px_40px_rgba(0,67,87,0.35)]">
-            <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+            <button onClick={() => navigate("/buyer")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10 ${allowed("/buyer") ? "" : "hidden"}`}>
               <Plus size={18} /> New request
             </button>
-            {NAV.map(({ to, icon: Icon, label }) => (
+            {nav.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -243,16 +310,22 @@ export default function Shell() {
               <CircleHelp size={18} /> API reference
             </a>
             {signedIn ? (
-              <button onClick={() => setToken("")} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
+              <button onClick={signOut} className={`${PHONE_ROW} text-white/80 hover:bg-white/10`}>
                 <LogOut size={18} /> Sign out
               </button>
             ) : null}
           </nav>
         ) : null}
       </div>
+        </>
+      )}
 
-      <main className="min-w-0 flex-1 px-4 pb-10 pt-4 md:px-0 md:pt-0">
-        <div className="mb-5 hidden items-center justify-end gap-2 md:flex">
+      <main
+        className={
+          bare ? "flex min-h-screen w-full flex-col items-center justify-center px-4 py-10" : "min-w-0 flex-1 px-4 pb-10 pt-4 md:px-0 md:pt-0"
+        }
+      >
+        <div className={`mb-5 hidden items-center justify-end gap-2 ${bare ? "" : "md:flex"}`}>
           <span className="chip h-9 border border-line bg-surface px-3.5 text-ink-muted">
             <span className={`size-1.5 rounded-full ${health.data ? "bg-positive" : "bg-negative"}`} />
             {health.data ? `${health.data.catalog_rows.toLocaleString("en-GB")} products indexed` : "gateway offline"}
@@ -269,15 +342,19 @@ export default function Shell() {
               </span>
             ) : null}
           </button>
-          {pathname !== "/connect" ? (
+          {pathname !== "/connect" && allowed("/connect") ? (
             <button className="btn-dark h-9 !py-0" onClick={() => navigate("/connect")}>
               <Plug size={15} /> Connect an agent
             </button>
           ) : null}
-          <Avatar name="operator" size={36} />
+          <Avatar name={who} size={36} />
         </div>
 
-        <header className="mb-6 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+        <header
+          className={`mb-6 flex-wrap items-end justify-between gap-x-4 gap-y-3 ${
+            !bare ? "flex" : pathname === "/signup" ? "flex w-full max-w-2xl" : "hidden"
+          }`}
+        >
           <div className="min-w-0">
             <h1 className="text-[28px] font-semibold leading-tight tracking-tight">{head.title}</h1>
             <p className="label mt-1">{head.sub}</p>
@@ -323,29 +400,64 @@ export default function Shell() {
           </div>
         </header>
 
-        {signedIn && !signingIn ? (
-          <Outlet context={{ since, rangeLabel: range.label } satisfies ShellContext} />
+        {/* Sign-up is public: a new kitchen has no operator token. */}
+        {!bare || pathname === "/signup" ? (
+          <>
+            <Outlet context={{ since, rangeLabel: range.label } satisfies ShellContext} />
+            {bare ? (
+              <p className="mt-5 text-center text-[13px] text-ink-muted">
+                Already have an account?{" "}
+                <NavLink to="/" className="font-medium text-brand hover:underline">
+                  Sign in
+                </NavLink>
+              </p>
+            ) : null}
+          </>
         ) : (
-          <Card className="mx-auto mt-10 w-full max-w-md">
+          <Card className="mx-auto w-full max-w-md">
             <form className="flex flex-col gap-4" onSubmit={signIn}>
               <div className="flex flex-col gap-4">
-                <LuotsiWordmark className="block h-8 w-auto self-start text-brand" />
+                <LuotsiWordmark className="block h-8 w-auto self-center text-brand" />
                 <div className="min-w-0">
-                  <h2 className="text-[15px] font-semibold">Operator sign-in</h2>
-                  <p className="label">The token lives in memory only, so a reload asks again.</p>
+                  <h2 className="text-[15px] font-semibold">{useToken ? "Operator sign-in" : "Sign in"}</h2>
+                  <p className="label">
+                    {useToken
+                      ? "The token lives in memory only, so a reload asks again."
+                      : "With the e-mail your organisation or Valio gave you."}
+                  </p>
                 </div>
               </div>
-              <label className="flex flex-col gap-1.5">
-                <span className="label">Operator token</span>
-                <input
-                  className="field"
-                  type="password"
-                  autoComplete="off"
-                  required
-                  value={tokenInput}
-                  onChange={(event) => setTokenInput(event.target.value)}
-                />
-              </label>
+              {useToken ? (
+                <label className="flex flex-col gap-1.5">
+                  <span className="label">Operator token</span>
+                  <input
+                    className="field"
+                    type="password"
+                    autoComplete="off"
+                    required
+                    value={tokenInput}
+                    onChange={(event) => setTokenInput(event.target.value)}
+                  />
+                </label>
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="label">E-mail</span>
+                    <input className="field" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="label">Password</span>
+                    <input
+                      className="field"
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
               <button className="btn-dark" disabled={signingIn}>
                 {signingIn ? "Signing in…" : "Sign in"}
               </button>
@@ -357,6 +469,22 @@ export default function Shell() {
                 </button>
               ) : null}
               {signInError ? <ErrorNote error={signInError} /> : null}
+              <button
+                type="button"
+                className="self-center text-[13px] font-medium text-brand hover:underline"
+                onClick={() => {
+                  setUseToken(!useToken);
+                  setSignInError(null);
+                }}
+              >
+                {useToken ? "Sign in with e-mail instead" : "Use an operator token instead"}
+              </button>
+              <p className="text-center text-[13px] text-ink-muted">
+                New kitchen?{" "}
+                <NavLink to="/signup" className="font-medium text-brand hover:underline">
+                  Create an organisation account
+                </NavLink>
+              </p>
               <p className="text-center text-[12px] text-ink-muted">For the best experience, use a computer.</p>
             </form>
           </Card>
@@ -367,7 +495,7 @@ export default function Shell() {
 }
 
 // 40px rows: the icon keeps its place on the collapsed rail, the name slides in beside it.
-const RAIL_ROW = "flex h-10 w-full items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
+const RAIL_ROW = "flex h-10 w-full shrink-0 items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors [@media(max-height:900px)]:h-9";
 const RAIL_IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-white";
 const PHONE_ROW = "flex h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] font-medium";
 

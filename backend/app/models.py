@@ -19,6 +19,14 @@ InputText = Annotated[str, Field(max_length=4000), WrapValidator(historical_inpu
 InputTexts = Annotated[list[InputText], Field(max_length=100), WrapValidator(historical_input)]
 
 
+def delivery_today():
+    """One fixture-aware Helsinki date for delivery generation and validation."""
+    from .runtime import CLOCK
+    clock = CLOCK.get()
+    zone = ZoneInfo("Europe/Helsinki")
+    return (clock() if clock else datetime.now(zone)).astimezone(zone).date()
+
+
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -97,9 +105,7 @@ class RequestScope(Model):
     def delivery_window(cls, value, info):
         # Historical requests remain readable after their input window passes.
         if not (info.context or {}).get("stored"):
-            from .runtime import CLOCK
-            clock = CLOCK.get()
-            today = (clock() if clock else datetime.now(ZoneInfo("Europe/Helsinki"))).astimezone(ZoneInfo("Europe/Helsinki")).date()
+            today = delivery_today()
             if not today <= value <= today + timedelta(days=60):
                 raise ValueError("deliver_by must be between today and today + 60 days (Europe/Helsinki)")
         return value
