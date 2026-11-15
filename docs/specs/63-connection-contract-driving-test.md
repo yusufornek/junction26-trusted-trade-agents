@@ -36,7 +36,10 @@ work.
 - **R-7 Graduated enablement:** the result is signed (spec 10) and bound to connection, client and contract version.
   Order scope turns on only with the unit, retry and approval checks passed. Failed checks keep that operation in sandbox
   or `approval_required`; the owner can override through a change request (44). A material contract change expires the
-  result. Seeded demo agents carry a passing result.
+  result. Server-issued seeded demo results remain passing across transport/client negotiation. At upgrade, connections
+  already present without any driving-test record receive a seeded passing result; a durable one-time snapshot keeps
+  connections created after the upgrade subject to the driving test, including after restart. Existing measured or
+  failed records are never replaced. Signature, connection, agent, expiry and material-contract checks still apply.
 - **R-8 Visibility:** result and enabled operations appear in connection health, `get_agent_context` and the agent
   register (44).
 

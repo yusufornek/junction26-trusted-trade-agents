@@ -280,7 +280,10 @@ class DrivingTests:
             row = self.connection(p, allow_inactive=True)
             client = client or row["client"]
         inactive = bool(p.connection_id and (row["revoked_at"] or row["expires_at"] and row["expires_at"] <= audit.utcnow().isoformat()))
-        result = self.seeded(cid, p.id, client) if p.id in DEMO_AGENTS else None
+        with self.gateway.db.connect() as conn:
+            legacy = conn.execute("SELECT 1 FROM connection_contract_legacy_connections WHERE connection_id=?", (cid,)).fetchone()
+        seeded = bool(legacy) or not p.connection_id and p.id in DEMO_AGENTS
+        result = self.seeded(cid, p.id, client) if seeded else None
         with self.gateway.db.connect() as conn:
             rows = conn.execute("SELECT data FROM connection_contract_runs WHERE connection_id=? ORDER BY rowid DESC", (cid,)).fetchall()
         for row in rows:
@@ -293,7 +296,10 @@ class DrivingTests:
             payload = result["payload"]
             try:
                 verify_jws(result["signature"], payload, self.gateway.signing.jwks(include_retired=True))
-                valid = (payload["connection_id"] == cid and payload["agent_id"] == p.id and payload["client"] == client
+                # Server-issued demo/migration proofs survive transport negotiation.
+                # Measured results retain their exact client binding.
+                seeded_client = payload.get("seeded_demo") is True and (seeded or p.id in DEMO_AGENTS)
+                valid = (payload["connection_id"] == cid and payload["agent_id"] == p.id and (seeded_client or payload["client"] == client)
                     and payload["exp"] > audit.utcnow().timestamp() and not any(c["material"] for c in m.changes_since(payload["contract_version"])))
             except (ValueError, KeyError, TypeError, InvalidSignature):
                 valid = False
@@ -325,7 +331,7 @@ class DrivingTests:
             payload = status["result"]["payload"]
             if (all(payload["checks"].get(k) == "passed" for k in REQUIRED)
                     and payload["connection_id"] == p.connection_id and payload["agent_id"] == p.id
-                    and payload["client"] == self.client(self.connection(p))
+                    and (payload["client"] == self.client(self.connection(p)) or status["valid"] and payload.get("seeded_demo") is True)
                     and payload["exp"] > audit.utcnow().timestamp()
                     and manager(self.gateway).signed_pin(signed_quote, p.id, payload["contract_version"])):
                 from .signing import verify_jws

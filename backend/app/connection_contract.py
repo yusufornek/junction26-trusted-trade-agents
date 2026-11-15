@@ -50,7 +50,15 @@ class ConnectionContract:
                     version TEXT NOT NULL, reevaluated_version TEXT);
                 CREATE TABLE IF NOT EXISTS connection_contract_runs (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL,
                     data TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS connection_contract_legacy_connections (connection_id TEXT PRIMARY KEY);
             """)
+            # Snapshot once, under the writer lock. Later connections must graduate,
+            # including after a restart; never overwrite an existing measured run.
+            if not conn.execute("SELECT 1 FROM workspace WHERE key='connection_contract_legacy_seed_v1'").fetchone():
+                conn.execute("INSERT INTO connection_contract_legacy_connections SELECT connection_id FROM connections c "
+                    "WHERE audience='buyer' AND NOT EXISTS "
+                    "(SELECT 1 FROM connection_contract_runs r WHERE r.connection_id=c.connection_id)")
+                conn.execute("INSERT INTO workspace VALUES('connection_contract_legacy_seed_v1','true')")
 
     def profile(self):
         products = {}
@@ -182,6 +190,12 @@ class ConnectionContract:
         if not p or not p.connection_id:
             return
         version = version or ECHO.get() or self.state(p.connection_id)["contract_version"]
+        if version is None:
+            with self.gateway.db.connect() as conn:
+                legacy = conn.execute("SELECT 1 FROM connection_contract_legacy_connections WHERE connection_id=?", (p.connection_id,)).fetchone()
+            if legacy:
+                version = self.current()["version"]
+                self.acknowledge(p.connection_id, version)
         changes = self.changes_since(version)
         if any(c["material"] for c in changes):
             # An explicitly selected, verified signed promise is the only pinning

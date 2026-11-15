@@ -6,7 +6,7 @@ from dataclasses import replace
 from starlette.responses import JSONResponse
 
 from .auth import Principal
-from .connection_trust_lifecycle import CONTEXT, context
+from .connection_trust_lifecycle import CONTEXT, READ_OPERATION, context
 from .db import DomainError
 
 
@@ -23,11 +23,14 @@ class ContextMiddleware:
         # remains stable while the corresponding resource is MCP or A2A.
         protocol = "oauth" if path.startswith("/oauth") else "mcp" if path.startswith("/mcp") else "a2a" if path.startswith("/a2a") else "rest"
         token = CONTEXT.set(context((scope.get("client") or ("unknown",))[0], protocol,
-                                    headers.get(b"user-agent", b"unknown").decode("latin1")))
+                                    headers.get(b"a2a-client", b"").decode("latin1") if protocol == "a2a" else ""))
+        read_token = READ_OPERATION.set(scope.get("method") in {"GET", "HEAD", "OPTIONS"} or
+            path in {"/v1/offers", "/v1/basket-lookups"})
         try:
             await self.app(scope, receive, send)
         finally:
             CONTEXT.reset(token)
+            READ_OPERATION.reset(read_token)
 
 
 async def live_http(app, gateway, p, scope, receive, send):

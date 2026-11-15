@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
 from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
 
 import pytest
 from mcp import Client
@@ -50,10 +51,40 @@ def consent(http, human, client, *, agent="hotel-chain-agent", customers=None, r
 
 
 def quote(http, credential, need, product="1", units=200):
+    # Explicit signed demo fixtures isolate lifecycle authority from the driving
+    # test, whose new-connection and measured-run gates are exercised in spec 63.
+    from app.auth import resolve_credential
+    from app.connection_contract_driving import driving
+    gateway = http.app.state.gateway
+    p = resolve_credential(gateway.settings.keys, credential["Authorization"].split()[1], gateway, "http://localhost/mcp")
+    if p.connection_id and "order" not in driving(gateway).status(p)["enabled_operations"]:
+        tests = driving(gateway)
+        tests.seeded(p.connection_id, p.id, tests.client(tests.connection(p)))
     lookup = tool(http, credential, "find_offers", {"need": need.model_dump(mode="json")})["structuredContent"]
     assert "lookup_id" in lookup, lookup
     return tool(http, credential, "create_quote", {"customer_id": "1", "deliver_by": str(need.deliver_by),
         "need_ref": lookup["lookup_id"], "lines": [{"product_id": product, "quantity_sales_units": units}]})["structuredContent"]
+
+
+def a2a_tool(http, key, name, arguments=None):
+    response = http.post('/a2a', headers={**key, 'A2A-Version': '1.0'}, json={
+        'jsonrpc': '2.0', 'id': 1, 'method': 'SendMessage', 'params': {'message': {
+            'messageId': uuid4().hex, 'role': 'ROLE_USER', 'parts': [{'data': {
+                'version': 1, 'command': 'tool', 'skill': name, 'arguments': arguments or {}}}]}}})
+    assert response.status_code == 200, response.text
+    assert 'error' not in response.json(), response.text
+    return response.json()['result']['task']['artifacts'][0]['parts'][0]['data']
+
+
+def mcp_client(http, key, name):
+    # The current stateless MCP revision carries clientInfo on each request.
+    response = http.post('/mcp', headers={**key, 'Accept': 'application/json, text/event-stream',
+        'MCP-Protocol-Version': '2026-07-28', 'MCP-Method': 'tools/list'}, json={
+        'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {'_meta': {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {},
+            'io.modelcontextprotocol/clientInfo': {'name': name, 'version': '1.0'}}}})
+    assert response.status_code == 200 and 'error' not in response.json(), response.text
 
 
 def test_AC_1_dynamic_publisher_impersonation_and_admin_order_grant(http, gateway, need, upstream):
@@ -229,7 +260,17 @@ def test_AC_5_parallel_credential_contexts_and_connection_local_autonomy(http, g
     first = http.get('/v1/me', headers={**key, "User-Agent": "runtime-one"})
     assert first.status_code == 200
     copied = http.get('/v1/me', headers={**key, "User-Agent": "runtime-two"})
-    assert copied.status_code == 409 and copied.json()["code"] == "CONCURRENT_CONTEXT"
+    assert copied.status_code == 200  # User-Agent alone is not an identity.
+    assert context('192.0.2.1', 'rest', 'runtime-one')['id'] == context('198.51.100.2', 'a2a', 'runtime-one')['id']
+    def initialize(name):
+        mcp_client(http, key, name)
+    initialize('runtime-one')
+    assert not tool(http, key, 'get_agent_context').get('isError')
+    assert a2a_tool(http, {**key, 'A2A-Client': 'runtime-one'}, 'get_agent_context')['customer_ids'] == ['1']
+    initialize('runtime-one')
+    state = gateway.connection_trust.health(c['connection_id'])
+    assert state['state'] == 'ACTIVE' and len(state['context_history']) == 1
+    initialize('runtime-two')  # Same credential, two actual client names.
     state = gateway.connection_trust.health(c["connection_id"])
     assert state["state"] == "READ_ONLY" and len(state["context_history"]) == 2
     p = gateway.accounts.bind(gateway.connections.resolve(c["key"]))
@@ -237,6 +278,34 @@ def test_AC_5_parallel_credential_contexts_and_connection_local_autonomy(http, g
         with gateway.db.connect(write=True) as conn:
             gateway.connection_trust.require_order(p, conn)
     assert refused.value.code == "CONCURRENT_CONTEXT"
+    assert refused.value.data['confirm_url'] == f'/v1/connections/{c["connection_id"]}/trust/confirm'
+    assert refused.value.data['confirmed_by'] == ['tenant_admin', 'owner']
+    for endpoint in ('/v1/me', '/v1/products/464306', f'/v1/connections/{c["connection_id"]}/health',
+                     '/v1/connection-notifications', '/v1/notifications'):
+        response = http.get(endpoint, headers=key)
+        assert response.status_code == 200, response.text
+    assert http.post('/v1/offers', headers=key, json=need.model_dump(mode='json')).status_code == 200
+    for name, arguments in [('get_agent_context', {}), ('search_products', {'query': 'milk'}),
+                            ('find_offers', {'need': need.model_dump(mode='json')})]:
+        assert not tool(http, key, name, arguments).get('isError')
+        # Omit the optional integer default: protobuf Struct represents numbers
+        # as doubles while the native SDK deliberately validates strict integers.
+        a2a_arguments = {'need': {k: v for k, v in arguments['need'].items() if k != 'max_candidates'}} if name == 'find_offers' else arguments
+        assert a2a_tool(http, key, name, a2a_arguments)
+    blocked = http.post('/v1/orders', headers={**key, 'Idempotency-Key': 'blocked'}, json={'quote_id': 'blocked'})
+    assert blocked.status_code == 409 and blocked.json()['code'] == 'CONCURRENT_CONTEXT'
+    for protocol in ('mcp', 'a2a'):
+        if protocol == 'mcp':
+            error = tool(http, key, 'place_order', {'quote_id': 'blocked', 'idempotency_key': 'blocked'})
+            assert error['isError'] and error['structuredContent']['code'] == 'CONCURRENT_CONTEXT'
+        else:
+            from a2a import types as at
+            from google.protobuf.json_format import ParseDict
+            params = ParseDict({'message': {'messageId': uuid4().hex, 'role': 'ROLE_USER', 'parts': [{'data': {
+                'version': 1, 'command': 'tool', 'skill': 'place_order', 'arguments': {'quote_id': 'blocked', 'idempotency_key': 'blocked'}}}]}}, at.SendMessageRequest())
+            with pytest.raises(DomainError) as blocked_a2a:
+                gateway.a2a.send(params, p)
+            assert blocked_a2a.value.code == 'CONCURRENT_CONTEXT'
     # A separate connection for the same autonomous agent has no continuity grant.
     second = connect(http, admin_headers)
     q = quote(http, bearer(second), need, "464306", 1000)

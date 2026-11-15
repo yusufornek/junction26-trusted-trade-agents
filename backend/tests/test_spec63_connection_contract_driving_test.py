@@ -12,7 +12,7 @@ from mcp import Client, types as mt
 from app.agent_surface import surface
 from app.api import create_app
 from app.auth import Principal
-from app.connection_contract import CONTRACT_META, manager
+from app.connection_contract import CONTRACT_META, ConnectionContract, manager
 from app.connection_contract_driving import driving
 from app.db import DomainError
 from app.foundation import PRINCIPAL
@@ -291,6 +291,20 @@ def test_AC_5_measured_failed_and_passing_runs_signatures_and_order_gate(gateway
 def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, need, upstream, tmp_path):
     demo_catalog(gateway, tmp_path, upstream)
     connection, p = connect(gateway, "hotel-chain-agent")
+    _, existing_other = connect(gateway, "pre-feature-agent")
+    _, attempted = connect(gateway, "attempted-agent")
+    driving(gateway).start(attempted)
+    assert not driving(gateway).status(p)['valid']  # A new demo-named connection must test too.
+    # Simulate the pre-feature database at upgrade, without touching live storage.
+    with gateway.db.connect(write=True, notify=False) as conn:
+        conn.execute("DELETE FROM workspace WHERE key='connection_contract_legacy_seed_v1'")
+    gateway.connection_contract = ConnectionContract(gateway)
+    assert driving(gateway).status(existing_other)['valid']
+    assert not driving(gateway).status(attempted)['valid']  # An existing attempt is never overwritten.
+    _, new_demo = connect(gateway, "hotel-chain-agent")
+    gateway.connection_contract = ConnectionContract(gateway)  # Restart cannot grandfather new keys.
+    assert not driving(gateway).status(new_demo)['valid']
+    assert 'order' not in driving(gateway).status(new_demo)['enabled_operations']
     owner = gateway.accounts.bind(gateway.settings.keys.resolve("test-operator-token", gateway.policy.get()))
     gateway.connection_trust.confirm(connection.connection_id, owner)
     token = PRINCIPAL.set(p)
@@ -299,8 +313,6 @@ def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, nee
         assert lookup.offers[0].product_id == "464306" and lookup.offers[0].purchase_total == 1010
         quote = gateway.orders.create_quote(QuoteRequest(customer_id="1", deliver_by=need.deliver_by, need_ref=lookup.lookup_id,
             lines=[{"product_id": "464306", "quantity_sales_units": 1000}]), p.id)
-        order = gateway.orders.place_order(quote.id, "contract-demo", p.id)
-        assert order.total == 1010 and order.status == "CONFIRMED"
         for agent in (p, gateway.accounts.bind(Principal("web-console", customer_ids=("1",))),
                       gateway.accounts.bind(Principal("hospital-kitchen-agent", customer_ids=("2",)))):
             status = driving(gateway).status(agent)
@@ -309,3 +321,37 @@ def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, nee
             verify_jws(status["result"]["signature"], status["result"]["payload"], gateway.signing.jwks())
     finally:
         PRINCIPAL.reset(token)
+    # One existing issued key negotiates a different client value, then places
+    # a fresh demo order through each actual HTTP adapter.
+    from test_spec43_oauth_audiences import tool
+    from test_spec62_connection_trust_lifecycle import a2a_tool, mcp_client
+    key = {'Authorization': 'Bearer ' + connection.key}
+    with TestClient(create_app(gateway), base_url='http://localhost') as http:
+        changed = http.post(f'/v1/connections/{p.connection_id}/contract', headers=key, json={
+            'contract_version': manager(gateway).current()['version'], 'protocol_revision': '2026-07-28',
+            'client': json.dumps({'name': 'demo-runtime', 'version': '1.0'})})
+        assert changed.status_code == 200, changed.text
+        mcp_client(http, key, 'demo-runtime')
+        context = http.get('/v1/me', headers=key)
+        assert context.status_code == 200 and context.json()['connection_contract']['valid'], context.text
+        rest = http.post('/v1/orders', headers={**key, 'Idempotency-Key': 'contract-demo'}, json={'quote_id': quote.id})
+        assert rest.status_code == 200, rest.text
+        def mcp_call(name, arguments):
+            value = tool(http, key, name, arguments)
+            assert not value.get('isError'), value
+            return value['structuredContent']
+        results = [rest.json()]
+        for protocol, call in [('mcp', mcp_call), ('a2a', lambda name, args: a2a_tool(http, key, name, args))]:
+            request = need.model_dump(mode='json', exclude={'max_candidates'})
+            offers = call('find_offers', {'need': request})
+            assert offers['offers'][0]['product_id'] == '464306'
+            fresh = call('create_quote', {'customer_id': '1', 'deliver_by': str(need.deliver_by),
+                'need_ref': offers['lookup_id'], 'lines': [{'product_id': '464306', 'quantity_sales_units': 1000}]})
+            results.append(call('place_order', {'quote_id': fresh['id'], 'idempotency_key': 'contract-demo-' + protocol}))
+        assert len({r['id'] for r in results}) == 3
+        for result in results:
+            assert (result['total'], result['status']) == (1010, 'CONFIRMED')
+        # Cross-protocol exact retries still return the original commitment.
+        for call in (mcp_call, lambda name, args: a2a_tool(http, key, name, args)):
+            replay = call('place_order', {'quote_id': quote.id, 'idempotency_key': 'contract-demo'})
+            assert replay['id'] == rest.json()['id']

@@ -146,9 +146,14 @@ def check_source(service, source):
 
 def observe_credential(service, principal, source):
     """Record a runtime only after the request's audience and identity checks pass."""
-    service.connection_trust.seen(principal, source)
-    if principal.kind == "agent" and principal.connection_id and hasattr(service, "governance"):
-        service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
+    from .connection_trust_lifecycle import INTERNAL
+    token = INTERNAL.set(True)
+    try:
+        service.connection_trust.seen(principal, source)
+        if principal.kind == "agent" and principal.connection_id and hasattr(service, "governance"):
+            service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
+    finally:
+        INTERNAL.reset(token)
 
 
 def admit_credential(service, keys, source, secret, resource=None, *, observe=True):

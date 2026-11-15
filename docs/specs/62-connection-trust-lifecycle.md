@@ -23,9 +23,13 @@ withdraws it. Covers consent, token refresh, credential leak or copy, pause and 
   change and before every emission on a stream, subscription or push. Pause or revoke closes open MCP streams, cancels
   subscriptions and push configurations, and fails queued calls with `423 AGENT_PAUSED` or `401` within 5 s.
 - **R-5 Continuity of the governed agent:** earned autonomy (spec 40) belongs to agent + connection + client identity.
-  A new connection, or a new context (network, protocol or client), for an existing agent runs at `approval_required` until the owner
-  confirms it is the same agent. Simultaneous use of one credential from two contexts answers `CONCURRENT_CONTEXT`: the
-  connection becomes read-only and the owner is asked. OAuth connections may use DPoP (RFC 9449) sender-constrained
+  A new connection, or a different client identity, for an existing agent runs at `approval_required` until the owner
+  confirms it is the same agent. Network addresses, User-Agent and REST/MCP/A2A protocol changes do not identify a new
+  runtime (spec 60 cross-protocol use). Only two different client identities (MCP `clientInfo.name`, bound OAuth
+  `client_id`, or A2A `A2A-Client`) active within 30 seconds flag `CONCURRENT_CONTEXT`. Unidentified calls do not prove
+  a second identity. The connection becomes read-only: lookups, product reads, context, health and notifications remain
+  available, including their internal audit/task bookkeeping; state-changing calls answer 409 with the continuity
+  confirmation endpoint and tenant admin / owner authority. OAuth connections may use DPoP (RFC 9449) sender-constrained
   tokens. Seeded demo agents are marked as confirmed.
 - **R-6 Surfaces and audit:** tier, context history and state are in connection health (60 R-8). Events
   `CONNECTION_REAUTH_REQUIRED`, `CONCURRENT_CONTEXT` and `CONNECTION_CONTINUITY_CONFIRMED` are audited and notified
@@ -40,7 +44,9 @@ withdraws it. Covers consent, token refresh, credential leak or copy, pause and 
   window sets `REAUTH_REQUIRED`, and the open intent is resumed after re-consent without a duplicate order.
 - **AC-4** Pausing an agent with an open stream, a resource subscription and a queued order: the stream closes, no
   further update is delivered, and the order answers `423`.
-- **AC-5** A key copied to a second runtime and used in parallel answers `CONCURRENT_CONTEXT` and turns read-only; a new
+- **AC-5** A key shared across REST/MCP/A2A or changing network address stays usable. A key copied to a second runtime
+  with a different client identity turns read-only; reads remain available and mutations answer `CONCURRENT_CONTEXT`
+  with the confirmation endpoint and tenant admin / owner authority. A new
   connection for an agent with earned autonomy needs approval for its first order until the owner confirms continuity.
 - **AC-6** The demo path (464306, 1,010 €, CONFIRMED) is unchanged.
 
@@ -57,15 +63,16 @@ withdraws it. Covers consent, token refresh, credential leak or copy, pause and 
   `mcp_server.py`, `connection_contract_surface.py` (all under `backend/app/`). `.env.example` adds the publisher
   configuration name; `docs/TASKS.md` changes only task 62.
 - REST continuity confirmation: `POST /v1/connections/{id}/trust/confirm` with `{confirmed: true, context_id?}`.
-  Only the agent owner (or platform administrator) can confirm; ambiguous histories require an observed context id.
+  Only the tenant admin, agent owner or platform administrator can confirm; ambiguous histories require an observed context id.
 - REST order grant: `POST /v1/connections/{id}/trust/order-scope`, restricted to a tenant/platform administrator.
 - Health includes `trust`; the owner's `/v1/connection-notifications` inbox and `luotsi://inbox` expose lifecycle
   notices. Audit events enter the existing outbox. No frontend changes or generated artifacts are required in this lane.
 
 ## Decisions taken
 
-- Observed context is the server-observed network peer, transport family (REST, MCP, A2A), and client User-Agent.
-  Two contexts used within 30 seconds count as simultaneous. An owner selects the surviving observed context;
+- Observed context identity uses the MCP client name, bound OAuth client id or A2A client name; network and protocol
+  are diagnostic fields only, and User-Agent is not an identity. Two different identities used within 30 seconds count
+  as simultaneous. The owner or tenant admin selects the surviving observed context;
   another runtime using the credential again triggers the same protection. Bearer credentials cannot distinguish
   runtimes with identical observable context. Optional DPoP is not advertised or implemented.
 - A new connection always starts unconfirmed, including one for an existing demo agent. Deployment-provisioned

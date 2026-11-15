@@ -28,10 +28,15 @@ RAW_ARGUMENTS = ContextVar("connection_contract_raw_arguments", default=None)
 
 async def mcp_boundary(server, name, arguments, context, invoke):
     token = RAW_ARGUMENTS.set(arguments or {})
+    from .connection_trust_lifecycle import READ_OPERATION, read_tool
+    read = read_tool(server, name)
+    read_token = READ_OPERATION.set(read)
     try:
+        server.gateway.connection_trust.check(PRINCIPAL.get(), mutation=not read)
         return await invoke(server, name, arguments, context)
     finally:
         RAW_ARGUMENTS.reset(token)
+        READ_OPERATION.reset(read_token)
 
 
 def supplied_arguments(arguments):
@@ -238,9 +243,21 @@ class SDKContract:
         m, p = manager(self.server.gateway), PRINCIPAL.get()
         params = ctx.params or {}
         meta = params.get("_meta", {}) or {}
+        from .connection_trust_lifecycle import CONTEXT, READ_OPERATION, context, read_tool
+        observed = CONTEXT.get() or context()
+        client = params.get("clientInfo", {}) if ctx.method == "initialize" else {}
+        negotiated = getattr(ctx.session, "client_params", None)
+        client_name = client.get("name") or getattr(getattr(negotiated, "client_info", None), "name", None)
+        stateless_client = meta.get("io.modelcontextprotocol/clientInfo", {})
+        client_name = client_name or (stateless_client.get("name") if isinstance(stateless_client, dict) else None)
+        context_token = CONTEXT.set(context(observed["network"], "mcp", client_name or observed["client"]))
+        read = ctx.method != "tools/call" or read_tool(self.server, params.get("name"))
+        read_token = READ_OPERATION.set(read)
         echo = ECHO.set(meta.get(CONTRACT_META) or (ctx.request.headers.get("luotsi-contract") if ctx.request else None))
         signed = SIGNED_QUOTE.set(meta.get("luotsi/contractPin") == "signed-quote")
         try:
+            if p:
+                self.server.gateway.connection_trust.seen(p)
             if p and p.connection_id and ctx.method != "initialize":
                 state = m.state(p.connection_id)
                 previous = copy.deepcopy(state)
@@ -282,6 +299,8 @@ class SDKContract:
         finally:
             ECHO.reset(echo)
             SIGNED_QUOTE.reset(signed)
+            READ_OPERATION.reset(read_token)
+            CONTEXT.reset(context_token)
 
 
 def register(server):
@@ -430,9 +449,17 @@ def a2a_scope(gateway, params, p):
     if previous and previous[0] != sha256(canonical_json(MessageToDict(params.message))).hexdigest():
         raise DomainError("IDEMPOTENCY_CONFLICT", "Message id belongs to a changed command", 409)
     meta = command.get("_meta", {}) if isinstance(command, dict) else {}
+    from .connection_trust_lifecycle import READ_OPERATION, read_tool
+    read = command.get("command") in {"lookup", "get_evidence"}
+    if command.get("command") == "tool":
+        from .mcp_server import create_server
+        from .agent_surface import effective_audience
+        read = read_tool(create_server(gateway, p.id, audience=effective_audience(p, "buyer"), full_surface=True), command.get("skill"))
+    read_token = READ_OPERATION.set(read)
     echo = ECHO.set(meta.get(CONTRACT_META) or ECHO.get())
     signed = SIGNED_QUOTE.set(meta.get("luotsi/contractPin") == "signed-quote" or SIGNED_QUOTE.get())
     try:
+        gateway.connection_trust.check(p, mutation=not read)
         if command.get("command") in {"lookup", "select_plan", "place_order", "cancel", "confirm_interpretation"}:
             quote_id = None
             if SIGNED_QUOTE.get() and command["command"] == "place_order" and params.message.task_id:
@@ -453,6 +480,7 @@ def a2a_scope(gateway, params, p):
     finally:
         ECHO.reset(echo)
         SIGNED_QUOTE.reset(signed)
+        READ_OPERATION.reset(read_token)
 
 
 def fallback_metadata(gateway, p, state):

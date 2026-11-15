@@ -42,7 +42,7 @@ def failure_audit(gateway, route, arguments, identity, error):
     actor = f"agent:{identity}"
     if route in {"orders.approve", "orders.reject"} and principal:
         actor = "human:operator" if principal.operator else f"human:buyer_approver:{principal.credential_ref}"
-    with gateway.db.connect(write=True) as conn:
+    with gateway.db.connect(write=True, notify=False) as conn:
         audit.append(conn, actor, action + "_FAILED", error.message,
                      order_id=arguments.get("order_id"), quote_id=arguments.get("quote_id"),
                      data={"error": error.code, **error.data, "live_calls": {"price": 0, "availability": 0}})
@@ -599,11 +599,14 @@ def install(gateway, target, name, category):
         token = SUPPLIER.set(supplier or "valio")
         tenant_token = TARGET_TENANT.set(target_tenant)
         principal_token = PRINCIPAL.set(PRINCIPAL.get() or values.get("principal"))
+        from .connection_trust_lifecycle import READ_OPERATION
+        read_token = READ_OPERATION.set(category in {"read", "lookup"})
         label = {"create_quote": "quote.create", "place_order": "order.place", "approve": "approval.review",
                  "reject": "approval.review"}.get(name, "command." + name)
         started = time.perf_counter()
         try:
             with gateway.activate(), span(label, links=saved_links) as current:
+                gateway.connection_trust.check(PRINCIPAL.get(), mutation=category == "mutation")
                 from .connection_contract import manager
                 contract_version = manager(gateway).before(route, values, PRINCIPAL.get(), category)
                 result = execute(*args, **kwargs)
@@ -629,5 +632,6 @@ def install(gateway, target, name, category):
             SUPPLIER.reset(token)
             TARGET_TENANT.reset(tenant_token)
             PRINCIPAL.reset(principal_token)
+            READ_OPERATION.reset(read_token)
 
     setattr(target, name, command)

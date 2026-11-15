@@ -20,6 +20,7 @@ from .foundation import PRINCIPAL, EVENT_ACTIONS
 
 CONTEXT = ContextVar("connection_trust_context", default=None)
 INTERNAL = ContextVar("connection_trust_internal", default=False)
+READ_OPERATION = ContextVar("connection_trust_read_operation", default=False)
 EVENTS = {
     "CONNECTION_REAUTH_REQUIRED": "connection.reauth_required",
     "CONCURRENT_CONTEXT": "connection.concurrent_context",
@@ -78,9 +79,15 @@ def resembles(name, publisher):
                for start in range(max(0, len(name)-length+1)))
 
 
-def context(network="local", protocol="internal", client="local"):
+def context(network="local", protocol="internal", client=""):
     values = {"network": str(network)[:200], "protocol": str(protocol)[:80], "client": str(client)[:300]}
-    return {**values, "id": hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()}
+    return {**values, "id": hashlib.sha256(values["client"].encode()).hexdigest()}
+
+
+def read_tool(server, name):
+    tool = server._tool_manager._tools.get(name)
+    return bool(tool and (name in {"find_offers", "find_basket_offers"} or
+                         tool.annotations and tool.annotations.read_only_hint))
 
 
 class ConnectionTrust:
@@ -192,34 +199,49 @@ class ConnectionTrust:
                 row["agent_id"] != p.agent_id or row["state"] == "REAUTH_REQUIRED"):
             raise DomainError("UNAUTHENTICATED", "Connection requires fresh consent", 401)
         if mutation and row["state"] == "READ_ONLY":
-            raise DomainError("CONCURRENT_CONTEXT", "Connection is read-only until its owner confirms the runtime", 409)
+            raise self.concurrent_error(p.connection_id)
         if (not set(p.customer_ids) <= set(json.loads(row["customer_ids"])) or
                          "*" not in json.loads(row["scopes"]) and not set(p.scopes) <= set(json.loads(row["scopes"]))):
             raise DomainError("INSUFFICIENT_SCOPE", "Connection authority changed before commit", 403)
         return row
+
+    def concurrent_error(self, cid):
+        endpoint = f"/v1/connections/{cid}/trust/confirm"
+        return DomainError("CONCURRENT_CONTEXT",
+            f"Connection is read-only; the tenant admin or agent owner must confirm the client at POST {endpoint}",
+            409, {"confirm_url": endpoint, "confirmed_by": ["tenant_admin", "owner"], "connection_id": cid})
 
     def seen(self, p, source=None):
         if not p.connection_id or p.kind != "agent":
             self.check(p)
             return
         ctx = CONTEXT.get() or context(source or "local")
-        failure = None
         internal = INTERNAL.set(True)
         try:
             with self.db.connect(write=True) as conn:
                 self.check(p, conn)
                 self.created(conn, p.connection_id)
                 trust = conn.execute("SELECT * FROM connection_trust WHERE connection_id=?", (p.connection_id,)).fetchone()
+                credential = conn.execute("SELECT credential_kind FROM connections WHERE connection_id=?", (p.connection_id,)).fetchone()
+                if credential[0] == "oauth":
+                    ctx = context(ctx["network"], ctx["protocol"], trust["client_id"])
+                # IPs, transport headers and User-Agent are not client identities.
+                # Unidentified requests do not establish a second runtime.
+                if not ctx["client"]:
+                    return
                 old = conn.execute("SELECT * FROM connection_trust_contexts WHERE connection_id=? AND id=?", (p.connection_id, ctx["id"])).fetchone()
-                others = conn.execute("SELECT * FROM connection_trust_contexts WHERE connection_id=? AND id<>? AND last_seen>=?", (p.connection_id, ctx["id"], (self.clock()-timedelta(seconds=self.grace)).isoformat())).fetchall()
-                had_context = conn.execute("SELECT 1 FROM connection_trust_contexts WHERE connection_id=?", (p.connection_id,)).fetchone()
+                others = conn.execute("SELECT * FROM connection_trust_contexts WHERE connection_id=? AND client<>? AND last_seen>=?", (p.connection_id, ctx["client"], (self.clock()-timedelta(seconds=self.grace)).isoformat())).fetchall()
+                # Older history used User-Agent/IP/protocol hashes. Keep it for
+                # diagnostics, but it cannot establish a client identity.
+                others = [r for r in others if r["client"] and r["id"] == context(client=r["client"])["id"]]
+                history = conn.execute("SELECT id,client FROM connection_trust_contexts WHERE connection_id=?", (p.connection_id,)).fetchall()
+                had_context = any(r["client"] and r["id"] == context(client=r["client"])["id"] for r in history)
                 now = self.clock().isoformat()
                 conn.execute("INSERT INTO connection_trust_contexts VALUES(?,?,?,?,?,?,?) ON CONFLICT(connection_id,id) DO UPDATE SET last_seen=excluded.last_seen",
                              (p.connection_id, ctx["id"], ctx["network"], ctx["protocol"], ctx["client"], now, now))
                 if others and trust["state"] != "READ_ONLY":
                     conn.execute("UPDATE connection_trust SET state='READ_ONLY',confirmed=0 WHERE connection_id=?", (p.connection_id,))
                     self.event(conn, p.connection_id, "CONCURRENT_CONTEXT")
-                    failure = DomainError("CONCURRENT_CONTEXT", "Credential is active in two contexts; owner confirmation required", 409)
                 elif not old and had_context:
                     conn.execute("UPDATE connection_trust SET confirmed=0 WHERE connection_id=?", (p.connection_id,))
                     self.event(conn, p.connection_id, "CONNECTION_CONTINUITY_REQUIRED")
@@ -227,8 +249,6 @@ class ConnectionTrust:
                     conn.execute("UPDATE connection_trust SET confirmed_context=? WHERE connection_id=?", (ctx["id"], p.connection_id))
         finally:
             INTERNAL.reset(internal)
-        if failure:
-            raise failure
 
     def is_live(self, p):
         try:
@@ -271,7 +291,7 @@ class ConnectionTrust:
             return
         p = PRINCIPAL.get()
         if p and p.kind == "agent":
-            self.check(p, conn, mutation=mutation and conn.total_changes > 0)
+            self.check(p, conn, mutation=mutation and conn.total_changes > 0 and not READ_OPERATION.get())
             if epoch is not None and self.epoch(conn) != epoch:
                 raise DomainError("POLICY_CHANGED", "Policy epoch changed before commit; retry under current authority", 409)
         conn.execute("DELETE FROM connection_trust_refresh WHERE expires_at<?", (self.clock().isoformat(),))
@@ -359,8 +379,8 @@ class ConnectionTrust:
         with self.db.connect(write=True) as conn:
             c = self.gateway.connections.get(cid, p)
             owner = conn.execute("SELECT owner_user_id FROM main.tenant_agents WHERE agent_id=?", (c.agent_id,)).fetchone()
-            if not p.operator and (not owner or owner[0] != p.user_id):
-                raise DomainError("OWNER_REQUIRED", "Only the governed agent's owner confirms continuity", 403)
+            if not p.operator and p.role != "tenant_admin" and (not owner or owner[0] != p.user_id):
+                raise DomainError("OWNER_REQUIRED", "Only the tenant admin or governed agent's owner confirms continuity", 403)
             self.created(conn, cid)
             state = conn.execute("SELECT state FROM connection_trust WHERE connection_id=?", (cid,)).fetchone()[0]
             if c.revoked_at or c.expires_at and c.expires_at <= audit.utcnow() or state == "REAUTH_REQUIRED":
