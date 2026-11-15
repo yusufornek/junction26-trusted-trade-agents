@@ -449,7 +449,13 @@ def principal(server):
     if p is None and server.agent_id:
         policy = server.gateway.policy.get()
         row = policy.agents.get(server.agent_id)
-        p = server.gateway.accounts.bind(Principal(server.agent_id, customer_ids=tuple(row.customer_ids) if row else ()))
+        identity = policy.identities.get(server.agent_id)
+        org = identity.organisation_id if identity else None
+        customers = policy.organisations[org].customer_ids if org in policy.organisations else row.customer_ids if row else ()
+        p = server.gateway.accounts.bind(Principal(server.agent_id,
+            kind=identity.kind if identity else "agent", organisation_id=org,
+            role=identity.role if identity else "agent", customer_ids=tuple(customers),
+            credential_ref="stdio:" + server.agent_id))
     if p is None:
         raise DomainError("UNAUTHENTICATED", "An authenticated principal is required", 401)
     return p

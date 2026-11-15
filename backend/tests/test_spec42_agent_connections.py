@@ -213,6 +213,9 @@ def test_ac_5_connection_key_rest_lookup_quote_and_audit_actor(gateway, need, up
 
 def test_ac_6_list_newest_first_includes_revoked_without_key_or_digest(gateway, monkeypatch):
     now = audit.utcnow()
+    # App/schema startup can exceed the two-second ordering gap on a loaded
+    # integration runner. Both issuance timestamps must use the fixture clock.
+    monkeypatch.setattr("app.connections.audit.utcnow", lambda: now)
     with TestClient(create_app(gateway)) as client:
         older = issue(client).json()
         monkeypatch.setattr("app.connections.audit.utcnow", lambda: now + timedelta(seconds=2))

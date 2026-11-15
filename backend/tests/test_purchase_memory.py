@@ -194,7 +194,7 @@ def test_ac_5_make_recurring_uses_pattern_baseline_normal_runs_and_drift_and_mcp
         assert suggestions(client) == []
         upstream.need.deliver_by = audit.utcnow().astimezone(ZoneInfo(row["cadence"]["timezone"])).date()
         first = tool(gateway, "run_recurring_order_now", {"recurring_order_id": row["id"]})
-        assert not first.is_error and first.structured_content["status"] == "CONFIRMED"
+        assert not first.is_error and first.structured_content["status"] == "CONFIRMED", first.structured_content
         assert first.structured_content["comparison"]["diff"] == []
         when = audit.utcnow() + timedelta(days=1)
         upstream.need.deliver_by = when.astimezone(ZoneInfo(row["cadence"]["timezone"])).date()

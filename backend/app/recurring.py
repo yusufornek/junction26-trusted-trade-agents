@@ -397,7 +397,7 @@ class Recurring:
                              data={"id": id, "customer_id": row["customer_id"], **result})
             else:
                 # Scheduler authority is the original agent; the caller cannot lend its privileges.
-                context = PRINCIPAL.set(Principal(row["agent_id"], customer_ids=(row["customer_id"],)))
+                context = PRINCIPAL.set(self.g.accounts.bind(Principal(row["agent_id"], customer_ids=(row["customer_id"],))))
                 try:
                     data = dict(row["template"])
                     # Cadence timezone controls occurrence identity; delivery

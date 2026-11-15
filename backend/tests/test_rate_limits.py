@@ -170,7 +170,10 @@ def test_unknown_credentials_limited_before_authentication(gateway, monkeypatch)
 def test_review_legacy_replay_charged_as_read(gateway, need, upstream):
     quote = make_quote(gateway, need)
     # Simulate a pre-command-boundary record, including the original raw key format.
-    order = gateway.orders.place_order.__wrapped__(quote.id, 'legacy')
+    # Specs 47/64 add intent/handoff wrappers above the shared command boundary.
+    # Unwrap the complete chain to construct a genuinely pre-command record.
+    from inspect import unwrap
+    order = unwrap(gateway.orders.place_order)(quote.id, 'legacy')
     with gateway.db.connect(write=True) as conn:
         conn.execute("UPDATE orders SET idempotency_key='legacy' WHERE id=?", (order.id,))
         assert conn.execute('SELECT count(*) FROM commands').fetchone()[0] == 0

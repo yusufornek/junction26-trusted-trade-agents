@@ -356,12 +356,13 @@ def install(gateway):
     @wraps(place_order)
     def place(quote_id, idempotency_key, agent_id="external", **kwargs):
         authority.guard("order")
-        with gateway.db.connect() as conn:
-            row = conn.execute("SELECT data FROM quotes WHERE id=?", (quote_id,)).fetchone()
-        if not row:
+        try:
+            with gateway.db.connect() as conn:
+                q = orders._verified_quote(conn, quote_id, agent_id)
+        except DomainError:
+            # The order command owns refusal auditing. Never parse or use a
+            # malformed/unsigned promise as handoff authority ahead of it.
             return place_order(quote_id, idempotency_key, agent_id, **kwargs)
-        from .models import Quote
-        q = Quote.model_validate_json(row[0])
         p = PRINCIPAL.get()
         chain = (q.context or {}).get("actor_chain")
         token = PRINCIPAL.set(authority.declared(p, chain)) if p and chain else None

@@ -334,7 +334,8 @@ class Proposals:
                         raise DomainError("BUYER_AGENT_REQUIRED", "Select an agent in your buyer organisation", 403)
                 if body.need.customer_id != proposal["customer_id"]:
                     raise DomainError("CUSTOMER_FORBIDDEN", "Need must use the proposal customer", 403)
-                context = PRINCIPAL.set(Principal(agent, customer_ids=(proposal["customer_id"],)))
+                buyer = principal if principal.kind == "agent" else Principal(agent, customer_ids=(proposal["customer_id"],))
+                context = PRINCIPAL.set(self.g.accounts.bind(buyer))
                 try:
                     self.g.valio.cache.clear()
                     lookup = self.g.find_offers(body.need, f"agent:{agent}", mandate=mandate, product_ids=proposal["products"])

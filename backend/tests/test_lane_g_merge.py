@@ -46,7 +46,8 @@ def test_tenant_protocols_keep_human_tools_and_governance(http, gateway):
 
 def test_revoked_tenant_connection_stops_customerless_governance_webhooks(http, gateway, receiver):
     admin = sign(http)
-    key = connect(http, admin, audience="tenant")
+    # Spec 61 requires opt-in for pause notifications and uses one event envelope.
+    key = connect(http, admin, audience="tenant", notifications={"agent_paused": True})
     principal = gateway.accounts.session(admin["Cookie"].partition("=")[2])
     subscription = http.post("/v1/tenant/webhook-subscriptions", headers=bearer(key), json={
         "url": "https://receiver.test/hook", "customer_ids": ["1"], "audience": "tenant",
@@ -56,7 +57,7 @@ def test_revoked_tenant_connection_stops_customerless_governance_webhooks(http, 
     gateway.webhooks.dispatch()
     assert len(receiver["calls"]) == 1
     delivered = receiver["calls"][0]
-    assert json.loads(delivered.content)["type"] == "governance.agent_paused"
+    assert json.loads(delivered.content)["type"] == "agent_paused"
     assert verify_webhook(delivered.content, delivered.headers, gateway.signing.jwks())
     assert http.delete("/v1/tenant/connections/" + key["connection_id"], headers=admin).status_code == 200
     gateway.governance.pause("hotel-chain-agent", False, "Review complete", principal)

@@ -8,6 +8,7 @@ from app import audit
 from app.api import create_app
 from conftest import OPERATOR_HEADERS
 from app.models import Order, PolicyUpdateRequest
+from app.service import Gateway
 from conftest import quote_request
 from scripts import reset_demo as reset_script
 
@@ -59,9 +60,15 @@ def test_ac_1_reset_clears_transaction_state_and_restores_default_policy(gateway
         for table in ("orders", "quotes", "lookups", "reservations", "audit"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     assert not reset_paths["runtime_policy_path"].exists()
-    with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
-        assert client.get("/v1/policy").json() == defaults
-        assert client.get("/v1/approvals").json() == []
+    # Reset requires a stopped API. Restart its services too: specs 60-64 create
+    # connection storage during gateway initialization, never in the catalog reset.
+    restarted = Gateway(gateway.settings)
+    try:
+        with TestClient(create_app(restarted), headers=OPERATOR_HEADERS) as client:
+            assert client.get("/v1/policy").json() == defaults
+            assert client.get("/v1/approvals").json() == []
+    finally:
+        restarted.close()
 
 
 def test_ac_2_archive_preserves_database_sidecars_and_changed_policy(gateway, reset_paths, demo_state):
@@ -142,4 +149,8 @@ def test_ac_5_cli_refuses_running_api_without_changes_and_force_proceeds(
     archive, = reset_paths["archive_root"].iterdir()
     assert str(archive) in output and "Catalog products: 7" in output
     assert ".venv/bin/python -m uvicorn app.api:app --port 8123" in output
-    assert gateway.orders.list_orders() == []
+    restarted = Gateway(gateway.settings)
+    try:
+        assert restarted.orders.list_orders() == []
+    finally:
+        restarted.close()

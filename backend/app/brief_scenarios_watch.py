@@ -61,22 +61,28 @@ class StockoutWatch:
                     for line in row["approved_lines"]:
                         yield f"recurring:{row['id']}:{occurrence.date()}", row["agent_id"], delivery, line["product_id"], row["template"], token
         with self.g.db.connect() as conn:
-            quotes = [json.loads(r[0]) for r in conn.execute("SELECT data FROM quotes WHERE json_extract(data,'$.status')='OPEN'")]
+            quotes = conn.execute("SELECT id,json_extract(data,'$.need_ref') AS need_ref FROM quotes WHERE json_extract(data,'$.status')='OPEN'").fetchall()
             baskets = [json.loads(r[0]) for r in conn.execute("SELECT data FROM basket_lookups")]
             ordered = {r[0] for r in conn.execute("SELECT json_extract(data,'$.need_ref') FROM quotes WHERE json_extract(data,'$.status')!='OPEN'")}
-        quoted = {q.get("need_ref") for q in quotes}
-        for quote in quotes:
-            delivery = datetime.fromisoformat(quote["deliver_by"]).date()
-            if not today <= delivery <= last_day or datetime.fromisoformat(quote["expires_at"]) <= now:
-                continue
+        quoted = {q["need_ref"] for q in quotes}
+        for row in quotes:
             with self.g.db.connect() as conn:
-                lookup = self.g.orders.lookup_need(conn, quote.get("need_ref"))
+                try:
+                    # Monitoring must authenticate the same promise as placement
+                    # before using any stored fields to make supplier calls.
+                    quote = self.g.orders._verified_quote(conn, row["id"], None)
+                except DomainError:
+                    continue
+                delivery = quote.deliver_by
+                if not today <= delivery <= last_day or quote.expires_at <= now:
+                    continue
+                lookup = self.g.orders.lookup_need(conn, quote.need_ref)
                 from .baskets import bound_need
-                for line in quote["lines"]:
-                    need = bound_need(conn, lookup, line["product_id"]) if lookup else None
+                for line in quote.lines:
+                    need = bound_need(conn, lookup, line.product_id) if lookup else None
                     if need:
-                        token = self.g.mandates.stored(conn, "quote", quote["id"])
-                        yield "quote:"+quote["id"], quote["agent_id"], delivery, line["product_id"], need.model_dump(mode="json"), token
+                        token = self.g.mandates.stored(conn, "quote", quote.id)
+                        yield "quote:"+quote.id, quote.agent_id, delivery, line.product_id, need.model_dump(mode="json"), token
         for basket in baskets:
             if basket["basket_lookup_id"] in quoted | ordered:
                 continue

@@ -94,7 +94,8 @@ def test_ac_1_credentials_and_startup(client, need, monkeypatch):
                         "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/oauth/authorize",
                         "/oauth/register", "/oauth/token", "/.well-known/oauth-authorization-server",
                         "/a2a/tenant/.well-known/agent-card.json", "/a2a/operator/.well-known/agent-card.json",
-                        "/v1/connect/tool-pack"}:
+                        # Spec 63 publishes commercial semantics before authentication.
+                        "/v1/connect/trading-profile", "/v1/connect/tool-pack"}:
                 continue
             expected = {"SessionCookie": []} if path.startswith("/oauth/") else {"BearerAuth": []}
             assert expected in operation["security"]

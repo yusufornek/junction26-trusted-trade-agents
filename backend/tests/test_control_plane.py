@@ -118,17 +118,18 @@ def test_policy_update_reset_audit_and_reload(gateway, need, upstream):
 
 
 @pytest.mark.parametrize("section,field,value,message", [
-    ("approval", "max_auto_total_eur", -1, "greater than or equal to 0"),
-    ("approval", "min_fit_probability", -0.1, "greater than or equal to 0"),
-    ("approval", "min_fit_probability", 1.1, "less than or equal to 1"),
-    ("ranking_weights", "price", -1, "greater than or equal to 0"),
-    ("shortlist", "catalog_pool", 9, "greater than or equal to 10"),
-    ("shortlist", "catalog_pool", 101, "less than or equal to 100"),
-    ("shortlist", "catalog_pool", 10.5, "valid integer"),
+    ("approval", "max_auto_total_eur", -1, "less than the minimum of 0"),
+    ("approval", "min_fit_probability", -0.1, "less than the minimum of 0"),
+    ("approval", "min_fit_probability", 1.1, "greater than the maximum of 1"),
+    ("ranking_weights", "price", -1, "less than the minimum of 0"),
+    ("shortlist", "catalog_pool", 9, "less than the minimum of 10"),
+    ("shortlist", "catalog_pool", 101, "greater than the maximum of 100"),
+    ("shortlist", "catalog_pool", 10.5, "not of type 'integer'"),
     ("approval", "warnings_need_approval", ["TYPO"], "Unknown warning codes: TYPO"),
     ("reject", "on", ["TYPO"], "Unknown warning codes: TYPO"),
 ])
 def test_policy_validation_no_side_effects(gateway, section, field, value, message):
+    # Spec 63 validates the published JSON schema before Pydantic coercion.
     with TestClient(create_app(gateway), headers=OPERATOR_HEADERS) as client:
         before = client.get("/v1/policy").json()
         body = editable(before)

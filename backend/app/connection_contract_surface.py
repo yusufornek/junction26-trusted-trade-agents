@@ -67,7 +67,13 @@ def strict_schema(schema):
 
 def validate_arguments(value, schema):
     """Reject, never repair or discard a client's arguments before dispatch."""
-    errors = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda e: (e.validator != "additionalProperties", e.validator != "required", str(e.path)))
+    def leaves(error):
+        if error.context:
+            return [leaf for child in error.context for leaf in leaves(child)]
+        return [error]
+
+    errors = sorted((leaf for error in Draft202012Validator(schema).iter_errors(value) for leaf in leaves(error)),
+        key=lambda e: (e.validator != "additionalProperties", e.validator != "required", -len(e.absolute_path), str(e.absolute_path)))
     if not errors:
         return
     error = errors[0]
@@ -89,12 +95,13 @@ def validate_arguments(value, schema):
         data["field"] = ".".join(map(str, path))
         code = "ARGUMENT_REQUIRED"
     data["violations"].append({"field": ".".join(map(str, path)), "problem": error.message,
-        "valid_values": list(error.schema.get("properties", {})), "nearest_known_field": data.get("nearest_known_field")})
+        "valid_values": error.schema.get("enum", list(error.schema.get("properties", {}))), "nearest_known_field": data.get("nearest_known_field")})
+    message = f"{'.'.join(map(str, path))}: {error.message}" if path else error.message
     if code == "UNKNOWN_ARGUMENT":
-        raise DomainError("UNKNOWN_ARGUMENT", error.message, 422, data)
+        raise DomainError("UNKNOWN_ARGUMENT", message, 422, data)
     if code == "ARGUMENT_REQUIRED":
-        raise DomainError("ARGUMENT_REQUIRED", error.message, 422, data)
-    raise DomainError("VALIDATION_ERROR", error.message, 422, data)
+        raise DomainError("ARGUMENT_REQUIRED", message, 422, data)
+    raise DomainError("VALIDATION_ERROR", message, 422, data)
 
 
 class ContractBody(BaseModel):
@@ -202,6 +209,7 @@ def install(app):
                     if not hasattr(route, "body_field") or not route.body_field:
                         continue
                     if route.matches(request.scope)[0] == Match.FULL:
+                        request.scope["route"] = route
                         try:
                             value = await request.json()
                         except (ValueError, UnicodeDecodeError):
@@ -211,6 +219,11 @@ def install(app):
                         break
             return await call_next(request)
         except DomainError as error:
+            # The strict schema boundary precedes FastAPI dependency resolution.
+            # Preserve the route's authentication/role gates on malformed calls.
+            refused = await app.state.parsing_auth_error(request)
+            if refused is not None:
+                return refused
             return JSONResponse(problem(error, request.url.path), error.status, media_type="application/problem+json")
         finally:
             ECHO.reset(echo)

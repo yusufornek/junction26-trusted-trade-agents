@@ -452,9 +452,11 @@ class Webhooks:
                 try:
                     extra = notification_headers(sub.get("push_config") or {})
                     from .connection_trust_transports import push_authority
-                    with self.db.connect(write=True, notify=False) as conn:
+                    # Check live authority immediately before emission, without
+                    # holding the database writer lock across receiver I/O.
+                    with self.db.connect() as conn:
                         push_authority(self.gateway, conn, sub)
-                        response = self._post(sub["url"], delivery["body"].encode(), row["event_id"], extra)
+                    response = self._post(sub["url"], delivery["body"].encode(), row["event_id"], extra)
                     http_status = response.status_code
                     if not 200 <= http_status < 300:
                         raise ValueError()

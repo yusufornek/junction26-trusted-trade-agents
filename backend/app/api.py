@@ -278,6 +278,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True, includ
                 return await domain_error(request, auth_error)
         return None
 
+    app.state.parsing_auth_error = parsing_auth_error
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
         refused = await parsing_auth_error(request)

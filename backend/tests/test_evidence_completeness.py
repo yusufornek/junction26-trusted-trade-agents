@@ -492,13 +492,15 @@ def test_ac_4_codes_normalize_and_unknowns_have_valid_values_rest_and_mcp(gatewa
                 target = target[part]
             target[parts[-1]] = value if field == "quantity.unit" else [value]
             refused = client.post("/v1/offers", json=invalid)
-            assert refused.status_code == 422 and refused.json()["code"] == "UNKNOWN_CODE"
+            # Spec 63 rejects the published unit enum before domain vocabulary checks.
+            expected_code = "VALIDATION_ERROR" if field == "quantity.unit" else "UNKNOWN_CODE"
+            assert refused.status_code == 422 and refused.json()["code"] == expected_code
             assert field in refused.json()["message"] and valid in refused.json()["message"]
 
             async def check():
                 error = await create_server(gateway, "external").call_tool("find_offers", {"need": invalid})
                 assert error.is_error
-                assert error.structured_content["code"] == "UNKNOWN_CODE"
+                assert error.structured_content["code"] == expected_code
             asyncio.run(check())
 
 
@@ -526,7 +528,8 @@ def test_ac_5_request_bounds_rest_and_mcp_match(gateway, need, upstream):
                 error = await server.call_tool("find_offers", {"need": body})
                 assert error.is_error
                 data = error.structured_content
-                assert data["code"] == response.json()["code"] == "VALIDATION_ERROR"
+                expected_code = "ARGUMENT_REQUIRED" if body is missing else "VALIDATION_ERROR"  # Spec 63 R-2.
+                assert data["code"] == response.json()["code"] == expected_code
                 assert field in data["message"]
             asyncio.run(matching())
         app = create_server(gateway, "external").streamable_http_app(stateless_http=True, json_response=True)
@@ -535,7 +538,7 @@ def test_ac_5_request_bounds_rest_and_mcp_match(gateway, need, upstream):
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": "find_offers", "arguments": {"need": missing}}})
             result = response.json()["result"]
-            assert result["isError"] and json.loads(result["content"][0]["text"])["code"] == "VALIDATION_ERROR"
+            assert result["isError"] and json.loads(result["content"][0]["text"])["code"] == "ARGUMENT_REQUIRED"
     for value in (0, -1, 2e6, True, "2"):
         with pytest.raises(ValidationError, match="quantity_sales_units"):
             QuoteLineRequest(product_id="1", quantity_sales_units=value)
