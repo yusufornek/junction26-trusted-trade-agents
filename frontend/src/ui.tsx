@@ -101,6 +101,27 @@ const RULE_LABELS: Record<string, string> = {
 export const ruleLabel = (code: string) =>
   RULE_LABELS[code] ?? code.charAt(0).toUpperCase() + code.slice(1).toLowerCase().replaceAll("_", " ");
 
+// GS1 AllergenTypeCode names, only for codes we are sure of (cross-checked with backend/app/catalog.py).
+// Any other code is shown bare: guessing an allergen's meaning is worse than showing the code.
+export const ALLERGEN_NAMES: Record<string, string> = {
+  AC: "crustaceans", AE: "eggs", AF: "fish", AM: "milk", AN: "tree nuts", AP: "peanuts", AS: "sesame",
+  AU: "sulphites", AW: "cereals with gluten", AY: "soy", BC: "celery", BM: "mustard", ML: "lactose", NL: "lupin",
+  UM: "molluscs", UW: "wheat", GB: "barley", NR: "rye", GO: "oats", GS: "spelt", GK: "kamut", SA: "almond",
+  SH: "hazelnut", SW: "walnut", SC: "cashew", SP: "pecan", SR: "brazil nut", ST: "pistachio", SM: "macadamia",
+  PN: "pine nut", X99: "declaration marker",
+};
+/** "AE" → "eggs"; an unknown code reads "allergen XY". */
+export const allergenName = (code: string) => ALLERGEN_NAMES[code] ?? `allergen ${code}`;
+
+/** Spec 64 R-6: data.actor_chain runs from the original requester to the caller, e.g. ["chef-bot", "buyer-bot"] →
+ *  "Agent buyer-bot for agent chef-bot"; null when an agent acted for itself. */
+export function actorChainText(data: Record<string, unknown> | null | undefined): string | null {
+  const chain = data?.actor_chain;
+  if (!Array.isArray(chain) || chain.length < 2) return null;
+  const text = [...chain].reverse().map((name) => `agent ${String(name)}`).join(" for ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** A rejected order lists every rule that fired, but only reject-listed codes and binding hard-constraint violations
  *  decided it (same test as the gateway's policy.py); the rest would only have asked for a human. Unknown policy: none. */
 export function splitRejection(hits: RuleHit[], policy: PolicyResource | null): [RuleHit[], RuleHit[]] {
@@ -172,6 +193,23 @@ const FRIENDLY: Record<string, string> = {
   OPERATOR_REQUIRED: "Only the gateway operator can do this.",
   UPSTREAM_BUSY: "The supplier is busy. Try again in a moment.",
   UPSTREAM_RATE_LIMITED: "The supplier asked us to slow down. Try again in half a minute.",
+  // Push 5 (specs 47, 61–64).
+  UNKNOWN_ARGUMENT: "The request had a field the gateway does not know. Nothing was done.",
+  ARGUMENT_REQUIRED: "A required field is missing, such as the quantity, customer or delivery date. Nothing was done.",
+  CONTRACT_STALE: "The gateway's rules changed since this connection last checked. Refresh and try again.",
+  REEVALUATION_REQUIRED: "The rules changed since this quote. Look up and quote again before ordering.",
+  DRIVING_TEST_REQUIRED: "This connection can't order yet. Run its driving test on the Connect page first.",
+  CONCURRENT_CONTEXT: "This agent key is in use in two places, so it is read-only until its owner confirms it.",
+  REAUTH_REQUIRED: "This connection has to sign in again before it can continue.",
+  INTENT_HANDED_OVER: "Another agent now holds this purchase. Only that agent can continue it.",
+  POSSIBLE_DUPLICATE_DEMAND: "This looks like a purchase that is already open. Say whether it replaces it or comes on top.",
+  HANDOFF_MODE: "This handover only lets the agent prepare the order. The original agent has to place it.",
+  OUTSIDE_DELEGATION: "That is outside what this agent was asked to do on another agent's behalf.",
+  UNKNOWN_PRINCIPAL_IN_CHAIN: "The request names an agent this organisation does not know.",
+  STALE_EVENT: "Things changed since this notification. Refresh before acting on it.",
+  ALREADY_CLAIMED: "Another connection is already handling this.",
+  CONSENT_STALE: "Where these notifications go changed, so a person has to approve them again.",
+  EVENT_STORM: "Agents kept answering each other's notifications, so the gateway stopped the chain.",
 };
 
 export function ErrorNote({ error }: { error: unknown }) {

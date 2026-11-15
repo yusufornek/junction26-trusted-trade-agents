@@ -32,6 +32,7 @@ import {
   splitRejection,
   useAsync,
   when,
+  actorChainText,
 } from "../ui";
 
 const STEP_ICON: Record<TimelineStep["step"], typeof Search> = {
@@ -215,7 +216,9 @@ export default function OrderDetail() {
                           <span className="text-[13px] font-medium">{s.action.replaceAll("_", " ").toLowerCase()}</span>
                           <span className="text-[11px] text-ink-soft">{when(s.ts)}</span>
                         </div>
-                        <div className="text-[12px] text-ink-muted">{s.actor}</div>
+                        <div className="text-[12px] text-ink-muted break-words" title={s.actor}>
+                          {actorChainText(s.data) ?? s.actor}
+                        </div>
                         {s.summary ? <p className="mt-1 text-[13px]">{s.summary}</p> : null}
                         {s.live_calls || s.decision_calls || s.hash ? (
                           <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-ink-muted">

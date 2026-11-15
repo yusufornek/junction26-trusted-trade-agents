@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
-import { api } from "../api";
-import { Card, Countdown, ErrorNote, Spinner, useAsync } from "../ui";
+import { api, type ConsentRequest } from "../api";
+import { Card, Countdown, ErrorNote, Spinner, dateOnly, useAsync } from "../ui";
+import { NOTIFICATION_TYPES, trustApi, type ConsentExtras, type NotificationConsent } from "../connectTrust";
 
 const NEW = "";
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const SCOPE_WORDS: Record<string, string> = { mcp: "Use this gateway's purchasing tools: search, offers, quotes and orders" };
 
 /** The gateway's OAuth sign-in lands here (FRONTEND_CONSENT_URL) with ?request_id=. The shell has already asked for
@@ -12,7 +14,11 @@ const SCOPE_WORDS: Record<string, string> = { mcp: "Use this gateway's purchasin
 export default function Consent() {
   const [params] = useSearchParams();
   const id = params.get("request_id") ?? "";
-  const request = useAsync(() => (id ? api.consentRequest(id) : Promise.reject(new Error("no request"))), [id]);
+  const request = useAsync(
+    () => (id ? (api.consentRequest(id) as Promise<ConsentRequest & ConsentExtras>) : Promise.reject(new Error("no request"))),
+    [id],
+  );
+  const [notify, setNotify] = useState<NotificationConsent | null>(null);
   const [agent, setAgent] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState("");
   const [customers, setCustomers] = useState<string[] | null>(null);
@@ -35,12 +41,18 @@ export default function Consent() {
   const agentId = chosen === NEW ? newAgent.trim() : chosen;
   const picked = customers ?? (r.customer_ids.length === 1 ? r.customer_ids : []);
   const validAgent = /^[a-z0-9][a-z0-9-]{1,47}$/.test(agentId);
+  // Only a gateway that offers notification choices gets them back; its own defaults come with the request.
+  const notifications = notify ?? r.notifications;
+  const unverified = r.client_tier !== undefined && r.client_tier !== "verified";
 
   const decide = async (decision: "approve" | "deny") => {
     setBusy(decision);
     setError(null);
     try {
-      const result = await api.consentDecision(id, decision === "deny" ? { decision } : { decision, agent_id: agentId, customer_ids: picked });
+      const result =
+        decision === "deny"
+          ? await api.consentDecision(id, { decision })
+          : await trustApi.approveConsent(id, { agent_id: agentId, customer_ids: picked, ...(notifications ? { notifications } : {}) });
       setLeaving(true);
       // replace, not assign: the answer carries a one-time code and must not sit in this window's history.
       window.location.replace(result.redirect_url);
@@ -66,6 +78,18 @@ export default function Consent() {
           </p>
         </div>
       </div>
+
+      {r.client_tier !== undefined ? (
+        <div className={`rounded-[var(--radius-tile)] p-3 text-[13px] ${unverified ? "bg-warn-soft text-warn" : "bg-positive-soft text-positive"}`}>
+          {/* The label is the gateway's own: it names the publisher this client is not, when its name resembles one. */}
+          <strong>{unverified ? capitalise(r.verification_label || "not verified") : "Verified publisher"}</strong>
+          {/* The redirect host is already in the heading above. */}
+          <div className="mt-0.5">
+            {r.registered_at ? `Registered with this gateway on ${dateOnly(r.registered_at)}.` : "Registration date unknown."}
+            {unverified ? " Every order it places waits for a person's approval." : ""}
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-[var(--radius-tile)] bg-page p-3 text-[13px]">
         <div className="label mb-1">It asks to</div>
@@ -119,6 +143,26 @@ export default function Consent() {
         </div>
         <span className="text-[12px] text-ink-muted">Choosing customers here never widens what the agent's mandate allows.</span>
       </fieldset>
+
+      {notifications ? (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="label mb-1.5">It may tell you when</legend>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {NOTIFICATION_TYPES.map(([key, words]) => (
+              <label key={key} className="flex cursor-pointer items-start gap-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-brand"
+                  checked={!!notifications[key]}
+                  onChange={(e) => setNotify({ ...notifications, [key]: e.target.checked })}
+                />
+                {words}
+              </label>
+            ))}
+          </div>
+          <span className="text-[12px] text-ink-muted">You can change these later on the Connect page.</span>
+        </fieldset>
+      ) : null}
 
       {error ? <ErrorNote error={error} /> : null}
 

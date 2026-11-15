@@ -3,11 +3,23 @@ import { Link } from "react-router-dom";
 import { Activity, Check, CircleDashed, Copy, ExternalLink, KeyRound, Plug, ShieldAlert, Trash2 } from "lucide-react";
 import { ApiError, api, call, type ClientKind, type Connection, type NewConnection } from "../api";
 import { Card, ErrorNote, Spinner, ruleLabel, useAsync, when } from "../ui";
+import {
+  CAPABILITY_WORDS,
+  CHECK_WORDS,
+  NOTICE_WORDS,
+  NOTIFICATION_TYPES,
+  STATE_WORDS,
+  trustApi,
+  type DrivingStatus,
+  type NotificationConsent,
+  type Trust,
+  type TrustHealth,
+} from "../connectTrust";
 
 /** GET /v1/connect/clients/{client} (spec 60 R-7): the gateway's own setup for the live address. */
 type ClientSetup = { steps: string[]; snippet: string; secret_placeholder: string; url: string; auth: { method: "oauth" | "bearer" } };
 /** GET /v1/connect/connections/{id}/health (spec 60 R-8). */
-type ConnectionHealth = {
+type ConnectionHealth = TrustHealth & {
   last_used_at: string | null;
   calls_last_24h: Record<string, number>;
   error_codes: string[];
@@ -594,6 +606,12 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
     }
   };
   const list = (connections.data ?? []).filter((c) => !c.revoked_at);
+  // Lifecycle notices for the owner (spec 62 R-6). Loaded once and after a trust action, not on the list's poll.
+  const inbox = useAsync(() => trustApi.inbox(), []);
+  // Newest first from the gateway; one line per connection and notice type is enough.
+  const attention = (inbox.data ?? [])
+    .filter((n) => !n.resolved_at && NOTICE_WORDS[n.event] && list.some((c) => c.connection_id === n.connection_id))
+    .filter((n, i, all) => all.findIndex((m) => m.connection_id === n.connection_id && m.event === n.event) === i);
   return (
     <Card className="flex flex-col gap-3">
       <div>
@@ -602,6 +620,27 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
           Revoking stops that client at its next call, sign-ins included. The agent's mandate and history stay.
         </p>
       </div>
+      {/* An inbox that cannot be read only hides this list; the connections below still show their state. */}
+      {attention.length ? (
+        <div className="flex flex-col gap-2 rounded-[var(--radius-tile)] bg-warn-soft p-3 text-[13px] text-warn">
+          <div className="flex items-center gap-2 font-semibold">
+            <ShieldAlert size={15} /> Needs your attention
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {attention.map((n) => (
+              <li key={n.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="min-w-0 break-words">
+                  <strong>{list.find((c) => c.connection_id === n.connection_id)?.agent_id}</strong>: {NOTICE_WORDS[n.event]}{" "}
+                  <span className="opacity-80">{when(n.created_at)}</span>
+                </span>
+                <button className="font-medium underline" onClick={() => setOpen(n.connection_id)}>
+                  Review
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {connections.loading && !connections.data ? (
         <Spinner />
       ) : connections.error ? (
@@ -633,7 +672,7 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
                   <Trash2 size={13} /> {busy === c.connection_id ? "Revoking…" : "Revoke"}
                 </button>
               </span>
-              {open === c.connection_id ? <HealthPanel id={c.connection_id} /> : null}
+              {open === c.connection_id ? <HealthPanel id={c.connection_id} oauth={c.credential_kind === "oauth"} onTrustChange={inbox.reload} /> : null}
             </li>
           ))}
         </ul>
@@ -646,7 +685,7 @@ function ConnectionList({ connections }: { connections: ReturnType<typeof useAsy
 const AUDIENCE: Record<string, string> = { buyer: "Buying agent", tenant: "Organisation agent", operator: "Operator agent" };
 
 /** Loaded when opened, not on the list's 5 s poll: one connection's use, errors and reach (spec 60 R-8). */
-function HealthPanel({ id }: { id: string }) {
+function HealthPanel({ id, oauth, onTrustChange }: { id: string; oauth: boolean; onTrustChange: () => void }) {
   const path = `/v1/connect/connections/${encodeURIComponent(id)}`;
   const health = useAsync(() => call<ConnectionHealth>(`${path}/health`), [path]);
   const [test, setTest] = useState<ConnectionTest | null>(null);
@@ -733,6 +772,280 @@ function HealthPanel({ id }: { id: string }) {
           </details>
         </div>
       ) : null}
+
+      {h?.trust ? (
+        <TrustSection
+          id={id}
+          trust={h.trust}
+          oauth={oauth}
+          onChange={() => {
+            health.reload();
+            onTrustChange();
+          }}
+        />
+      ) : null}
+      {h && h.connection_contract !== undefined ? <DrivingSection status={h.connection_contract} onCheck={health.reload} checking={health.loading} /> : null}
+      {h ? <NotificationsSection id={id} counts={h.notifications} /> : null}
     </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-2 border-t border-line pt-3">
+      <h4 className="text-[14px] font-semibold">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+const ADMIN_ROLES = ["operator", "platform_admin", "tenant_admin"];
+// Where the gateway answers "context required" or the state allows it, the owner says which runtime is theirs.
+const CONFIRMABLE = ["ACTIVE", "READ_ONLY"];
+
+/** Spec 62: who the client is, the connection's state, where it was used from, and the owner's two actions. */
+function TrustSection({ id, trust, oauth, onChange }: { id: string; trust: Trust; oauth: boolean; onChange: () => void }) {
+  const role = useAsync(() => trustApi.role(), []);
+  const history = [...trust.context_history].sort((a, b) => Date.parse(b.last_seen) - Date.parse(a.last_seen));
+  const [picked, setPicked] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"confirm" | "orders" | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const act = async (kind: "confirm" | "orders") => {
+    setBusy(kind);
+    setError(null);
+    try {
+      // With one observed place the gateway picks it; with several the owner must name the one that is theirs.
+      if (kind === "confirm") await trustApi.confirm(id, history.length > 1 ? (picked ?? history[0].id) : undefined);
+      else await trustApi.allowOrders(id);
+      onChange();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const canConfirm = !trust.confirmed && CONFIRMABLE.includes(trust.state);
+  const canAllow = !trust.order_granted && ADMIN_ROLES.includes(role.data ?? "");
+  return (
+    <Section title="Trust">
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-[150px_1fr]">
+        {/* Keys are issued here, so the publisher tier only says something for sign-in clients. */}
+        {oauth ? (
+          <>
+            <dt className="label">Client</dt>
+            <dd>
+              {trust.tier === "verified" ? (
+                <span className="chip bg-positive-soft text-positive">Verified publisher</span>
+              ) : (
+                <span className="chip bg-warn-soft text-warn">Not verified</span>
+              )}
+            </dd>
+          </>
+        ) : null}
+        <dt className="label">State</dt>
+        <dd className="break-words">
+          {STATE_WORDS[trust.state] ?? ruleLabel(trust.state)}
+          {trust.state === "ACTIVE" && trust.confirmed ? ", confirmed as the same agent" : ""}
+          {trust.state === "ACTIVE" && !trust.confirmed ? ". Waiting for the owner to confirm it is the same agent; until then its orders wait for approval." : ""}
+        </dd>
+        <dt className="label">Ordering</dt>
+        <dd>{trust.order_granted ? "Allowed" : "Not allowed yet. An admin must allow it."}</dd>
+        <dt className="label">Used from</dt>
+        <dd className="min-w-0">
+          {history.length ? (
+            <ul className="flex flex-col gap-1">
+              {history.map((c) => (
+                <li key={c.id} className="break-words">
+                  {history.length > 1 && canConfirm ? (
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="radio"
+                        name={`context-${id}`}
+                        className="mt-1 accent-brand"
+                        checked={(picked ?? history[0].id) === c.id}
+                        onChange={() => setPicked(c.id)}
+                      />
+                      <ContextLine c={c} confirmed={trust.confirmed_context === c.id} />
+                    </label>
+                  ) : (
+                    <ContextLine c={c} confirmed={trust.confirmed_context === c.id} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            "No place recorded yet"
+          )}
+        </dd>
+      </dl>
+      {canConfirm || canAllow ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {canConfirm ? (
+            <button className="btn-dark h-8 !py-0" onClick={() => act("confirm")} disabled={busy !== null}>
+              <Check size={13} /> {busy === "confirm" ? "Confirming…" : "Yes, this is the same agent"}
+            </button>
+          ) : null}
+          {canAllow ? (
+            <button className="btn-ghost h-8 !py-0" onClick={() => act("orders")} disabled={busy !== null}>
+              {busy === "orders" ? "Allowing…" : "Allow ordering"}
+            </button>
+          ) : null}
+          {canConfirm && history.length > 1 ? (
+            <span className="min-w-0 basis-48 text-[12px] text-ink-muted">Pick the place that is yours; the others lose the key's power.</span>
+          ) : oauth && trust.tier !== "verified" ? (
+            <span className="min-w-0 basis-48 text-[12px] text-ink-muted">Neither action verifies the publisher: its orders still wait for approval.</span>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? <ErrorNote error={error} /> : null}
+    </Section>
+  );
+}
+
+function ContextLine({ c, confirmed }: { c: { protocol: string; network: string; client: string; first_seen: string; last_seen: string }; confirmed: boolean }) {
+  return (
+    <span className="min-w-0 break-words">
+      <strong>{c.protocol.toUpperCase()}</strong> from {c.network}, {c.client} · last {when(c.last_seen)}, first {when(c.first_seen)}
+      {confirmed ? <span className="chip ml-1.5 bg-positive-soft text-positive">Confirmed</span> : null}
+    </span>
+  );
+}
+
+const CHECK_STYLE = { passed: "bg-positive-soft text-positive", failed: "bg-negative-soft text-negative", not_attempted: "bg-chip text-ink-muted" };
+const CHECK_TEXT = { passed: "Passed", failed: "Failed", not_attempted: "Not attempted" };
+const DRIVING_PROMPT =
+  "Run the Luotsi driving test: call start_driving_test, complete every check with driving_test_step, then call finish_driving_test and tell me the result.";
+
+/** Spec 63 R-5..R-8. The console cannot start the test: the gateway only accepts it through the agent's own connection. */
+function DrivingSection({ status, onCheck, checking }: { status: DrivingStatus | null; onCheck: () => void; checking: boolean }) {
+  if (!status) return null; // Not an agent connection: no driving test applies.
+  const checks = status.result?.payload.checks ?? {};
+  const ordering = status.enabled_operations.includes("order");
+  const caps = Object.entries(status.negotiation?.capabilities ?? {});
+  const removed = status.negotiation?.fallback_removed ?? [];
+  return (
+    <Section title="Driving test">
+      <p className="text-[13px] text-ink-muted">
+        A short sandbox test the agent runs through its own connection before it may order. The console cannot run it for the agent.
+      </p>
+      <CopyBlock label="Ask your agent" value={DRIVING_PROMPT} wrap />
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="btn-ghost h-8 !py-0" onClick={onCheck} disabled={checking}>
+          {checking ? "Checking…" : "Check for a new result"}
+        </button>
+      </div>
+      {status.result ? (
+        <>
+          <ul className="flex flex-col gap-1.5 text-[13px]">
+            {Object.keys(CHECK_WORDS).map((k) => {
+              const s = checks[k] ?? "not_attempted";
+              return (
+                <li key={k} className="flex flex-wrap items-center gap-2">
+                  <span className={`chip ${CHECK_STYLE[s] ?? CHECK_STYLE.not_attempted}`}>{CHECK_TEXT[s] ?? "Not attempted"}</span>
+                  <span className="min-w-0">{CHECK_WORDS[k]}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-[12px] text-ink-muted">
+            {status.valid
+              ? `Signed by the gateway${status.result.payload.iat ? ` ${when(new Date(status.result.payload.iat * 1000).toISOString())}` : ""}; the signature checks out and the result is current.`
+              : "Signed by the gateway, but no longer valid: it expired, belongs to another client, or the contract changed. Run it again."}
+          </p>
+        </>
+      ) : (
+        <p className="text-[13px]">No driving test result yet.</p>
+      )}
+      <StatusLine tone={ordering ? "ok" : "warn"}>
+        {ordering
+          ? status.override
+            ? "Ordering is on through an owner's override."
+            : "Ordering is on: the unit, retry and approval checks passed."
+          : `Ordering stays off until these pass: ${status.required_checks.map((k) => (CHECK_WORDS[k] ?? ruleLabel(k)).toLowerCase()).join("; ")}.`}
+      </StatusLine>
+      {caps.length || removed.length ? <p className="label">What the client says it can do</p> : null}
+      {caps.length || removed.length ? (
+        <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-[150px_1fr]">
+          {caps.map(([name, c]) => (
+            <div key={name} className="contents">
+              <dt className="label">{CAPABILITY_WORDS[name] ?? ruleLabel(name)}</dt>
+              <dd>{c.status === "proven" ? "Shown to work" : "Declared, not shown to work yet"}</dd>
+            </div>
+          ))}
+          {removed.length ? (
+            <>
+              <dt className="label">Turned off</dt>
+              <dd>{removed.map((r) => CAPABILITY_WORDS[r] ?? ruleLabel(r)).join(", ")}: it did not answer, so the gateway uses the approval link instead.</dd>
+            </>
+          ) : null}
+        </dl>
+      ) : null}
+    </Section>
+  );
+}
+
+/** Spec 61 R-1, R-6: what this connection is told about, and what happened to what it was sent. */
+function NotificationsSection({ id, counts }: { id: string; counts?: { sent: number; delivered: number; read: number; failed: number } }) {
+  const prefs = useAsync(() => trustApi.notifications(id), [id]);
+  const [draft, setDraft] = useState<NotificationConsent | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const consent = draft ?? prefs.data?.consent;
+  const save = async () => {
+    if (!prefs.data || !draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await trustApi.saveNotifications(id, { ...prefs.data, consent: draft });
+      prefs.reload();
+      setDraft(null);
+      setSaved(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Section title="Notifications">
+      {prefs.loading && !prefs.data ? (
+        <Spinner label="Loading notifications" />
+      ) : prefs.error ? (
+        <ErrorNote error={prefs.error} />
+      ) : consent ? (
+        <>
+          <p className="text-[13px] text-ink-muted">What the gateway tells this agent about, on the channel it already uses.</p>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {NOTIFICATION_TYPES.map(([key, words]) => (
+              <label key={key} className="flex cursor-pointer items-start gap-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-brand"
+                  checked={!!consent[key]}
+                  onChange={(e) => {
+                    setSaved(false);
+                    setDraft({ ...consent, [key]: e.target.checked });
+                  }}
+                />
+                {words}
+              </label>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn-dark h-8 !py-0" onClick={save} disabled={!draft || saving}>
+              {saving ? "Saving…" : "Save notifications"}
+            </button>
+            {saved && !draft ? <span className="text-[12px] text-positive">Saved. It applies from the next event.</span> : null}
+          </div>
+        </>
+      ) : null}
+      {error ? <ErrorNote error={error} /> : null}
+      {counts ? (
+        <p className="text-[12px] text-ink-muted">
+          Sent {counts.sent} · delivered {counts.delivered} · read {counts.read} · failed {counts.failed}
+        </p>
+      ) : null}
+    </Section>
   );
 }
