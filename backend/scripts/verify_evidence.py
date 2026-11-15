@@ -96,22 +96,37 @@ def verify_bundle(bundle, trusted_jwks, *, rpc_url=None, xsd_dir=None):
     except Exception as exc:
         error("artifact_integrity", "manifest.json", str(exc))
 
+    chain_hashes = {}
     try:
-        previous = GENESIS
-        for seq, link in enumerate(links, 1):
-            if link["seq"] != seq or link["prev_hash"] != previous:
+        # A disclosed range may start after genesis. Its links must still be
+        # consecutive and terminate at the independently verified signed head.
+        first_seq = links[0]["seq"] if links else 1
+        if type(first_seq) is not int or first_seq < 1:
+            raise ValueError(f"entry {first_seq}: invalid sequence")
+        previous = links[0]["prev_hash"] if links else GENESIS
+        if (not isinstance(previous, str) or len(previous) != 64 or
+                any(c not in "0123456789abcdef" for c in previous) or
+                (first_seq == 1 and previous != GENESIS)):
+            raise ValueError(f"entry {first_seq}: invalid previous hash")
+        chain_hashes[first_seq - 1] = previous
+        head_seq = 0
+        for seq, link in enumerate(links, first_seq):
+            if type(link["seq"]) is not int or link["seq"] != seq or link["prev_hash"] != previous:
                 raise ValueError(f"entry {seq}: sequence or previous hash mismatch")
             if "entry" in link and (link["entry"]["seq"] != seq or entry_hash(previous, link["entry"]) != link["hash"]):
                 raise ValueError(f"entry {seq}: payload hash mismatch")
-            if len(link["hash"]) != 64 or any(c not in "0123456789abcdef" for c in link["hash"]):
+            if (not isinstance(link["hash"], str) or len(link["hash"]) != 64 or
+                    any(c not in "0123456789abcdef" for c in link["hash"])):
                 raise ValueError(f"entry {seq}: invalid hash")
             previous = link["hash"]
-        if len(links) != checkpoint["entries"] or previous != checkpoint["head_hash"]:
+            head_seq = seq
+            chain_hashes[seq] = previous
+        if head_seq != checkpoint["entries"] or previous != checkpoint["head_hash"]:
             raise ValueError("Signed checkpoint does not match audit links")
         if "anchor.json" in files:
             anchor = json.loads(files["anchor.json"])
             n = anchor["entries"]
-            if not 0 <= n <= len(links) or anchor["head_hash"] != (links[n - 1]["hash"] if n else GENESIS):
+            if n not in chain_hashes or anchor["head_hash"] != chain_hashes[n]:
                 raise ValueError("Anchored checkpoint is inconsistent with the audit links")
         report["audit_consistent"] = True
     except Exception as exc:
@@ -146,8 +161,8 @@ def verify_bundle(bundle, trusted_jwks, *, rpc_url=None, xsd_dir=None):
         try:
             anchor = json.loads(files["anchor.json"])
             n = anchor["entries"]
-            digest = links[n - 1]["hash"] if n > 0 else GENESIS
-            if not 0 <= n <= len(links) or anchor["head_hash"] != digest or anchor["checkpoint_digest"] != digest:
+            digest = chain_hashes.get(n)
+            if digest is None or anchor["head_hash"] != digest or anchor["checkpoint_digest"] != digest:
                 raise ValueError("Anchor checkpoint mismatch")
             with httpx.Client(timeout=10, trust_env=False) as client:
                 def rpc(method, params):
