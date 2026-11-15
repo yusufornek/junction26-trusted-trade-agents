@@ -72,4 +72,6 @@ npm install && npm run dev                                # http://localhost:517
 
 Add `https://luotsi.online/mcp` as a connector in claude.ai, ChatGPT or Claude Desktop and choose **hotel-chain-agent** on the consent screen. Then open **Connect** in the console and press **"Yes, this is the same agent"** on the new connection so orders within limits can confirm without approval.
 
+Full documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
+
 All data is synthetic. Orders are simulated against Valio Aimo's mock APIs; no production systems are involved.
