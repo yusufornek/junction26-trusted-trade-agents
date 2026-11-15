@@ -637,7 +637,7 @@ def authorization_server(request: Request):
 @router.post("/oauth/register", status_code=201, response_model=RegisteredClient, response_model_exclude_none=True,
              responses=OAUTH_RESPONSES, openapi_extra={"requestBody": {"required": True,
                 "content": {"application/json": {"schema": Registration.model_json_schema()}}}},
-             summary="RFC 7591 public or confidential client registration; application_type required")
+             summary="RFC 7591 public or confidential client registration; application_type defaults to web")
 async def register(request: Request):
     # Parse manually so OAuth clients receive RFC 7591's 400, never framework 422 input echoes.
     request.app.state.gateway.source_limiter.check(request.client.host if request.client else "unknown")
@@ -650,6 +650,9 @@ async def register(request: Request):
         value = json.loads(data)
     except (ValueError, UnicodeError):
         raise OAuthError("invalid_client_metadata") from None
+    # RFC 7591 / OIDC dynamic registration: a missing application_type means "web". claude.ai and ChatGPT omit it.
+    if isinstance(value, dict) and value.get("application_type") is None:
+        value["application_type"] = "web"
     result = request.app.state.gateway.oauth.register(value)
     if value.get("token_endpoint_auth_method", "none") == "none":
         request.app.state.gateway.audience_oauth.register(result["client_id"], value, dynamic=True)
