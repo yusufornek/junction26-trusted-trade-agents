@@ -134,6 +134,7 @@ class Connections:
                  sha256(secret.encode()).hexdigest(), json.dumps(body.customer_ids), now.isoformat(), None, None,
                  tid, body.type, body.audience, json.dumps(body.scopes), principal.user_id or principal.id,
                  body.expires_at.isoformat() if body.expires_at else None))
+            self.gateway.connection_trust.created(conn, connection_id)
             if body.type == "webhook":
                 from dataclasses import replace
                 from .webhooks import SubscriptionCreate
@@ -172,7 +173,7 @@ class Connections:
                 mcp_url=origin + "/mcp" + ("" if body.audience == "buyer" else "/"+body.audience) if mcp_served and (self.gateway.settings.public_url or
                     urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}) else None,
                 rest_base_url=origin + "/v1" + ("" if body.audience == "buyer" else "/"+body.audience),
-                mandate=mandate.model_copy(update={"autonomy": mandate.autonomy or policy.autonomy.default}))
+                mandate=mandate.model_copy(update={"autonomy": "approval_required"}))
 
     def prepare_agent(self, conn, agent_id, customer_ids):
         """Shared API-key / OAuth consent authority rules, in the caller's transaction."""

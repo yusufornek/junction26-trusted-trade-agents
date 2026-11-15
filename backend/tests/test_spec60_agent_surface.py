@@ -226,6 +226,13 @@ def test_AC_8_connection_health_harmless_probe_and_unchanged_demo(gateway, need,
         assert not upstream.price_calls and not upstream.availability_calls
         health = http.get(f"/v1/connections/{cid}/health", headers=OPERATOR_HEADERS).json()
         assert health["last_used_at"] and health["calls_last_24h"]["get_agent_context"] == 1 and health["error_codes"]
+        switched = http.post("/v1/offers", headers=headers, json=need.model_dump(mode="json"))
+        assert switched.status_code == 409 and switched.json()["code"] == "CONCURRENT_CONTEXT"
+        trust = http.get(f"/v1/connections/{cid}/health", headers=OPERATOR_HEADERS).json()["trust"]
+        rest_context = next(c["id"] for c in trust["context_history"] if c["protocol"] == "rest")
+        confirmed = http.post(f"/v1/connections/{cid}/trust/confirm", headers=OPERATOR_HEADERS,
+                              json={"confirmed": True, "context_id": rest_context})
+        assert confirmed.status_code == 200, confirmed.text
         lookup = http.post("/v1/offers", headers=headers, json=need.model_dump(mode="json")).json()
         assert lookup["offers"][0]["product_id"] == "464306"
         quote = http.post("/v1/quotes", headers=headers, json={"customer_id": "1", "deliver_by": str(need.deliver_by),

@@ -69,6 +69,9 @@ def exchange(client, body):
     assert response.headers["cache-control"] == "no-store"
     result = response.json()
     assert result["expires_in"] == 3600 and result["token_type"] == "Bearer"
+    initialized = rpc(client, bearer(result), "initialize", {"protocolVersion": "2025-11-25",
+        "capabilities": {}, "clientInfo": {"name": "oauth-test", "version": "1"}})
+    assert initialized.status_code == 200, initialized.text
     return result
 
 
@@ -138,6 +141,10 @@ def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gatew
             assert tools.status_code == 200, (revision, tools.text)
             assert "find_offers" in {v["name"] for v in tools.json()["result"]["tools"]}
         need = sandbox_need(service).model_dump(mode="json")
+        from test_spec63_connection_contract_driving_test import measured_run
+        from app.auth import resolve_credential
+        import asyncio
+        asyncio.run(measured_run(service, resolve_credential(service.settings.keys, token["access_token"], service, RESOURCE)))
         lookup = call(client, token, "find_offers", {"need": need})
         assert lookup["agent_id"] == "oauth-agent"
         quote = call(client, token, "create_quote", {"customer_id": "1", "deliver_by": need["deliver_by"],
@@ -153,6 +160,8 @@ def test_ac_6_discovery_consent_and_full_sandbox_purchase_as_agent(sandbox_gatew
             json={**approval_body, "confirmation_token": preview.json()["confirmation_token"]})
         assert approved.status_code == 200, approved.text
         assert approved.json()["status"] == "CONFIRMED"
+        assert approved.json()["context"]["connection_authority"] == order["context"]["connection_authority"]
+        assert approved.json()["approval_side"] == "valio_operator"
         assert call(client, token, "get_order_status", {"order_id": order["id"]})["status"] == "CONFIRMED"
         for action in ["LOOKUP", "CREATE_QUOTE", "PLACE_ORDER"]:
             assert any(e.action == action and e.actor == "agent:oauth-agent" for e in service.audit())
@@ -202,10 +211,15 @@ def test_ac_7_pkce_redirect_resource_rotation_reuse_and_expiry(gateway, monkeypa
             reused = client.post("/oauth/token", data=body)
         else:
             reused = refresh(client, client_id, token)
+            assert reused.status_code == 200 and reused.json() == rotated
+            moment = gateway.connection_trust.clock() + timedelta(seconds=31)
+            monkeypatch.setattr(gateway.connection_trust, "clock", lambda: moment)
+            reused = refresh(client, client_id, token)
         assert reused.status_code == 400 and reused.json()["error"] == "invalid_grant"
         assert rpc(client, bearer(rotated)).status_code == 401
         assert refresh(client, client_id, rotated).status_code == 400
-        assert any(e.action == "OAUTH_TOKEN_FAMILY_REVOKED" for e in gateway.audit())
+        action = "OAUTH_TOKEN_FAMILY_REVOKED" if failure == "code_reuse" else "CONNECTION_REAUTH_REQUIRED"
+        assert any(e.action == action for e in gateway.audit())
 
 
 def test_ac_8_dcr_application_type_required_and_registered_flow(gateway):
@@ -410,7 +424,7 @@ def test_r9_reject_unsupported_authorization_parameters_without_redirect(gateway
             assert "error" in query and query["iss"] == [ORIGIN] and "code" not in query
 
 
-def test_r9_refresh_scope_narrowing_and_concurrent_reuse(gateway):
+def test_r9_refresh_scope_narrowing_and_concurrent_reuse(gateway, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     gateway.settings.public_url = ORIGIN
     with TestClient(create_app(gateway), base_url=ORIGIN) as client:
@@ -422,8 +436,13 @@ def test_r9_refresh_scope_narrowing_and_concurrent_reuse(gateway):
         assert refresh(client, client_id, narrowed, scope="mcp offline_access").json() == {"error": "invalid_scope"}
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(pool.map(lambda _: refresh(client, client_id, narrowed), range(2)))
-        assert sorted(r.status_code for r in responses) == [200, 400]
-        issued = next(r.json() for r in responses if r.status_code == 200)
+        assert [r.status_code for r in responses] == [200, 200]
+        issued = responses[0].json()
+        assert issued == responses[1].json()
+        assert rpc(client, bearer(issued)).status_code == 200
+        moment = gateway.connection_trust.clock() + timedelta(seconds=31)
+        monkeypatch.setattr(gateway.connection_trust, "clock", lambda: moment)
+        assert refresh(client, client_id, narrowed).status_code == 400
         assert rpc(client, bearer(issued)).status_code == 401
 
 

@@ -46,7 +46,9 @@ EventType = Literal["stockout.predicted", "order.approval_required", "order.evid
                     "governance.agent_registered",
                     "governance.change_requested", "governance.request_decided", "governance.rolled_back",
                     "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
-                    "governance.tenant_resumed", "governance.agent_transferred"]
+                    "governance.tenant_resumed", "governance.agent_transferred",
+                    "connection.reauth_required", "connection.concurrent_context", "connection.continuity_confirmed",
+                    "connection.continuity_required"]
 EVENT_TYPES = set(EventType.__args__) | set(NotificationSourceEvent.__args__)
 EventType = EventType | NotificationSourceEvent
 
@@ -448,7 +450,10 @@ class Webhooks:
                 status, error, http_status = "delivered", None, None
                 try:
                     extra = notification_headers(sub.get("push_config") or {})
-                    response = self._post(sub["url"], delivery["body"].encode(), row["event_id"], extra)
+                    from .connection_trust_transports import push_authority
+                    with self.db.connect(write=True, notify=False) as conn:
+                        push_authority(self.gateway, conn, sub)
+                        response = self._post(sub["url"], delivery["body"].encode(), row["event_id"], extra)
                     http_status = response.status_code
                     if not 200 <= http_status < 300:
                         raise ValueError()

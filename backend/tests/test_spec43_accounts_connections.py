@@ -39,8 +39,9 @@ def sign(http, email="director@aurora.example", password=PASSWORD):
 
 
 def connect(http, headers, *, agent="hotel-chain-agent", audience="buyer", **extra):
+    contract = http.get("/v1/connect/trading-profile").json()["contract"]["version"]
     response = http.post("/v1/tenant/connections", headers=headers, json={"agent_id": agent, "type": "rest", "client": "python",
-        "audience": audience, "customer_ids": ["1"], **extra})
+        "audience": audience, "customer_ids": ["1"], "contract_version": contract, **extra})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -51,6 +52,22 @@ def bearer(connection):
 
 def pending(http, need, headers=None):
     headers = headers or agent_headers("external")
+    # These approval/tenant tests use a governed pilot override; spec 63 measures driving separately.
+    from app.auth import resolve_credential
+    from app.connection_contract_driving import driving
+    from app.governance_api import invoke
+    gateway = http.app.state.gateway
+    p = resolve_credential(gateway.settings.keys, headers["Authorization"].split()[1], gateway)
+    if p.connection_id and "order" not in driving(gateway).status(p)["enabled_operations"]:
+        with gateway.db.connect() as conn:
+            admin_id = conn.execute("SELECT id FROM users WHERE tenant_id=? AND role='tenant_admin' LIMIT 1", (p.tenant_id,)).fetchone()[0]
+        owner = gateway.accounts.bind(Principal(admin_id, kind="tenant_user", user_id=admin_id, role="tenant_admin",
+            tenant_id=p.tenant_id, customer_ids=p.customer_ids))
+        request = driving(gateway).request_override(p.connection_id, "Supervised approval integration fixture", owner)
+        reviewer = gateway.accounts.bind(gateway.settings.keys.resolve("test-operator-token", gateway.policy.get()))
+        arguments = {"request_id": request["id"], "reason": "Independent approval of the integration fixture"}
+        preview = invoke(gateway, reviewer, "approve_change", arguments)
+        invoke(gateway, reviewer, "approve_change", arguments, preview.confirmation_token)
     lookup = http.post("/v1/offers", headers=headers, json=need.model_dump(mode="json"))
     assert lookup.status_code == 200, lookup.text
     quote = http.post("/v1/quotes", headers=headers, json={"customer_id": need.customer_id, "deliver_by": str(need.deliver_by),
@@ -75,6 +92,10 @@ def test_AC_1_tenant_isolation_shared_storage_and_customer_gate(http, gateway, n
     for route in [f'/v1/lookups/{lookup["lookup_id"]}', f'/v1/quotes/{quote["id"]}', f'/v1/orders/{order["id"]}']:
         assert http.get(route, headers=b_agent).status_code == 404
         assert http.get(route, headers=OPERATOR_HEADERS).status_code == 200
+    import asyncio
+    from app.auth import resolve_credential
+    from test_spec63_connection_contract_driving_test import measured_run
+    asyncio.run(measured_run(gateway, resolve_credential(gateway.settings.keys, key["key"], gateway)))
     assert http.post("/v1/orders", headers={**b_agent, "Idempotency-Key": "foreign"}, json={"quote_id": quote["id"]}).status_code == 404
     calls = len(upstream.price_calls) + len(upstream.availability_calls)
     response = http.post("/v1/offers", headers=b_agent, json=need.model_dump(mode="json"))
@@ -314,8 +335,10 @@ def test_AC_1_OpenAPI_GET_POST_route_isolation(http, gateway, need, upstream, me
     gateway.settings.public_url = "https://gateway.test"
     lookup, quote, order = pending(http, need)
     a = connect(http, sign(http))
-    b = connect(http, sign(http, "manager@kaari.example"), agent="hospital-kitchen-agent", customer_ids=["2"])
+    hospital = sign(http, "manager@kaari.example")
+    b = connect(http, hospital, agent="hospital-kitchen-agent", customer_ids=["2"])
     headers = {**bearer(b), "Idempotency-Key": "foreign-openapi-target"}
+    protocol_headers = {"rest": headers}
     schema = http.get("/openapi.json").json()
     foreign = {"order_id": order["id"], "quote_id": quote["id"], "need_ref": lookup["lookup_id"],
                "lookup_id": lookup["lookup_id"], "agent_id": "hotel-chain-agent", "connection_id": a["connection_id"],
@@ -374,7 +397,8 @@ def test_AC_1_OpenAPI_GET_POST_route_isolation(http, gateway, need, upstream, me
                 if name == "id":
                     value = quote["id"] if "/quotes/" in template else order["id"] if "/orders/" in template else "1" if "/products/" in template else "foreign-target"
                 url = url.replace("{"+name+"}", value)
-                has_target |= "/products/" not in template
+                # Client setup names select public configuration, not another tenant's resource.
+                has_target |= "/products/" not in template and template != "/v1/connect/clients/{client}"
         kwargs = {}
         if method == "post":
             body_schema = operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
@@ -386,7 +410,12 @@ def test_AC_1_OpenAPI_GET_POST_route_isolation(http, gateway, need, upstream, me
                         "lines": [{"product_id": "1", "quantity_sales_units": 200}]}
             kwargs["json"] = body
             has_target |= template in {"/v1/offers", "/v1/quotes", "/v1/orders"}
-        result = getattr(http, method)(url, headers=headers, **kwargs)
+        protocol = "a2a" if url.startswith("/a2a") else "mcp" if url.startswith("/mcp") else "rest"
+        if protocol not in protocol_headers:
+            connection = connect(http, hospital, agent="hospital-kitchen-agent", customer_ids=["2"],
+                type=protocol, client="a2a" if protocol == "a2a" else "mcp_other")
+            protocol_headers[protocol] = {**bearer(connection), "Idempotency-Key": "foreign-openapi-target"}
+        result = getattr(http, method)(url, headers=protocol_headers[protocol], **kwargs)
         walked.append(template)
         if has_target:
             assert result.status_code in {403, 404}, (method, template, result.status_code, result.text)
@@ -432,9 +461,11 @@ def test_instructions_execute_REST_Python_and_MCP_against_gateway(http, upstream
     monkeypatch.setenv("VTG_CONNECTION_KEY", key["key"])
     exec(compile(python["snippet"], "<generated-connection-python>", "exec"), {})
     assert calls and calls[0].status_code == 200
-    mcp = http.get(endpoint, params={"client": "cursor"}, headers=admin).json()
+    mcp_connection = connect(http, admin, type="mcp", client="cursor")
+    mcp_endpoint = f'/v1/tenant/connections/{mcp_connection["connection_id"]}/instructions'
+    mcp = http.get(mcp_endpoint, params={"client": "cursor"}, headers=admin).json()
     config = next(iter(json.loads(mcp["snippet"])["mcpServers"].values()))
-    headers = {k: v.replace("${VTG_CONNECTION_KEY}", key["key"]) for k, v in config["headers"].items()}
+    headers = {k: v.replace("${VTG_CONNECTION_KEY}", mcp_connection["key"]) for k, v in config["headers"].items()}
     result = http.post(config["url"], headers={**headers, "Accept": "application/json, text/event-stream"},
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "find_offers", "arguments": {"need": mcp["lookup_example"]}}})
     assert result.status_code == 200, result.text
@@ -496,11 +527,16 @@ def test_scopes_expiry_and_independent_connection_rate_buckets(http, gateway, ne
     first = connect(http, admin, scopes=["read"])
     second = connect(http, admin, scopes=["read"])
     assert http.post("/v1/offers", headers=bearer(first), json=need.model_dump(mode="json")).status_code == 403
-    rpc = http.post("/mcp", headers={**bearer(first), "Accept": "application/json, text/event-stream"},
+    mcp_key = connect(http, admin, scopes=["read"])
+    rpc = http.post("/mcp", headers={**bearer(mcp_key), "Accept": "application/json, text/event-stream"},
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "find_offers", "arguments": {"need": need.model_dump(mode="json")}}})
     assert rpc.status_code == 200 and rpc.json()["result"]["structuredContent"]["code"] == "INSUFFICIENT_SCOPE"
     human = connect(http, admin, audience="tenant")
-    assert http.post("/mcp", headers={**bearer(human), "Accept": "application/json, text/event-stream"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 401
+    discovered = http.post("/mcp", headers={**bearer(human), "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert discovered.status_code == 200, discovered.text
+    names = {tool["name"] for tool in discovered.json()["result"]["tools"]}
+    assert "list_approvals" in names and "place_order" not in names
     policy = gateway.policy.get().model_dump(mode="json")
     policy["rate_limits"]["read"] = {"capacity": 1, "refill_per_minute": 1}
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))

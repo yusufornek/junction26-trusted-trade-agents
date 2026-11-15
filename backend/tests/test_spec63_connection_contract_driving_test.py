@@ -291,6 +291,8 @@ def test_AC_5_measured_failed_and_passing_runs_signatures_and_order_gate(gateway
 def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, need, upstream, tmp_path):
     demo_catalog(gateway, tmp_path, upstream)
     connection, p = connect(gateway, "hotel-chain-agent")
+    owner = gateway.accounts.bind(gateway.settings.keys.resolve("test-operator-token", gateway.policy.get()))
+    gateway.connection_trust.confirm(connection.connection_id, owner)
     token = PRINCIPAL.set(p)
     try:
         lookup = gateway.find_offers(need, actor="agent:" + p.id)

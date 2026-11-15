@@ -74,7 +74,12 @@ def oauth(http, respx_mock, *, path="/mcp", **kwargs):
     values, connection, human = authorize(http, respx_mock, path=path, **kwargs)
     response = exchange(http, values, path=path, client_id=kwargs.get("client_id", CLIENT_ID))
     assert response.status_code == 200, response.text
-    return {"Authorization": "Bearer "+response.json()["access_token"]}, response.json(), connection, human
+    credential = {"Authorization": "Bearer "+response.json()["access_token"]}
+    if path.startswith("/mcp"):
+        initialized = rpc(http, credential, path, "initialize", {"protocolVersion": "2025-11-25",
+            "capabilities": {}, "clientInfo": {"name": "audience-test", "version": "1"}}, version="2025-11-25")
+        assert initialized.status_code == 200, initialized.text
+    return credential, response.json(), connection, human
 
 
 def human_key(http, email="chef@aurora.example", audience="tenant", **extra):
@@ -117,13 +122,13 @@ def test_AC_6_discovery_metadata_pkce_consent_mcp_purchase(http, gateway, need, 
     quote = tool(http, credential, "create_quote", {"customer_id": "1", "deliver_by": str(need.deliver_by), "need_ref": lookup["lookup_id"],
         "lines": [{"product_id": "464306", "quantity_sales_units": 1000}]})["structuredContent"]
     order = tool(http, credential, "place_order", {"quote_id": quote["id"], "idempotency_key": "oauth-demo"})["structuredContent"]
-    assert (order["total"], order["status"], order["agent_id"]) == (1010, "CONFIRMED", "hotel-chain-agent")
+    assert (order["total"], order["status"], order["agent_id"]) == (1010, "PENDING_APPROVAL", "hotel-chain-agent")
     assert http.delete("/v1/tenant/connections/"+connection["connection_id"], headers=admin).status_code == 200
     assert rpc(http, credential).status_code == 401
 
 
 def test_AC_7_token_binding_rotation_reuse_and_expiry(http, gateway, respx_mock, monkeypatch):
-    values, _, _ = authorize(http, respx_mock)
+    values, connection, _ = authorize(http, respx_mock)
     for extra in [{"code_verifier": "x"*64}, {"redirect_uri": REDIRECT+"/wrong"}, {"resource": "http://localhost/a2a"}]:
         response = exchange(http, values, **extra)
         assert response.status_code == 400 and response.json()["error"] == "invalid_grant"
@@ -135,9 +140,14 @@ def test_AC_7_token_binding_rotation_reuse_and_expiry(http, gateway, respx_mock,
     assert rpc(http, credential, "/mcp/tenant").status_code == 401
     assert http.post('/a2a', headers=credential, json={}).status_code == 401
     assert http.get("/v1/orders", headers=credential).status_code == 401
+    trust = gateway.connection_trust.health(connection["connection_id"])
+    assert trust["state"] == "ACTIVE" and trust["context_history"] == []
     refresh = {"grant_type": "refresh_token", "client_id": CLIENT_ID, "resource": "http://localhost/mcp", "refresh_token": tokens["refresh_token"]}
     rotated = http.post("/oauth/token", data=refresh)
     assert rotated.status_code == 200
+    assert http.post("/oauth/token", data=refresh).json() == rotated.json()
+    moment = gateway.connection_trust.clock() + timedelta(seconds=31)
+    monkeypatch.setattr(gateway.connection_trust, "clock", lambda: moment)
     assert http.post("/oauth/token", data=refresh).status_code == 400
     for token in [tokens["access_token"], rotated.json()["access_token"]]:
         assert rpc(http, {"Authorization": "Bearer "+token}).status_code == 401
@@ -207,9 +217,10 @@ def test_AC_9_instructions_snippets_and_all_clients(http, gateway, need, upstrea
             return Client()
     code = setup["snippet"].replace("import os, httpx", "")
     exec(code, {"os": Env, "httpx": Httpx, "print": lambda *a: None})
-    setup = http.get('/v1/tenant/connections/'+connection["connection_id"]+'/instructions?client=mcp_other', headers=admin).json()
-    config = json.loads(setup["snippet"])["mcpServers"][connection["connection_id"]]
-    headers = {name: value.replace("${VTG_CONNECTION_KEY}", connection["key"]) for name, value in config["headers"].items()}
+    mcp_connection = connect(http, admin, type="mcp", client="mcp_other")
+    setup = http.get('/v1/tenant/connections/'+mcp_connection["connection_id"]+'/instructions?client=mcp_other', headers=admin).json()
+    config = json.loads(setup["snippet"])["mcpServers"][mcp_connection["connection_id"]]
+    headers = {name: value.replace("${VTG_CONNECTION_KEY}", mcp_connection["key"]) for name, value in config["headers"].items()}
     value = tool(http, headers, "find_offers", {"need": need.model_dump(mode="json")}, path=urlsplit(config["url"]).path)
     assert value["structuredContent"]["lookup_id"]
 
@@ -219,7 +230,9 @@ def a2a(http, credential, command, arguments=None, audience="tenant", task_id=No
     from google.protobuf.json_format import MessageToDict, ParseDict
     message = t.Message(message_id=uuid4().hex, role=t.Role.ROLE_USER, task_id=task_id or "")
     ParseDict({"data": {"version": 1, "command": command, "arguments": arguments or {}}}, message.parts.add())
-    return http.post("/a2a/"+audience, headers={**credential, "A2A-Version": "1.0"}, json={"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": MessageToDict(t.SendMessageRequest(message=message))})
+    contract = http.get("/v1/connect/trading-profile").json()["contract"]["version"]
+    return http.post("/a2a/"+audience, headers={**credential, "A2A-Version": "1.0", "Luotsi-Contract": contract},
+        json={"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": MessageToDict(t.SendMessageRequest(message=message))})
 
 
 @pytest.mark.parametrize("scenario", ["approve", "evidence_changed", "expired"])
@@ -259,10 +272,12 @@ def test_AC_10_a2a_card_security_oauth_tenant_isolation_two_step(http, gateway, 
     from a2a import types as t
     from test_a2a_service import command
     from google.protobuf.json_format import MessageToDict
-    buyer_oauth, _, _, _ = oauth(http, respx_mock, path="/a2a")
+    buyer_oauth, _, buyer_connection, _ = oauth(http, respx_mock, path="/a2a")
     response = http.post('/a2a', headers={**buyer_oauth, 'A2A-Version': '1.0'}, json={'jsonrpc': '2.0', 'id': 1, 'method': 'SendMessage',
         'params': MessageToDict(command('lookup', 'spec43-a2a-buyer-oauth', need=need.model_dump(mode='json')))})
     assert response.status_code == 200 and 'result' in response.json(), response.text
+    trust = gateway.connection_trust.health(buyer_connection["connection_id"])
+    assert trust["state"] == "ACTIVE" and len(trust["context_history"]) == 1
     buyer = gateway.accounts.bind(gateway.settings.keys.resolve(agent_headers("external")["Authorization"].split()[1], gateway.policy.get()))
     token = PRINCIPAL.set(buyer)
     try:

@@ -210,11 +210,12 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=False):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=None):
     """Use the same live inventory for bound clients, shared transports and cards.
 
     Binding an identity changes authorization, never the registered capabilities.
     Audience and current-principal scope filtering still apply on discovery/calls.
+    The legacy full_surface keyword is accepted; inventories are always complete.
     """
     if audience != "buyer":
         server = GatewayMCPServer(NAME+"-"+audience, title=TITLE+" — "+audience, version=VERSION,

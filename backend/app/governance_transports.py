@@ -68,11 +68,13 @@ def install_tenant_a2a(app):
             try:
                 if scheme.lower() != "bearer":
                     raise DomainError("UNAUTHENTICATED", "Bearer credential required", 401)
-                p = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret)
+                p = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret, observe=False)
                 if p.kind == "agent":
                     raise DomainError("HUMAN_REQUIRED", "Tenant A2A requires a human", 403)
                 if p.audience != "tenant":
                     raise DomainError("WRONG_AUDIENCE", "Use a tenant-audience connection", 401)
+                from .auth import observe_credential
+                observe_credential(gateway, p, context.state.get("source", "unknown"))
                 token = PRINCIPAL.set(p)
                 try:
                     yield gateway, p

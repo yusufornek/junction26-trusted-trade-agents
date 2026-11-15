@@ -174,13 +174,14 @@ async def connection_instructions(connection_id: str, request: Request, client: 
 @router.get("/v1/connect/tool-pack", response_model=dict, summary="Function declarations generated from the selected MCP audience and a REST executor")
 async def tool_pack(request: Request, format: str = Query(default="openai", pattern="^(openai|anthropic|gemini)$"),
                     audience: str = Query(default="buyer", pattern="^(buyer|tenant|operator)$")):
-    from .auth import admit_credential
+    from .auth import admit_credential, observe_credential
     from .oauth import require_audience
     header = request.headers.get("authorization")
     if header:
         scheme, _, secret = header.partition(" ")
-        p = admit_credential(request.app.state.gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
+        p = admit_credential(request.app.state.gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "", observe=False)
         require_audience(p, audience, "/tool-pack/"+audience)
+        observe_credential(request.app.state.gateway, p, request.client.host if request.client else "unknown")
     schemas = await tool_schemas(audience=audience)
     functions = [{"name": name, "description": schema["description"], "parameters": schema["inputSchema"]} for name, schema in schemas.items()]
     if format == "openai":

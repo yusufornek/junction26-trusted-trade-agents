@@ -140,7 +140,14 @@ def check_source(service, source):
         raise
 
 
-def admit_credential(service, keys, source, secret, resource=None):
+def observe_credential(service, principal, source):
+    """Record a runtime only after the request's audience and identity checks pass."""
+    service.connection_trust.seen(principal, source)
+    if principal.kind == "agent" and principal.connection_id and hasattr(service, "governance"):
+        service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
+
+
+def admit_credential(service, keys, source, secret, resource=None, *, observe=True):
     """Unknown credentials spend source tokens; known credentials retain principal limits."""
     known = keys.recognizes(secret)
     if not known:
@@ -152,12 +159,12 @@ def admit_credential(service, keys, source, secret, resource=None):
         except DomainError as error:
             service.governance.note_refusal(principal.agent_id, error)
             raise
-        if principal.connection_id:
-            service.governance.connection_seen(principal.agent_id, principal.connection_id, source)
-    if not known:
-        service.source_limiter.refund(source)
     if keys.environment != service.settings.environment:
         raise DomainError("UNAUTHENTICATED", "Credential belongs to another environment", 401)
+    if observe:
+        observe_credential(service, principal, source)
+    if not known:
+        service.source_limiter.refund(source)
     return principal
 
 
@@ -176,7 +183,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             service.accounts.csrf(request.cookies["vtg_session"], request.headers.get("X-CSRF-Token", ""))
     else:
-        principal = admit_credential(service, request.app.state.keys, source, secret, resource)
+        principal = admit_credential(service, request.app.state.keys, source, secret, resource, observe=False)
     if principal.resource:
         from .accounts import origin
         from .oauth import require_audience
@@ -195,6 +202,7 @@ async def resolve_principal(request: Request, credential: HTTPAuthorizationCrede
     request.state.principal = principal
     PRINCIPAL.set(principal)
     service.accounts.guard_target(request, principal)
+    observe_credential(service, principal, source)
     path = request.url.path
     if request.method == "GET" and not (path.startswith(("/v1/orders", "/v1/quotes", "/v1/lookups/")) or path in {"/v1/me", "/v1/approvals"}):
         service.limiter.consume(principal.id, "read")
@@ -275,7 +283,7 @@ class MCPBearerMiddleware:
                     resource = self.gateway.oauth.resource if self.audience == "buyer" and scope.get("path") == "/mcp" else None
                 except OAuthError:
                     resource = None
-                principal = admit_credential(self.gateway, self.keys, source, secret, resource)
+                principal = admit_credential(self.gateway, self.keys, source, secret, resource, observe=False)
                 from .oauth import require_audience
                 base = self.gateway.settings.public_url or (scope.get("scheme", "http") + "://" + headers.get(b"host", b"localhost").decode("latin-1"))
                 from .agent_surface import effective_audience
@@ -283,6 +291,7 @@ class MCPBearerMiddleware:
                 require_audience(principal, selected, "/mcp" + ("" if selected == "buyer" else "/" + selected), base)
                 if selected == "buyer" and (principal.operator or (self.agent_id is not None and principal.agent_id != self.agent_id)):
                     raise DomainError("UNAUTHENTICATED", "This server requires its agent's credential", 401)
+                observe_credential(self.gateway, principal, source)
                 principal_token = PRINCIPAL.set(principal)
             except DomainError as error:
                 response_headers = {"X-Correlation-Id": correlation}
@@ -302,7 +311,11 @@ class MCPBearerMiddleware:
                                       (b"cache-control", b"private, no-store"), (b"vary", b"Authorization")]
             await send(message)
         try:
-            await self.app(scope, receive, correlated_send)
+            from .connection_trust_transports import live_http
+            if principal_token is not None:
+                await live_http(self.app, self.gateway, principal, scope, receive, correlated_send)
+            else:
+                await self.app(scope, receive, correlated_send)
         finally:
             if principal_token is not None:
                 PRINCIPAL.reset(principal_token)

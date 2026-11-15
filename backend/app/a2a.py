@@ -594,9 +594,11 @@ class Handler(RequestHandler):
         try:
             if scheme.lower() != "bearer" or not secret:
                 raise DomainError("UNAUTHENTICATED", "A valid Bearer credential is required", 401)
-            principal = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret)
+            principal = admit_credential(gateway, context.state["keys"], context.state.get("source", "unknown"), secret, observe=False)
             from .oauth import require_audience
             require_audience(principal, self.audience, "/a2a" + ("" if self.audience == "buyer" else "/"+self.audience))
+            from .auth import observe_credential
+            observe_credential(gateway, principal, context.state.get("source", "unknown"))
             meta = MessageToDict(params).get("metadata", {}) if params is not None else {}
             if params is not None and isinstance(params, t.SendMessageRequest):
                 meta = {**MessageToDict(params.message).get("metadata", {}), **meta}
@@ -715,9 +717,11 @@ class Handler(RequestHandler):
                 for row in rows:
                     snapshot, event = self._event(row)
                     after = row["aggregate_revision"]
+                    gateway.connection_trust.check(principal)
                     yield event
                     if snapshot.status.state != t.TaskState.TASK_STATE_WORKING:
                         for item in snapshot.artifacts:
+                            gateway.connection_trust.check(principal)
                             yield t.TaskArtifactUpdateEvent(task_id=snapshot.id, context_id=snapshot.context_id,
                                                            artifact=item, last_chunk=True)
                 if done:
@@ -755,9 +759,11 @@ class Handler(RequestHandler):
             for row in rows:
                 task, event = self._event(row)
                 after = row["aggregate_revision"]
+                gateway.connection_trust.check(principal)
                 yield event
                 if task.status.state != t.TaskState.TASK_STATE_WORKING:
                     for item in task.artifacts:
+                        gateway.connection_trust.check(principal)
                         yield t.TaskArtifactUpdateEvent(task_id=task.id, context_id=task.context_id, artifact=item, last_chunk=True)
             if (current.status.state in TERMINAL or current.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED) and after >= int(metadata(current).get("aggregate_revision", 0)):
                 return
@@ -870,8 +876,10 @@ def install_routes(app):
             scheme, _, secret = request.headers.get("authorization", "").partition(" ")
             try:
                 p = admit_credential(request.app.state.gateway, request.app.state.keys,
-                    request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
+                    request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "", observe=False)
                 require_audience(p, path.split("/")[-1] if path != "/a2a" else "buyer", path, origin(request))
+                from .auth import observe_credential
+                observe_credential(request.app.state.gateway, p, request.client.host if request.client else "unknown")
             except DomainError as error:
                 headers = {"WWW-Authenticate": f'Bearer resource_metadata="{origin(request)}/.well-known/oauth-protected-resource{path}"'} if error.status == 401 else {}
                 return JSONResponse(problem(error, path), status_code=error.status, headers=headers, media_type="application/problem+json")

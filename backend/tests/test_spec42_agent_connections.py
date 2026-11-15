@@ -17,8 +17,9 @@ from test_verifiable_mandate import buyer as vc_issuer, issue as issue_mandate, 
 
 
 def issue(http, agent="connected-agent", *, idem="issue-key", **changes):
+    contract = http.get("/v1/connect/trading-profile").json()["contract"]["version"]
     return http.post("/v1/connections", headers={**OPERATOR_HEADERS, "Idempotency-Key": idem},
-        json={"agent_id": agent, "client": "claude_code", "customer_ids": ["1"], **changes})
+        json={"agent_id": agent, "client": "claude_code", "customer_ids": ["1"], "contract_version": contract, **changes})
 
 
 def auth(connection):
@@ -68,11 +69,14 @@ def test_ac_2_existing_agent_keeps_mandate_autonomy_history_and_demo(gateway, ne
     history = [e.model_dump(mode="json") for e in gateway.audit()]
     with TestClient(create_app(gateway), base_url="http://localhost") as client:
         value = issue(client, "hotel-chain-agent").json()
-        assert value["mandate"] == before
+        assert value["mandate"] == {**before, "autonomy": "approval_required"}
         assert gateway.policy.get().agents["hotel-chain-agent"].model_dump() == before
         assert all(e in [v.model_dump(mode="json") for v in gateway.audit()] for e in history)
         lookup = client.post("/v1/offers", headers=auth(value), json=need.model_dump(mode="json"))
         assert lookup.status_code == 200, lookup.text
+        confirmed = client.post(f'/v1/connections/{value["connection_id"]}/trust/confirm',
+                                headers=OPERATOR_HEADERS, json={"confirmed": True})
+        assert confirmed.status_code == 200, confirmed.text
         best = lookup.json()["offers"][0]
         assert (best["product_id"], best["purchase_total"], best["units_needed"]) == ("464306", 1010, 1000)
         quote = client.post("/v1/quotes", headers=auth(value), json={"customer_id": "1",
@@ -112,11 +116,11 @@ def check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch=None
         response = issue(client, AGENT)
         assert response.status_code == 201, response.text
         value = response.json()
-        assert value["mandate"] == before
+        assert value["mandate"] == {**before, "autonomy": "approval_required"}
         assert gateway.policy.get().model_dump(mode="json") == policy
         assert all(e in [v.model_dump(mode="json") for v in gateway.audit()] for e in history)
         # Another key, even with a different requested scope, must preserve authority.
-        assert issue(client, AGENT, idem="another", customer_ids=["3"]).json()["mandate"] == before
+        assert issue(client, AGENT, idem="another", customer_ids=["3"]).json()["mandate"] == {**before, "autonomy": "approval_required"}
         with gateway.db.connect() as conn:
             after, _, _ = gateway.mandates.authorize(conn, token, AGENT, "1")
         assert after.agents[AGENT].model_dump(mode="json") == before
@@ -125,6 +129,10 @@ def check_signed_connection(gateway, need, upstream, vc_issuer, monkeypatch=None
             "lines": [{"product_id": "1", "quantity_sales_units": 1}]})
         assert quote.status_code == 200, quote.text
         if monkeypatch:
+            import asyncio
+            from app.auth import resolve_credential
+            from test_spec63_connection_contract_driving_test import measured_run
+            asyncio.run(measured_run(gateway, resolve_credential(gateway.settings.keys, value["key"], gateway)))
             future = audit.utcnow() + timedelta(days=2)
             monkeypatch.setattr("app.mandates.audit.utcnow", lambda: future)
             for headers in (auth(value), {**auth(value), "Agent-Mandate": token}):
@@ -222,7 +230,8 @@ def test_ac_7_revoke_immediate_rest_mcp_denial_and_mandate_retained(gateway):
         value = issue(client).json()
         mandate = gateway.policy.get().agents["connected-agent"].model_dump()
         assert client.get("/v1/me", headers=auth(value)).status_code == 200
-        assert rpc(client, auth(value)).status_code == 200
+        switched = rpc(client, auth(value))
+        assert switched.status_code == 409 and switched.json()["code"] == "CONCURRENT_CONTEXT"
         url = "/v1/connections/" + value["connection_id"]
         revoked = client.delete(url, headers=OPERATOR_HEADERS)
         assert revoked.status_code == 200 and revoked.json()["revoked_at"]
@@ -314,7 +323,8 @@ def test_review_external_fallback_steers_to_rest(gateway):
         assert value["mcp_url"] is None
         assert value["rest_base_url"] == "https://gateway.example/v1"
         assert client.get(value["rest_base_url"] + "/me", headers=auth(value)).status_code == 200
-        assert rpc(client, auth(value)).status_code == 421
+        mcp_connection = issue(client, idem="mcp-fallback").json()
+        assert rpc(client, auth(mcp_connection)).status_code == 421
 
 
 def test_ac_11_scan_audit_logs_replay_and_other_responses_for_secret(gateway, need, upstream, caplog):

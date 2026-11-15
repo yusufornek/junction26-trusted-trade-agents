@@ -142,9 +142,11 @@ async def card_response(request: Request, audience="buyer", *, mcp=False):
     try:
         if request.headers.get("authorization"):
             scheme, _, secret = request.headers["authorization"].partition(" ")
-            p = admit_credential(gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "")
+            p = admit_credential(gateway, request.app.state.keys, request.client.host if request.client else "unknown", secret if scheme.lower() == "bearer" else "", observe=False)
             audience = effective_audience(p, audience)
             require_audience(p, audience, ("/mcp" if mcp else "/a2a") + ("" if audience == "buyer" else "/" + audience), auth_origin)
+            from .auth import observe_credential
+            observe_credential(gateway, p, request.client.host if request.client else "unknown")
             PRINCIPAL.set(p)
         elif request.cookies.get("vtg_session"):
             p = gateway.accounts.session(request.cookies["vtg_session"])

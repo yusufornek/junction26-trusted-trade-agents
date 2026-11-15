@@ -18,6 +18,8 @@ SHARED = {"products", "products_fts", "catalog_metadata", "supplier_products", "
           "users", "sessions", "account_links", "login_attempts", "tenant_agents",
           "tenant_issuers", "connection_secrets", "decision_confirmations",
           "audience_oauth_clients", "audience_oauth_requests", "audience_oauth_codes", "audience_oauth_tokens"}
+SHARED.update({"connection_trust", "connection_trust_clients", "connection_trust_contexts",
+               "connection_trust_requests", "connection_trust_refresh", "connection_trust_notifications"})
 
 
 def principal():

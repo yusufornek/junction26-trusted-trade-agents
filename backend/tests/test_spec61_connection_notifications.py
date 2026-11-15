@@ -217,7 +217,12 @@ def test_AC_4_sdk_cursor_inbox_and_mark_read_without_stream(gateway, need, upstr
             assert (await server.call_tool('get_notifications', {'cursor': value['next_cursor']})).structured_content['notifications'] == []
             resource = await server.read_resource('luotsi://inbox')
             assert order.id in str(resource)
-            health = surface(gateway).health(p.connection_id, operator(gateway))['notifications']
+            inbox = json.loads(resource[0].content)
+            assert inbox['connection_notifications'] == gateway.connection_trust.inbox(p)
+            assert inbox['notifications'][0]['resource'].endswith(order.id)
+            connection_health = surface(gateway).health(p.connection_id, operator(gateway))
+            assert connection_health['trust'] == gateway.connection_trust.health(p.connection_id)
+            health = connection_health['notifications']
             assert health['read'] == health['delivered'] == 1
         finally:
             PRINCIPAL.reset(token)

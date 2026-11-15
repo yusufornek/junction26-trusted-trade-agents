@@ -376,10 +376,12 @@ class Orders:
                          lambda counter: self._place_order(quote_id, idempotency_key, agent_id, counter, operator, mandate))
 
     def _place_order(self, quote_id, key, agent_id, counter, operator=False, mandate=None):
+        from .foundation import PRINCIPAL
         from hashlib import sha256
         storage_key = sha256((agent_id + "\x00" + key).encode()).hexdigest()
         # Serializes idempotency, reservation reads and writes across REST/MCP processes.
         with self.db.connect(write=True) as conn:
+            self.gateway.connection_trust.require_order(PRINCIPAL.get(), conn)
             policy = self.policy.get()
             existing = conn.execute("SELECT data FROM orders WHERE idempotency_key=? OR "
                                     "(idempotency_key=? AND json_extract(data,'$.agent_id')=?)",
@@ -493,6 +495,7 @@ class Orders:
             if saved_context := placement_context():
                 order.links["placement_span"] = saved_context
             from .models import Execution
+            self.gateway.connection_trust.attach_order(order)
             executor = self.suppliers.get(order.supplier_id).execution
             order.execution = (executor.submit(order) if executor.mode == "simulated"
                                else Execution(mode="supplier_backed", status="not_submitted"))
@@ -545,6 +548,8 @@ class Orders:
         self._reserve(conn, order)
 
     def _dispatch_authority(self, conn, order, quote, credential):
+        from .connection_trust_transports import dispatch_authority
+        dispatch_authority(self.gateway, conn, order, credential)
         from .buyer import check_suspension
         check_suspension(self.db, order.agent_id)
         if credential and credential.get("credential_ref"):
@@ -873,9 +878,19 @@ class Orders:
                 if order.mandate is not None:
                     policy, order.mandate, _ = self.mandates.authorize(conn, None, order.agent_id, quote.customer_id,
                         products=[o.product_id for o in order.lines], bound=("order", order_id), supplier_id=order.supplier_id)
-                evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
-                                                        agent_id=order.agent_id, customer_id=quote.customer_id,
-                                                        warnings=order.warnings, policy=policy)
+                from .auth import Principal
+                authority = (previous.context or {}).get("connection_authority") or {}
+                # Legacy calls lack a connection snapshot; keep their recorded continuity requirement.
+                placing_principal = (Principal(order.agent_id, **{
+                    k: v for k, v in authority.items() if k in Principal.__dataclass_fields__ and k != "agent_id"})
+                    if authority or any(hit.rule == "connection_continuity" for hit in previous.policy.hits) else principal)
+                evaluation_token = PRINCIPAL.set(placing_principal)
+                try:
+                    evaluation = self.policy.evaluate_order(conn, order.total, order.lines, self._violations(conn, quote),
+                                                            agent_id=order.agent_id, customer_id=quote.customer_id,
+                                                            warnings=order.warnings, policy=policy)
+                finally:
+                    PRINCIPAL.reset(evaluation_token)
                 if order.basket_ref and any(not line.availability.enough for line in order.lines):
                     from .models import RuleHit
                     evaluation.hits.append(RuleHit(rule="basket_stock_unavailable", detail="All basket lines must be available before confirmation."))
@@ -906,6 +921,8 @@ class Orders:
                     _, effective = self.policy.effective_need(legacy_need, policy=policy)
                 order.context = procurement_context(self.policy, quote.customer_id, quote.need_ref, effective,
                     order.mandate, supplier_id=order.supplier_id, snapshot=policy_snapshot)
+                if authority:
+                    order.context["connection_authority"] = authority
                 if comparison:
                     order.context["recurring_comparison"] = comparison
                 if quote.basket_ref or (self.lookup_need(conn, quote.need_ref).basket if quote.need_ref else None):

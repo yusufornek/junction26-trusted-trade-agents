@@ -4,11 +4,25 @@
     "inputSchema": {
       "properties": {},
       "title": "get_agent_contextArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": false,
       "properties": {
+        "connection_contract": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection Contract"
+        },
         "guardrail_profile": {
           "anyOf": [
             {
@@ -117,7 +131,8 @@
         }
       },
       "title": "get_replenishment_suggestionsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "properties": {
@@ -162,7 +177,8 @@
         "suggestion_id"
       ],
       "title": "prepare_suggestionArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -1790,7 +1806,8 @@
         "suggestion_id"
       ],
       "title": "create_recurring_from_suggestionArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -1803,7 +1820,8 @@
     "inputSchema": {
       "properties": {},
       "title": "list_recurring_ordersArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "properties": {
@@ -1946,7 +1964,8 @@
         "request"
       ],
       "title": "create_recurring_orderArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -1979,7 +1998,8 @@
         "recurring_order_id"
       ],
       "title": "run_recurring_order_nowArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -2012,7 +2032,8 @@
         "recurring_order_id"
       ],
       "title": "pause_recurring_orderArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -2025,7 +2046,8 @@
     "inputSchema": {
       "properties": {},
       "title": "list_stockout_alertsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "properties": {
@@ -2050,7 +2072,8 @@
     "inputSchema": {
       "properties": {},
       "title": "run_stockout_watchArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -2076,7 +2099,8 @@
         "campaign_id"
       ],
       "title": "suggest_proposalsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -2398,7 +2422,8 @@
         "need"
       ],
       "title": "accept_proposalArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -2411,7 +2436,8 @@
     "inputSchema": {
       "properties": {},
       "title": "list_proposalsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "properties": {
@@ -2485,7 +2511,8 @@
         "query"
       ],
       "title": "search_productsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -3164,7 +3191,8 @@
         "need"
       ],
       "title": "find_offersArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -5085,7 +5113,8 @@
         "request"
       ],
       "title": "find_basket_offersArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -6666,6 +6695,19 @@
       },
       "additionalProperties": false,
       "properties": {
+        "connection_contract": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection Contract"
+        },
         "policy_version_id": {
           "anyOf": [
             {
@@ -6898,7 +6940,8 @@
         "deliver_by"
       ],
       "title": "create_quoteArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -8170,7 +8213,8 @@
         "fix_id"
       ],
       "title": "apply_anomaly_fixArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -9469,7 +9513,8 @@
         "idempotency_key"
       ],
       "title": "place_orderArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -11025,7 +11070,8 @@
         "order_id"
       ],
       "title": "get_order_statusArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -12581,7 +12627,8 @@
         "order_id"
       ],
       "title": "get_order_receiptArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -14137,7 +14184,8 @@
         "order_id"
       ],
       "title": "get_order_evidenceArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -14244,7 +14292,8 @@
         "order_id"
       ],
       "title": "get_order_ublArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "properties": {
@@ -14291,7 +14340,8 @@
         "order_id"
       ],
       "title": "cancel_orderArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "$defs": {
@@ -15834,6 +15884,178 @@
       "type": "object"
     }
   },
+  "connection_notifications": {
+    "description": "REST capability GET /v1/connect/connection-notifications. connection_notifications Use this tool when you need to connection notifications. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Connection Notifications V1 Connect Connection Notifications Get"
+    }
+  },
+  "confirm_continuity": {
+    "description": "REST capability POST /v1/connect/connections/{connection_id}/trust/confirm. confirm_continuity Use this tool when you need to confirm continuity. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string",
+          "title": "Connection Id"
+        },
+        "body": {
+          "$ref": "#/$defs/ContinuityConfirmation"
+        }
+      },
+      "required": [
+        "connection_id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "ContinuityConfirmation": {
+          "properties": {
+            "confirmed": {
+              "type": "boolean",
+              "title": "Confirmed"
+            },
+            "context_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Context Id"
+            }
+          },
+          "type": "object",
+          "required": [
+            "confirmed"
+          ],
+          "title": "ContinuityConfirmation",
+          "additionalProperties": false
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Confirm Continuity V1 Connect Connections  Connection Id  Trust Confirm Post"
+    }
+  },
+  "grant_orders": {
+    "description": "REST capability POST /v1/connect/connections/{connection_id}/trust/order-scope. grant_orders Use this tool when you need to grant orders. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string",
+          "title": "Connection Id"
+        }
+      },
+      "required": [
+        "connection_id"
+      ],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Grant Orders V1 Connect Connections  Connection Id  Trust Order Scope Post"
+    }
+  },
+  "get_notifications": {
+    "description": "REST capability GET /v1/connect/notifications. Read the connection's signed inbox; next_cursor resumes after these items. mark_read acknowledges receipt only. Use this tool when you need to get notifications. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "default": "0",
+          "title": "Cursor"
+        },
+        "limit": {
+          "type": "integer",
+          "maximum": 100,
+          "minimum": 1,
+          "default": 50,
+          "title": "Limit"
+        },
+        "mark_read": {
+          "type": "boolean",
+          "default": false,
+          "title": "Mark Read"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Get Notifications V1 Connect Notifications Get"
+    }
+  },
+  "notification_action": {
+    "description": "REST capability POST /v1/connect/notifications/{notification_id}/actions. Acknowledge, exclusively claim or resolve an action-needed event; ownership does not grant purchasing authority. Use this tool when you need to notification action. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "notification_id": {
+          "type": "string",
+          "title": "Notification Id"
+        },
+        "body": {
+          "$ref": "#/$defs/NotificationAction"
+        }
+      },
+      "required": [
+        "notification_id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "NotificationAction": {
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "acknowledge",
+                "claim",
+                "resolve"
+              ],
+              "title": "Action"
+            },
+            "lease_seconds": {
+              "type": "integer",
+              "maximum": 3600.0,
+              "minimum": 1.0,
+              "title": "Lease Seconds",
+              "default": 300
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "action"
+          ],
+          "title": "NotificationAction"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Notification Action V1 Connect Notifications  Notification Id  Actions Post"
+    }
+  },
   "create_webhook_subscription": {
     "description": "REST capability POST /v1/webhook-subscriptions. Verify ownership by echoing the signed webhook.challenge, then enable customer-scoped delivery. Optional Idempotency-Key. Use this tool when you need to create webhook subscription. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
     "inputSchema": {
@@ -15862,6 +16084,19 @@
       "$defs": {
         "SubscriptionCreate": {
           "properties": {
+            "recipient": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recipient"
+            },
             "url": {
               "type": "string",
               "maxLength": 2048,
@@ -15880,39 +16115,63 @@
             },
             "event_types": {
               "items": {
-                "type": "string",
-                "enum": [
-                  "stockout.predicted",
-                  "order.approval_required",
-                  "order.evidence_changed",
-                  "order.confirmed",
-                  "order.rejected",
-                  "order.cancelled",
-                  "order.expired",
-                  "mandate.revoked",
-                  "proposal.received",
-                  "suggestion.shown",
-                  "suggestion.prepared",
-                  "suggestion.made_recurring",
-                  "suggestion.dismissed",
-                  "suggestion.snoozed",
-                  "platform.upstream_rate_limited",
-                  "platform.audit_anchored",
-                  "platform.supplier_health",
-                  "tenant.profile_created",
-                  "tenant.profile_updated",
-                  "governance.alert",
-                  "governance.policy_changed",
-                  "governance.guardrails_changed",
-                  "governance.agent_registered",
-                  "governance.change_requested",
-                  "governance.request_decided",
-                  "governance.rolled_back",
-                  "governance.agent_paused",
-                  "governance.agent_resumed",
-                  "governance.tenant_paused",
-                  "governance.tenant_resumed",
-                  "governance.agent_transferred"
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "stockout.predicted",
+                      "order.approval_required",
+                      "order.evidence_changed",
+                      "order.confirmed",
+                      "order.rejected",
+                      "order.cancelled",
+                      "order.expired",
+                      "mandate.revoked",
+                      "proposal.received",
+                      "suggestion.shown",
+                      "suggestion.prepared",
+                      "suggestion.made_recurring",
+                      "suggestion.dismissed",
+                      "suggestion.snoozed",
+                      "platform.upstream_rate_limited",
+                      "platform.audit_anchored",
+                      "platform.supplier_health",
+                      "tenant.profile_created",
+                      "tenant.profile_updated",
+                      "governance.alert",
+                      "governance.policy_changed",
+                      "governance.guardrails_changed",
+                      "governance.agent_registered",
+                      "governance.change_requested",
+                      "governance.request_decided",
+                      "governance.rolled_back",
+                      "governance.agent_paused",
+                      "governance.agent_resumed",
+                      "governance.tenant_paused",
+                      "governance.tenant_resumed",
+                      "governance.agent_transferred",
+                      "connection.reauth_required",
+                      "connection.concurrent_context",
+                      "connection.continuity_confirmed",
+                      "connection.continuity_required"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "delivery.issue",
+                      "delivery.delayed",
+                      "order.delivery_issue",
+                      "order.delivery_delayed",
+                      "quote.anomaly_detected",
+                      "agent.anomaly_alert",
+                      "agent.suspended",
+                      "policy.updated",
+                      "suggestion.due",
+                      "stockout.alert",
+                      "stockout.detected"
+                    ]
+                  }
                 ]
               },
               "type": "array",
@@ -16007,6 +16266,19 @@
       "$defs": {
         "SubscriptionPatch": {
           "properties": {
+            "recipient": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recipient"
+            },
             "url": {
               "anyOf": [
                 {
@@ -16041,39 +16313,63 @@
               "anyOf": [
                 {
                   "items": {
-                    "type": "string",
-                    "enum": [
-                      "stockout.predicted",
-                      "order.approval_required",
-                      "order.evidence_changed",
-                      "order.confirmed",
-                      "order.rejected",
-                      "order.cancelled",
-                      "order.expired",
-                      "mandate.revoked",
-                      "proposal.received",
-                      "suggestion.shown",
-                      "suggestion.prepared",
-                      "suggestion.made_recurring",
-                      "suggestion.dismissed",
-                      "suggestion.snoozed",
-                      "platform.upstream_rate_limited",
-                      "platform.audit_anchored",
-                      "platform.supplier_health",
-                      "tenant.profile_created",
-                      "tenant.profile_updated",
-                      "governance.alert",
-                      "governance.policy_changed",
-                      "governance.guardrails_changed",
-                      "governance.agent_registered",
-                      "governance.change_requested",
-                      "governance.request_decided",
-                      "governance.rolled_back",
-                      "governance.agent_paused",
-                      "governance.agent_resumed",
-                      "governance.tenant_paused",
-                      "governance.tenant_resumed",
-                      "governance.agent_transferred"
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "stockout.predicted",
+                          "order.approval_required",
+                          "order.evidence_changed",
+                          "order.confirmed",
+                          "order.rejected",
+                          "order.cancelled",
+                          "order.expired",
+                          "mandate.revoked",
+                          "proposal.received",
+                          "suggestion.shown",
+                          "suggestion.prepared",
+                          "suggestion.made_recurring",
+                          "suggestion.dismissed",
+                          "suggestion.snoozed",
+                          "platform.upstream_rate_limited",
+                          "platform.audit_anchored",
+                          "platform.supplier_health",
+                          "tenant.profile_created",
+                          "tenant.profile_updated",
+                          "governance.alert",
+                          "governance.policy_changed",
+                          "governance.guardrails_changed",
+                          "governance.agent_registered",
+                          "governance.change_requested",
+                          "governance.request_decided",
+                          "governance.rolled_back",
+                          "governance.agent_paused",
+                          "governance.agent_resumed",
+                          "governance.tenant_paused",
+                          "governance.tenant_resumed",
+                          "governance.agent_transferred",
+                          "connection.reauth_required",
+                          "connection.concurrent_context",
+                          "connection.continuity_confirmed",
+                          "connection.continuity_required"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "delivery.issue",
+                          "delivery.delayed",
+                          "order.delivery_issue",
+                          "order.delivery_delayed",
+                          "quote.anomaly_detected",
+                          "agent.anomaly_alert",
+                          "agent.suspended",
+                          "policy.updated",
+                          "suggestion.due",
+                          "stockout.alert",
+                          "stockout.detected"
+                        ]
+                      }
                     ]
                   },
                   "type": "array",
@@ -22686,6 +22982,18 @@
       "$defs": {
         "BasketLookupResult": {
           "properties": {
+            "connection_contract": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Contract"
+            },
             "policy_version_id": {
               "anyOf": [
                 {
@@ -27839,6 +28147,94 @@
       }
     }
   },
+  "reevaluate_intent": {
+    "description": "REST capability POST /v1/connect/intents/{intent_id}/reevaluate. A fresh lookup is evidence; acknowledging a version alone is not evaluation. Use this tool when you need to reevaluate intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "intent_id": {
+          "type": "string",
+          "title": "Intent Id"
+        }
+      },
+      "required": [
+        "intent_id"
+      ],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Reevaluate Intent V1 Connect Intents  Intent Id  Reevaluate Post"
+    }
+  },
+  "pending_question": {
+    "description": "REST capability GET /v1/connect/connections/{connection_id}/questions/{state}. pending_question Use this tool when you need to pending question. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string",
+          "title": "Connection Id"
+        },
+        "state": {
+          "type": "string",
+          "title": "State"
+        }
+      },
+      "required": [
+        "connection_id",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Pending Question V1 Connect Connections  Connection Id  Questions  State  Get"
+    }
+  },
+  "request_driving_override": {
+    "description": "REST capability POST /v1/connect/connections/{connection_id}/driving-test/override. request_driving_override Use this tool when you need to request driving override. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "connection_id": {
+          "type": "string",
+          "title": "Connection Id"
+        },
+        "body": {
+          "$ref": "#/$defs/OverrideBody"
+        }
+      },
+      "required": [
+        "connection_id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "OverrideBody": {
+          "properties": {
+            "reason": {
+              "type": "string",
+              "title": "Reason"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "title": "OverrideBody"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Request Driving Override V1 Connect Connections  Connection Id  Driving Test Override Post"
+    }
+  },
   "client_setup": {
     "description": "REST capability GET /v1/connect/clients/{client}. client_setup Use this tool when you need to client setup. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
     "inputSchema": {
@@ -27920,7 +28316,8 @@
         "lookup_id"
       ],
       "title": "compare_plansArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -27933,7 +28330,8 @@
     "inputSchema": {
       "properties": {},
       "title": "get_standing_constraintsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -27946,7 +28344,8 @@
     "inputSchema": {
       "properties": {},
       "title": "get_remaining_authorityArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -27959,7 +28358,8 @@
     "inputSchema": {
       "properties": {},
       "title": "get_spendArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -27972,7 +28372,8 @@
     "inputSchema": {
       "properties": {},
       "title": "list_approvalsArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -28010,7 +28411,8 @@
         }
       },
       "title": "query_auditArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -28031,7 +28433,8 @@
         "text"
       ],
       "title": "interpret_requestArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "type": "object",
@@ -28085,7 +28488,8 @@
         "confirm"
       ],
       "title": "confirm_interpretationArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "additionalProperties": true,
@@ -28106,7 +28510,8 @@
         "lookup_id"
       ],
       "title": "choose_offerArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "type": "object",
@@ -28131,11 +28536,108 @@
         "product_id"
       ],
       "title": "confirm_substituteArguments",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "outputSchema": {
       "type": "object",
       "additionalProperties": true
+    }
+  },
+  "acknowledge_contract": {
+    "description": "Acknowledge a contract version read from luotsi://trading-profile. Use after REFRESH_CONTRACT; repeat expired driving checks before ordering. Use this tool when you need to acknowledge contract. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "contract_version": {
+          "title": "Contract Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version"
+      ],
+      "title": "acknowledge_contractArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "acknowledge_contractDictOutput",
+      "type": "object"
+    }
+  },
+  "start_driving_test": {
+    "description": "Open sandbox checks through this connection before enabling order scope. Next call driving_test_step; finish_driving_test signs measured results. Use this tool when you need to start driving test. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {},
+      "title": "start_driving_testArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "start_driving_testDictOutput",
+      "type": "object"
+    }
+  },
+  "driving_test_step": {
+    "description": "Run an ordinary sandbox tool for a driving check through your own connection. Results measure actual behaviour; never submit claimed pass flags. Use this tool when you need to driving test step. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "check": {
+          "title": "Check",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id",
+        "check",
+        "tool",
+        "arguments"
+      ],
+      "title": "driving_test_stepArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "driving_test_stepDictOutput",
+      "type": "object"
+    }
+  },
+  "finish_driving_test": {
+    "description": "Sign the observed driving result, including not_attempted checks. Unit, retry and approval must pass to enable ordering. Use this tool when you need to finish driving test. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "finish_driving_testArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "finish_driving_testDictOutput",
+      "type": "object"
     }
   }
 }
