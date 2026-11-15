@@ -101,7 +101,7 @@ def store(gateway, p, purpose, data):
     surface(gateway)
     ref = "draft_" + uuid4().hex
     with gateway.db.connect(write=True, notify=False) as conn:
-        conn.execute("INSERT INTO agent_surface_drafts VALUES(?,?,?,?,?,NULL)",
+        conn.execute("INSERT INTO agent_surface_drafts(id,owner,purpose,data,expires_at,used_at) VALUES(?,?,?,?,?,NULL)",
             (ref, owner(p), purpose, json.dumps(data), (audit.utcnow() + timedelta(minutes=5)).isoformat()))
     return ref
 

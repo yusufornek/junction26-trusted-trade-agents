@@ -339,7 +339,8 @@ class AgentSurface:
         if isinstance(result, mt.CallToolResult) and result.is_error:
             code = (result.structured_content or {}).get("code", "TOOL_ERROR")
         with self.gateway.db.connect(write=True, notify=False) as conn:
-            conn.execute("INSERT INTO agent_surface_calls VALUES(?,?,?,?)", (p.connection_id, audit.utcnow().isoformat(), name, code))
+            conn.execute("INSERT INTO agent_surface_calls(connection_id,ts,tool,code) VALUES(?,?,?,?)",
+                         (p.connection_id, audit.utcnow().isoformat(), name, code))
 
     def connection_principal(self, row):
         target = Principal(row["agent_id"], customer_ids=tuple(json.loads(row["customer_ids"])),

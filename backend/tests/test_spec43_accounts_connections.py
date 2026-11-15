@@ -371,10 +371,14 @@ def test_AC_1_OpenAPI_GET_POST_route_isolation(http, gateway, need, upstream, me
             if parameter["in"] == "path":
                 name = parameter["name"]
                 value = foreign.get(name, "foreign-target")
+                if template == "/v1/connect/clients/{client}":
+                    value = "claude-desktop"
                 if name == "id":
                     value = quote["id"] if "/quotes/" in template else order["id"] if "/orders/" in template else "1" if "/products/" in template else "foreign-target"
                 url = url.replace("{"+name+"}", value)
-                has_target |= "/products/" not in template
+                # Spec 60 client setup describes the caller's connection, not a
+                # foreign business object. Exercise a supported client name.
+                has_target |= "/products/" not in template and template != "/v1/connect/clients/{client}"
         kwargs = {}
         if method == "post":
             body_schema = operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
@@ -500,7 +504,15 @@ def test_scopes_expiry_and_independent_connection_rate_buckets(http, gateway, ne
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "find_offers", "arguments": {"need": need.model_dump(mode="json")}}})
     assert rpc.status_code == 200 and rpc.json()["result"]["structuredContent"]["code"] == "INSUFFICIENT_SCOPE"
     human = connect(http, admin, audience="tenant")
-    assert http.post("/mcp", headers={**bearer(human), "Accept": "application/json, text/event-stream"}, json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 401
+    # Spec 60 resolves private discovery at the shared URL to the token's audience.
+    discovery = http.post("/mcp", headers={**bearer(human), "Accept": "application/json, text/event-stream"},
+                          json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert discovery.status_code == 200, discovery.text
+    names = {tool["name"] for tool in discovery.json()["result"]["tools"]}
+    assert {"approve_order", "agent_governance"} <= names
+    assert "find_offers" not in names
+    assert "private" in discovery.headers["cache-control"] and "no-store" in discovery.headers["cache-control"]
+    assert "Authorization" in discovery.headers["vary"]
     policy = gateway.policy.get().model_dump(mode="json")
     policy["rate_limits"]["read"] = {"capacity": 1, "refill_per_minute": 1}
     gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Fixture"))

@@ -19,7 +19,7 @@ from .auth import Principal, resolve_principal
 from .db import DomainError
 from .foundation import PRINCIPAL
 from .mandates import decode
-from .models import InputText, InputTexts, BasketLookupRequest, Model, NeedSpec, QuoteRequest
+from .models import InputText, InputTexts, BasketLookupRequest, Model, NeedSpec, QuoteRequest, delivery_today
 
 
 class Cadence(Model):
@@ -268,7 +268,7 @@ class Recurring:
                "baseline": snapshot(self.g, quote), "cadence": body.cadence.model_dump(mode="json"),
                "approved_lines": [{"product_id": l.product_id, "quantity_sales_units": l.units_needed} for l in quote.lines],
                "permitted_deviations": body.permitted_deviations.model_dump(), "status": "ACTIVE",
-               "delivery_offset_days": max(0, (quote.deliver_by - audit.utcnow().astimezone(ZoneInfo(body.cadence.timezone)).date()).days)}
+               "delivery_offset_days": max(0, (quote.deliver_by - delivery_today()).days)}
         row["next_run_at"] = rule_for(row).after(body.cadence.start_at, inc=True).isoformat()
         with self.g.db.connect(write=True) as conn:
             token = mandate or self.g.mandates.stored(conn, "order", order.id)
@@ -400,7 +400,9 @@ class Recurring:
                 context = PRINCIPAL.set(Principal(row["agent_id"], customer_ids=(row["customer_id"],)))
                 try:
                     data = dict(row["template"])
-                    execution_date = audit.utcnow().astimezone(ZoneInfo(row["cadence"]["timezone"])).date()
+                    # Cadence timezone controls occurrence identity; delivery
+                    # bounds use the same Helsinki day as RequestScope.
+                    execution_date = delivery_today()
                     data["deliver_by"] = (max(local.date(), execution_date) + timedelta(days=row["delivery_offset_days"])).isoformat()
                     self.g.valio.cache.clear()
                     if row["basket"]:

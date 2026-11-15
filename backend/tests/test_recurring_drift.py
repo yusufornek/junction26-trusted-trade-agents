@@ -285,9 +285,11 @@ def test_review_approved_quantity_and_multiple_lines_are_retained(gateway, need,
     assert [(l.product_id, l.units_needed) for l in gateway.orders.get_order(result["order_id"]).lines] == [("1", 4), ("2", 3)]
 
 
-def test_review_overdue_weekly_catchup_executes_once(gateway, upstream, recurring_setup):
+@pytest.mark.usefixtures("fixed_clock")
+@pytest.mark.parametrize("cadence_timezone", ["Europe/Helsinki", "UTC"])
+def test_review_overdue_weekly_catchup_executes_once(gateway, upstream, recurring_setup, cadence_timezone):
     row = create(gateway, recurring_setup)
-    row["cadence"].update(start_at=(audit.utcnow() - timedelta(days=6)).isoformat(), rrule="FREQ=WEEKLY")
+    row["cadence"].update(start_at=(audit.utcnow() - timedelta(days=6)).isoformat(), rrule="FREQ=WEEKLY", timezone=cadence_timezone)
     row["next_run_at"] = row["cadence"]["start_at"]
     with gateway.db.connect(write=True) as conn:
         gateway.recurring.save(conn, row)
@@ -295,8 +297,10 @@ def test_review_overdue_weekly_catchup_executes_once(gateway, upstream, recurrin
     gateway.recurring.due()
     runs = gateway.recurring.runs(row["id"])
     assert len(runs) == 1
-    assert runs[0]["occurrence_key"].endswith((audit.utcnow() - timedelta(days=6)).date().isoformat())
-    assert gateway.orders.get_quote(runs[0]["quote_id"]).deliver_by >= audit.utcnow().date()
+    assert runs[0]["status"] == "CONFIRMED"
+    timezone = ZoneInfo(row["cadence"]["timezone"])
+    assert runs[0]["occurrence_key"].endswith((audit.utcnow() - timedelta(days=6)).astimezone(timezone).date().isoformat())
+    assert gateway.orders.get_quote(runs[0]["quote_id"]).deliver_by >= audit.utcnow().astimezone(ZoneInfo("Europe/Helsinki")).date()
 
 
 def test_review_placement_delivery_is_compared(gateway, upstream, recurring_setup, monkeypatch):

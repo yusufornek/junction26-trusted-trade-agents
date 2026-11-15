@@ -1,5 +1,6 @@
 """Signed discovery generated from the live SDK registry (spec 60)."""
 import json
+from copy import deepcopy
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -69,17 +70,29 @@ async def enrich_agent_card(card, gateway, audience):
     audience = effective_audience(PRINCIPAL.get(), audience)
     server, tools = await inventory(gateway, audience)
     aliases = {"quote_and_order": "create_quote", "order_status": "get_order_status", "get_evidence": "get_order_evidence"}
-    existing = {skill.id: skill for skill in card.skills}
     del card.skills[:]
     schemas = {}
     toolmap = {tool.name: tool for tool in tools}
+    governance_aliases = set()
+    if audience == "tenant" and "agent_governance" in toolmap:
+        from .governance_api import Operation
+        governance_aliases = set(Operation.__args__) - toolmap.keys()
+        aliases.update({name: "agent_governance" for name in sorted(governance_aliases)})
     for name in [*toolmap, *(name for name, target in aliases.items() if target in toolmap)]:
         tool = toolmap.get(name) or toolmap[aliases[name]]
-        sample = {"version": 1, "command": "tool", "skill": tool.name, "arguments": example(tool.input_schema)}
+        input_schema = tool.input_schema
+        arguments = example(input_schema)
+        if name in governance_aliases:
+            # Preserve the operation vocabulary and route examples through the
+            # typed governance tool, including its human confirmation boundary.
+            input_schema = deepcopy(input_schema)
+            input_schema["properties"]["operation"] = {"type": "string", "const": name}
+            arguments = {"operation": name, "arguments": {}}
+        sample = {"version": 1, "command": "tool", "skill": tool.name, "arguments": arguments}
         card.skills.add(id=name, name=tool.title or name, description=tool.description,
             tags=[audience, "procurement"], input_modes=["application/json", "text/plain"] if audience == "buyer" else ["application/json"], output_modes=["application/json"],
             examples=[json.dumps(sample)])
-        schemas[name] = {"input": tool.input_schema, "output": tool.output_schema}
+        schemas[name] = {"input": input_schema, "output": tool.output_schema}
     card.documentation_url = base + "/developers"
     del card.default_input_modes[:]
     card.default_input_modes.extend(["application/json", "text/plain"] if audience == "buyer" else ["application/json"])
