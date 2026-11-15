@@ -80,7 +80,9 @@ def build_bundle(gateway, order_id, principal):
         raw_quote = json.loads(conn.execute("SELECT data FROM quotes WHERE id=?", (order.quote_id,)).fetchone()[0])
         quote = Quote.model_validate(raw_quote)
         links = []
-        for row in conn.execute("SELECT * FROM audit ORDER BY id"):
+        # Hash links must span the global chain, bypassing the tenant-scoped
+        # audit view. Payload disclosure still follows the predicates below.
+        for row in conn.execute("SELECT * FROM main.audit ORDER BY id"):
             data = json.loads(row["data"])
             related = (row["order_id"] == order.id or row["quote_id"] == quote.id or
                        (row["action"] == "LOOKUP" and quote.need_ref and data.get("lookup_id") == quote.need_ref))
@@ -90,7 +92,8 @@ def build_bundle(gateway, order_id, principal):
             if (related and audit_visible(row, order.agent_id)) or intent_related:
                 link["entry"] = audit.entry_payload(row)
             links.append(link)
-        checkpoint = {"entries": len(links), "head_hash": links[-1]["hash"] if links else audit.GENESIS,
+        checkpoint = {"entries": links[-1]["seq"] if links else 0,
+                      "head_hash": links[-1]["hash"] if links else audit.GENESIS,
                       "at": audit.utcnow().isoformat()}
         checkpoint["jws"] = gateway.signing.sign(checkpoint)
         # Keep even a mismatching checkpoint: omitting it could hide a rewritten
