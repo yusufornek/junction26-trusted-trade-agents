@@ -48,7 +48,8 @@ EventType = Literal["stockout.predicted", "order.approval_required", "order.evid
                     "governance.agent_paused", "governance.agent_resumed", "governance.tenant_paused",
                     "governance.tenant_resumed", "governance.agent_transferred",
                     "connection.reauth_required", "connection.concurrent_context", "connection.continuity_confirmed",
-                    "connection.continuity_required"]
+                    "connection.continuity_required",
+                    "INTENT_AMENDED", "INTENT_HANDOVER", "INTENT_PARTIALLY_CONFIRMED"]
 EVENT_TYPES = set(EventType.__args__) | set(NotificationSourceEvent.__args__)
 EventType = EventType | NotificationSourceEvent
 

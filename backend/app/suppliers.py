@@ -202,6 +202,7 @@ class SupplierCatalog(Catalog):
 
 class NordfoodExecution:
     mode, atomicity, partial_acceptance = "supplier_backed", "atomic", False
+    consistency_window_seconds = 0  # Synthetic service commits its idempotency record before returning.
 
     def __init__(self, adapter):
         self.adapter = adapter
@@ -244,7 +245,8 @@ class NordfoodAdapter(Adapter):
 
     def capabilities(self):
         return {"currencies": ["EUR", "SEK"], "pricing": "case; minimum case quantity", "stock": ["finite"],
-                "execution": {"mode": self.execution.mode, "atomicity": "atomic", "partial_acceptance": False}}
+                "execution": {"mode": self.execution.mode, "atomicity": "atomic", "partial_acceptance": False,
+                              "consistency_window_seconds": getattr(self.execution, "consistency_window_seconds", None)}}
 
     def ingest_catalog(self):
         source = Path(__file__).resolve().parents[1] / "suppliers/nordfood/catalog.json"

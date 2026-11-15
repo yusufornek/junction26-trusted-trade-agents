@@ -136,6 +136,8 @@ class Gateway:
         self.notifications = ConnectionNotifications(self)
         from .connection_contract import manager as connection_contract
         connection_contract(self)  # Initialize its schema before any nested command transaction.
+        from .purchase_intent_integrity import install as install_intents
+        install_intents(self)
 
         def after_commit():
             self.connection_trust.after_commit()
@@ -152,7 +154,7 @@ class Gateway:
         # Upgrade uncertain execution records from pre-outbox versions without supplier I/O.
         import json
         with self.db.connect(write=True) as conn:
-            for row in conn.execute("SELECT id,data FROM orders WHERE status='PENDING_EXECUTION'").fetchall():
+            for row in conn.execute("SELECT id,data FROM orders WHERE status='PENDING_EXECUTION' AND json_extract(data,'$.intent_id') IS NULL").fetchall():
                 conn.execute("INSERT OR IGNORE INTO supplier_execution_outbox(order_id,payload) VALUES(?,?)",
                              (row["id"], json.dumps({"order": json.loads(row["data"]), "credential": None})))
 

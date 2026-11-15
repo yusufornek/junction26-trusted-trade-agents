@@ -130,10 +130,11 @@ def test_ac_5_tenfold_quantity_fix_requotes_pending_order_and_split_holds_remain
     second = quote(gateway, need, 2000)
     from app.foundation import PRINCIPAL
     from dataclasses import replace
+    from test_spec63_connection_contract_driving_test import connect
 
     server = create_server(gateway, "external")
-    scoped = gateway.accounts.bind(Principal("external", customer_ids=("1",),
-        connection_id="scoped-anomaly-test", scopes=("read",)))
+    _, live_principal = connect(gateway, "external")
+    scoped = replace(live_principal, scopes=("read",))
     scope_token = PRINCIPAL.set(scoped)
     try:
         denied = asyncio.run(server.call_tool("apply_anomaly_fix",

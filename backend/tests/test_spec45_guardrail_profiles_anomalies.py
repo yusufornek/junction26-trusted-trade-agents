@@ -60,9 +60,18 @@ def invite(http, admin, email, role):
 
 
 def connection(http, admin, tenant, agent="profile-agent"):
+    from app.connection_contract_driving import driving, decide_override
+    gateway = http.app.state.gateway
     response = http.post("/v1/tenant/connections", headers=admin, json={"agent_id": agent, "type": "rest",
-        "client": "python", "audience": "buyer", "customer_ids": tenant["customer_ids"]})
+        "client": "python", "audience": "buyer", "customer_ids": tenant["customer_ids"],
+        "contract_version": gateway.connection_contract.current()["version"]})
     assert response.status_code == 201, response.text
+    # Profile tests exercise profile authority after the spec-63 onboarding gate.
+    # Use its audited, independently approved override rather than bypassing it.
+    owner = gateway.accounts.session(admin["Cookie"].partition("=")[2])
+    request = driving(gateway).request_override(response.json()["connection_id"], "Profile acceptance fixture", owner)
+    reviewer = gateway.accounts.user_principal(gateway.accounts.user("valio-admin"))
+    decide_override(gateway, request["id"], "approve", "Independent fixture review", reviewer)
     return {"Authorization": "Bearer " + response.json()["key"]}
 
 

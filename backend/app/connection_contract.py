@@ -145,7 +145,8 @@ class ConnectionContract:
 
     def save_state(self, cid, state):
         with self.gateway.db.connect(write=True, notify=False) as conn:
-            conn.execute("INSERT OR REPLACE INTO connection_contract_state VALUES(?,?)", (cid, json.dumps(state)))
+            conn.execute("INSERT INTO connection_contract_state(id,data) VALUES(?,?) "
+                         "ON CONFLICT(id) DO UPDATE SET data=excluded.data", (cid, json.dumps(state)))
 
     def acknowledge(self, cid, version, protocol=None, client=None, capabilities=None):
         with self.gateway.db.connect() as conn:
@@ -201,7 +202,8 @@ class ConnectionContract:
     def pin(self, ref, owner, version=None):
         version = version or self.current()["version"]
         with self.gateway.db.connect(write=True, notify=False) as conn:
-            conn.execute("INSERT OR IGNORE INTO connection_contract_intents VALUES(?,?,?,NULL)", (ref, owner, version))
+            conn.execute("INSERT OR IGNORE INTO connection_contract_intents(id,owner,version,reevaluated_version) VALUES(?,?,?,NULL)",
+                         (ref, owner, version))
 
     def intent(self, ref, owner):
         with self.gateway.db.connect() as conn:

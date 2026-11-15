@@ -65,12 +65,21 @@ WARNINGS = (
 
 
 class GatewayMCPServer(MCPServer):
+    include_purchase_intents = True
+
     async def list_tools(self):
         from .agent_surface import effective_audience, surface, discovery_metadata
         audience = effective_audience(PRINCIPAL.get() if hasattr(self.gateway, "db") else None, self.audience)
         if audience != self.audience:
-            return await create_server(self.gateway, agent_id=None, audience=audience).list_tools()
+            return await create_server(self.gateway, agent_id=None, audience=audience, include_purchase_intents=self.include_purchase_intents).list_tools()
         tools = await super().list_tools()
+        # An explicit legacy discovery view may hide the intent extension.
+        # Registered commands still support cross-protocol recovery.
+        if not self.include_purchase_intents:
+            intent_tools = {"create_intent", "get_intent", "amend_intent", "resume_intent"}
+            intent_tools.update(name for name, cap in getattr(self, "surface_capabilities", {}).items()
+                                if cap.route.path.startswith("/v1/intents"))
+            tools = [tool for tool in tools if tool.name not in intent_tools]
         # SDK defaults to validation schemas; Order's computed recovery guidance is
         # emitted on the wire and must also appear in the advertised output schema.
         for tool in tools:
@@ -177,10 +186,10 @@ class GatewayMCPServer(MCPServer):
                 self.gateway.governance.check_active(PRINCIPAL.get().agent_id)
             from .auth import check_scope
             if name not in {"get_agent_context", "agent_governance"}:
-                resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name or name == "apply_anomaly_fix" else "orders" if "order" in name else "read"
+                resource = "lookup" if name in {"find_offers", "find_basket_offers", "search_products"} else "quotes" if "quote" in name or name == "apply_anomaly_fix" else "orders" if "order" in name or "intent" in name else "read"
                 if name in {"suggest_proposals", "list_proposals", "accept_proposal"}:
                     resource = "proposals"
-                permission = "write" if name in {"apply_anomaly_fix", "suggest_proposals", "run_stockout_watch"} or name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_")) else "read"
+                permission = "write" if name in {"apply_anomaly_fix", "suggest_proposals", "run_stockout_watch"} or name.startswith(("find_", "create_", "place_", "cancel_", "accept_", "decline_", "mute_", "prepare_", "make_", "dismiss_", "snooze_", "amend_", "resume_")) else "read"
                 check_scope(PRINCIPAL.get(), resource, permission, name)
             result = await super().call_tool(name, arguments, context)
             result.meta = {**(result.meta or {}), "environment": self.gateway.settings.environment}
@@ -210,7 +219,7 @@ class GatewayMCPServer(MCPServer):
             ENVIRONMENT.reset(environment_token)
 
 
-def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=None):
+def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buyer", full_surface=None, include_purchase_intents=True):
     """Use the same live inventory for bound clients, shared transports and cards.
 
     Binding an identity changes authorization, never the registered capabilities.
@@ -227,6 +236,7 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
             "EVIDENCE_CHANGED requires reviewing fresh evidence and a new confirmation. Never invent confirmation answers.")
         server.keys, server.gateway, server.agent_id = gateway.settings.keys or Credentials(), gateway, agent_id
         server.mandate, server.audience = mandate, audience
+        server.include_purchase_intents = include_purchase_intents
         from .human_tools import register_tools
         register_tools(server, audience)
         if audience == "tenant":
@@ -261,10 +271,14 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
     server.agent_id = agent_id
     server.mandate = mandate
     server.audience = audience
+    server.include_purchase_intents = include_purchase_intents
 
     def current_agent():
         principal = PRINCIPAL.get()
         return principal.id if principal is not None else agent_id
+
+    from .purchase_intent_surfaces import register_tools as register_intent_tools
+    register_intent_tools(server, gateway, current_agent, PRESENTED_MANDATE)
 
     @server.tool(description="Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed.")
     def get_agent_context() -> AgentContext:
@@ -367,10 +381,12 @@ def create_server(gateway, agent_id="mcp-agent", *, mandate=None, audience="buye
     def create_quote(customer_id: str, deliver_by: str, lines: list[QuoteLineRequest] | None = None,
                      need_ref: str | None = None, plan_ref: PlanRef | None = None,
                      basket_ref: BasketRef | None = None,
+                     intent_id: str | None = None, intent_version: int | None = None,
                      idempotency_key: str | None = None) -> Quote:
         try:
             return gateway.orders.create_quote(QuoteRequest(customer_id=customer_id, deliver_by=deliver_by,
-                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
+                                                           lines=lines, need_ref=need_ref, plan_ref=plan_ref, basket_ref=basket_ref,
+                                                           intent_id=intent_id, intent_version=intent_version), agent_id=current_agent(), mandate=PRESENTED_MANDATE.get(), command_key=idempotency_key)
         except DomainError as error:
             raise ToolError(json.dumps({"code": error.code, "message": error.message})) from error
 

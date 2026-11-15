@@ -645,7 +645,8 @@ def test_ac_4_revisions_outbox_delivery_and_retry(gateway, need, upstream):
     with gateway.db.connect() as conn:
         for event in events:
             rows = conn.execute("SELECT consumer,status FROM outbox WHERE event_id=?", (event["id"],)).fetchall()
-            assert {(r[0], r[1]) for r in rows} == {("webhooks", "pending"), ("activity", "pending")}
+            assert {(r[0], r[1]) for r in rows} == {("webhooks", "pending"), ("activity", "pending"),
+                                                    ("connection-notifications", "delivered")}
     gateway.outbox.register("webhooks", lambda event: received.append(event))
     with gateway.db.connect(write=True) as conn:
         conn.execute("UPDATE outbox SET next_attempt_at='2000-01-01T00:00:00+00:00'")

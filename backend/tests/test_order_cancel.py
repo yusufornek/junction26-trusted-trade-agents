@@ -150,10 +150,15 @@ def test_cancel_ac5_unknown_order(client, gateway):
 @pytest.mark.parametrize("registered_agents", [("buyer", "external")], indirect=True)
 def test_cancel_ac6_blank_cancelled_by(client, gateway, need, upstream, body):
     order = place_order(gateway, need)
+    before = gateway.audit(order_id=order.id)
     response = client.post(f"/v1/orders/{order.id}/cancel", json=body)
     assert response.status_code == 422
-    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert response.json()["code"] == ("ARGUMENT_REQUIRED" if "cancelled_by" not in body else "VALIDATION_ERROR")
     assert gateway.orders.get_order(order.id) == order
+    if body.get("cancelled_by") != " \t\n ":
+        # Spec 63 rejects invalid wire types/lengths before the command boundary.
+        assert gateway.audit(order_id=order.id) == before
+        return
     event = gateway.audit(order_id=order.id)[-1]
     assert event.action == "CANCEL_FAILED"
     assert event.quote_id == order.quote_id

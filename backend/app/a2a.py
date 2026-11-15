@@ -288,6 +288,10 @@ class ProcurementA2A:
         interpreted = a2a_text(self, params, principal, mandate)
         if interpreted is not None:
             return interpreted
+        from .purchase_intent_a2a import send as send_intent
+        intent_task = send_intent(self, params, principal, mandate)
+        if intent_task is not None:
+            return intent_task
         message = params.message
         if not message.message_id or message.role != t.Role.ROLE_USER:
             raise InvalidParamsError("A user message with a nonempty messageId is required")
@@ -546,6 +550,8 @@ class ProcurementA2A:
         self.gateway.limiter.consume(principal.id, "read")
         with self.db.connect() as conn:
             task = self._load(conn, task_id, principal)
+        from .purchase_intent_a2a import refresh as refresh_intent_task
+        task = refresh_intent_task(self, task, principal)
         if task.status.state != t.TaskState.TASK_STATE_WORKING and metadata(task).get("order_id"):
             self.gateway.orders.expire()
             with self.db.connect() as conn:
@@ -830,6 +836,11 @@ async def agent_card(gateway=None, base_url="http://localhost:8000", audience="b
                                   tags=["procurement"], input_modes=["application/json"], output_modes=["application/json", "text/plain"]))
         if tool:
             schemas[skill] = {"input": tool.input_schema, "output": tool.output_schema}
+    for name in ("create_intent", "get_intent", "amend_intent", "resume_intent"):
+        tool = tools.get(name)
+        skills.append(t.AgentSkill(id=name, name=name.replace("_", " "), description=tool.description if tool else "Continue one tenant buying decision across transports", tags=["procurement"], input_modes=["application/json"], output_modes=["application/json"]))
+        if tool:
+            schemas[name] = {"input": tool.input_schema, "output": tool.output_schema}
     card = t.AgentCard(name="Valio Aimo Trusted Trade Agents", description="Fixed-price procurement under buyer authority; gateway-simulated commitments.",
         provider=t.AgentProvider(organization="Junction Trusted Trade Agents", url=base_url), version="1.0.0",
         supported_interfaces=[t.AgentInterface(url=base_url.rstrip("/") + "/a2a", protocol_binding="JSONRPC", protocol_version="1.0")],

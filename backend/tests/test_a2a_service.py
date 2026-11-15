@@ -150,7 +150,7 @@ def test_review_replay_current_authority(gateway, need, upstream, buyer_setup, v
     asyncio.run(run())
 
 
-def test_review_invalid_commands_admission_before_persistence(gateway):
+def test_review_invalid_commands_admission_before_persistence(gateway, need):
     from app.db import DomainError
     calls = []
     def reject(identity, category):
@@ -161,7 +161,7 @@ def test_review_invalid_commands_admission_before_persistence(gateway):
         async with sdk(gateway) as (_, http, _):
             for i in range(4):
                 response = await http.post("/a2a", json={"jsonrpc": "2.0", "id": i, "method": "SendMessage",
-                    "params": MessageToDict(command("lookup", f"invalid-{i}", need={}))})
+                    "params": MessageToDict(command("lookup", f"invalid-{i}", need=need.model_dump(mode="json")))})
                 assert response.json()["error"]["data"][0]["metadata"]["code"] == "RATE_LIMITED"
         with gateway.db.connect() as conn:
             for table in ("a2a_tasks", "a2a_messages", "events", "outbox"):
@@ -291,9 +291,10 @@ def test_ac_2_lookup_selection_placement_and_state_artifacts(gateway, need, upst
             assert sha256(quote_response.content).hexdigest() == quote_file["sha256"]
             states = [json.loads(r["payload"])["task"]["status"]["state"] for r in gateway.a2a.updates(task.id, Principal("external"))]
             assert "TASK_STATE_WORKING" in states and states[-1] == "TASK_STATE_COMPLETED"
-            # Missing request details are an interactive task, not a server crash.
-            missing = (await client.send_message(command("lookup", "missing"))).task
-            assert missing.status.state == t.TaskState.TASK_STATE_INPUT_REQUIRED
+            # Structured commands obey spec 63; text elicitation is covered by spec 60.
+            with pytest.raises(InvalidParamsError) as missing:
+                await client.send_message(command("lookup", "missing"))
+            assert missing.value.data["code"] == "ARGUMENT_REQUIRED"
             # Completed protocol tasks cannot be canceled; a new command applies
             # the existing order cancellation rules and releases reservations.
             from a2a.utils.errors import TaskNotCancelableError

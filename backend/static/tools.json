@@ -1,4 +1,461 @@
 {
+  "create_intent": {
+    "description": "Create a tenant buying intent. Repeating client_intent_id returns its current quote/order across REST, MCP and A2A; changed payload requires an amendment. Overlapping demand requires supersedes or approved additional demand. Quote using intent_id and intent_version, then place once. Use this tool when you need to create intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "$defs": {
+        "ConsumptionWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "format": "date",
+              "title": "Start",
+              "type": "string"
+            },
+            "end": {
+              "format": "date",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "title": "ConsumptionWindow",
+          "type": "object"
+        },
+        "FulfilmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "default": "all_or_nothing",
+              "enum": [
+                "all_or_nothing",
+                "allow_partial"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "minimum_share": {
+              "default": 1,
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Minimum Share",
+              "type": "number"
+            }
+          },
+          "title": "FulfilmentPolicy",
+          "type": "object"
+        },
+        "IntentLine": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Product Id"
+            },
+            "functional_need": {
+              "anyOf": [
+                {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Functional Need"
+            },
+            "quantity_sales_units": {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Quantity Sales Units",
+              "type": "number"
+            },
+            "essential": {
+              "default": false,
+              "title": "Essential",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "quantity_sales_units"
+          ],
+          "title": "IntentLine",
+          "type": "object"
+        },
+        "IntentRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "client_intent_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Client Intent Id",
+              "type": "string"
+            },
+            "customer_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Customer Id",
+              "type": "string"
+            },
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/IntentLine"
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "title": "Lines",
+              "type": "array"
+            },
+            "deliver_by": {
+              "format": "date",
+              "title": "Deliver By",
+              "type": "string"
+            },
+            "constraints": {
+              "additionalProperties": true,
+              "title": "Constraints",
+              "type": "object"
+            },
+            "delivery_point": {
+              "default": "default",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Delivery Point",
+              "type": "string"
+            },
+            "consumption_window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumptionWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "fulfilment_policy": {
+              "$ref": "#/$defs/FulfilmentPolicy"
+            },
+            "supersedes": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Supersedes",
+              "type": "array"
+            },
+            "additional": {
+              "default": false,
+              "title": "Additional",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "client_intent_id",
+            "customer_id",
+            "lines",
+            "deliver_by"
+          ],
+          "title": "IntentRequest",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/IntentRequest"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "title": "create_intentArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "create_intentDictOutput",
+      "type": "object"
+    }
+  },
+  "get_intent": {
+    "description": "Get an intent and its current quote/order, revision, remainder and structured next actions under your own mandate. Use this tool when you need to get intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id"
+      ],
+      "title": "get_intentArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "get_intentDictOutput",
+      "type": "object"
+    }
+  },
+  "amend_intent": {
+    "description": "Amend a buying intent at expected_version. Changes after placement require human approval and the normal order change/cutoff rules; the original commitment remains until approved. Use this tool when you need to amend intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "$defs": {
+        "ConsumptionWindow": {
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "format": "date",
+              "title": "Start",
+              "type": "string"
+            },
+            "end": {
+              "format": "date",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "title": "ConsumptionWindow",
+          "type": "object"
+        },
+        "FulfilmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "default": "all_or_nothing",
+              "enum": [
+                "all_or_nothing",
+                "allow_partial"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "minimum_share": {
+              "default": 1,
+              "maximum": 1,
+              "minimum": 0,
+              "title": "Minimum Share",
+              "type": "number"
+            }
+          },
+          "title": "FulfilmentPolicy",
+          "type": "object"
+        },
+        "IntentLine": {
+          "additionalProperties": false,
+          "properties": {
+            "product_id": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Product Id"
+            },
+            "functional_need": {
+              "anyOf": [
+                {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Functional Need"
+            },
+            "quantity_sales_units": {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Quantity Sales Units",
+              "type": "number"
+            },
+            "essential": {
+              "default": false,
+              "title": "Essential",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "quantity_sales_units"
+          ],
+          "title": "IntentLine",
+          "type": "object"
+        },
+        "IntentRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "client_intent_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Client Intent Id",
+              "type": "string"
+            },
+            "customer_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Customer Id",
+              "type": "string"
+            },
+            "supplier_id": {
+              "default": "valio",
+              "title": "Supplier Id",
+              "type": "string"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/IntentLine"
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "title": "Lines",
+              "type": "array"
+            },
+            "deliver_by": {
+              "format": "date",
+              "title": "Deliver By",
+              "type": "string"
+            },
+            "constraints": {
+              "additionalProperties": true,
+              "title": "Constraints",
+              "type": "object"
+            },
+            "delivery_point": {
+              "default": "default",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Delivery Point",
+              "type": "string"
+            },
+            "consumption_window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumptionWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "fulfilment_policy": {
+              "$ref": "#/$defs/FulfilmentPolicy"
+            },
+            "supersedes": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Supersedes",
+              "type": "array"
+            },
+            "additional": {
+              "default": false,
+              "title": "Additional",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "client_intent_id",
+            "customer_id",
+            "lines",
+            "deliver_by"
+          ],
+          "title": "IntentRequest",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/IntentRequest"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "intent_id",
+        "request",
+        "expected_version"
+      ],
+      "title": "amend_intentArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "amend_intentDictOutput",
+      "type": "object"
+    }
+  },
+  "resume_intent": {
+    "description": "Continue a same-tenant intent under your own current mandate. Rechecks categories and spending authority, preserves pending human approvals and returns next actions without another order. Use this tool when you need to resume intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "expected_version": {
+          "title": "Expected Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "intent_id",
+        "expected_version"
+      ],
+      "title": "resume_intentArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "resume_intentDictOutput",
+      "type": "object"
+    }
+  },
   "get_agent_context": {
     "description": "Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed. Use this tool when you need to get agent context. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
     "inputSchema": {
@@ -6922,6 +7379,30 @@
           ],
           "default": null
         },
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "idempotency_key": {
           "anyOf": [
             {
@@ -7938,6 +8419,30 @@
       },
       "additionalProperties": false,
       "properties": {
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "anomalies": {
           "description": "Spec 45 checks, including insufficient_history and one-step proposed fixes.",
           "items": {
@@ -9146,6 +9651,30 @@
         "Quote": {
           "additionalProperties": false,
           "properties": {
+            "intent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Intent Id"
+            },
+            "intent_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Intent Version"
+            },
             "anomalies": {
               "description": "Spec 45 checks, including insufficient_history and one-step proposed fixes.",
               "items": {
@@ -10582,6 +11111,54 @@
       },
       "additionalProperties": false,
       "properties": {
+        "intent_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent State"
+        },
+        "delivery_notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Notice"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "anomalies": {
           "description": "Anomaly evidence rechecked under the placement lock; warnings require human approval.",
           "items": {
@@ -12139,6 +12716,54 @@
       },
       "additionalProperties": false,
       "properties": {
+        "intent_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent State"
+        },
+        "delivery_notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Notice"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "anomalies": {
           "description": "Anomaly evidence rechecked under the placement lock; warnings require human approval.",
           "items": {
@@ -13696,6 +14321,54 @@
       },
       "additionalProperties": false,
       "properties": {
+        "intent_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent State"
+        },
+        "delivery_notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Notice"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "anomalies": {
           "description": "Anomaly evidence rechecked under the placement lock; warnings require human approval.",
           "items": {
@@ -15409,6 +16082,54 @@
       },
       "additionalProperties": false,
       "properties": {
+        "intent_state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent State"
+        },
+        "delivery_notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Notice"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        },
+        "intent_version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Version"
+        },
         "anomalies": {
           "description": "Anomaly evidence rechecked under the placement lock; warnings require human approval.",
           "items": {
@@ -16153,7 +16874,10 @@
                       "connection.reauth_required",
                       "connection.concurrent_context",
                       "connection.continuity_confirmed",
-                      "connection.continuity_required"
+                      "connection.continuity_required",
+                      "INTENT_AMENDED",
+                      "INTENT_HANDOVER",
+                      "INTENT_PARTIALLY_CONFIRMED"
                     ]
                   },
                   {
@@ -16351,7 +17075,10 @@
                           "connection.reauth_required",
                           "connection.concurrent_context",
                           "connection.continuity_confirmed",
-                          "connection.continuity_required"
+                          "connection.continuity_required",
+                          "INTENT_AMENDED",
+                          "INTENT_HANDOVER",
+                          "INTENT_PARTIALLY_CONFIRMED"
                         ]
                       },
                       {
@@ -19697,6 +20424,28 @@
         },
         "Quote": {
           "properties": {
+            "intent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Id"
+            },
+            "intent_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Version"
+            },
             "anomalies": {
               "items": {
                 "$ref": "#/$defs/AnomalyCheck"
@@ -24982,6 +25731,28 @@
       "$defs": {
         "Quote": {
           "properties": {
+            "intent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Id"
+            },
+            "intent_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Version"
+            },
             "anomalies": {
               "items": {
                 "$ref": "#/$defs/AnomalyCheck"
@@ -26209,6 +26980,50 @@
       "$defs": {
         "Order": {
           "properties": {
+            "intent_state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent State"
+            },
+            "delivery_notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Delivery Notice"
+            },
+            "intent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Id"
+            },
+            "intent_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Version"
+            },
             "anomalies": {
               "items": {
                 "$ref": "#/$defs/AnomalyCheck"
@@ -28301,6 +29116,780 @@
       "type": "object",
       "additionalProperties": true,
       "title": "Response Connection Test V1 Connect Connections  Connection Id  Test Post"
+    }
+  },
+  "create_v1_intents": {
+    "description": "REST capability POST /v1/intents. create_v1_intents Use this tool when you need to create v1 intents. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/IntentRequest"
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "IntentRequest": {
+          "properties": {
+            "client_intent_id": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Client Intent Id"
+            },
+            "customer_id": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Customer Id"
+            },
+            "supplier_id": {
+              "type": "string",
+              "title": "Supplier Id",
+              "default": "valio"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/IntentLine"
+              },
+              "type": "array",
+              "maxItems": 10,
+              "minItems": 1,
+              "title": "Lines"
+            },
+            "deliver_by": {
+              "type": "string",
+              "format": "date",
+              "title": "Deliver By"
+            },
+            "constraints": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Constraints"
+            },
+            "delivery_point": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Delivery Point",
+              "default": "default"
+            },
+            "consumption_window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumptionWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fulfilment_policy": {
+              "$ref": "#/$defs/FulfilmentPolicy"
+            },
+            "supersedes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "maxItems": 100,
+              "title": "Supersedes"
+            },
+            "additional": {
+              "type": "boolean",
+              "title": "Additional",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "client_intent_id",
+            "customer_id",
+            "lines",
+            "deliver_by"
+          ],
+          "title": "IntentRequest"
+        },
+        "IntentLine": {
+          "properties": {
+            "product_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Product Id"
+            },
+            "functional_need": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Functional Need"
+            },
+            "quantity_sales_units": {
+              "type": "number",
+              "maximum": 1000000.0,
+              "exclusiveMinimum": 0.0,
+              "title": "Quantity Sales Units"
+            },
+            "essential": {
+              "type": "boolean",
+              "title": "Essential",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "quantity_sales_units"
+          ],
+          "title": "IntentLine"
+        },
+        "ConsumptionWindow": {
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date",
+              "title": "Start"
+            },
+            "end": {
+              "type": "string",
+              "format": "date",
+              "title": "End"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "start",
+            "end"
+          ],
+          "title": "ConsumptionWindow"
+        },
+        "FulfilmentPolicy": {
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "all_or_nothing",
+                "allow_partial"
+              ],
+              "title": "Mode",
+              "default": "all_or_nothing"
+            },
+            "minimum_share": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Minimum Share",
+              "default": 1
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "title": "FulfilmentPolicy"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Create V1 Intents Post"
+    }
+  },
+  "get": {
+    "description": "REST capability GET /v1/intents/{id}. get Use this tool when you need to get. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Get V1 Intents  Id  Get"
+    }
+  },
+  "amend": {
+    "description": "REST capability POST /v1/intents/{id}/amendments. amend Use this tool when you need to amend. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/Amendment"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "Amendment": {
+          "properties": {
+            "expected_version": {
+              "type": "integer",
+              "minimum": 1.0,
+              "title": "Expected Version"
+            },
+            "request": {
+              "$ref": "#/$defs/IntentRequest"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "expected_version",
+            "request"
+          ],
+          "title": "Amendment"
+        },
+        "IntentRequest": {
+          "properties": {
+            "client_intent_id": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Client Intent Id"
+            },
+            "customer_id": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Customer Id"
+            },
+            "supplier_id": {
+              "type": "string",
+              "title": "Supplier Id",
+              "default": "valio"
+            },
+            "lines": {
+              "items": {
+                "$ref": "#/$defs/IntentLine"
+              },
+              "type": "array",
+              "maxItems": 10,
+              "minItems": 1,
+              "title": "Lines"
+            },
+            "deliver_by": {
+              "type": "string",
+              "format": "date",
+              "title": "Deliver By"
+            },
+            "constraints": {
+              "additionalProperties": true,
+              "type": "object",
+              "title": "Constraints"
+            },
+            "delivery_point": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Delivery Point",
+              "default": "default"
+            },
+            "consumption_window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConsumptionWindow"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fulfilment_policy": {
+              "$ref": "#/$defs/FulfilmentPolicy"
+            },
+            "supersedes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "maxItems": 100,
+              "title": "Supersedes"
+            },
+            "additional": {
+              "type": "boolean",
+              "title": "Additional",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "client_intent_id",
+            "customer_id",
+            "lines",
+            "deliver_by"
+          ],
+          "title": "IntentRequest"
+        },
+        "IntentLine": {
+          "properties": {
+            "product_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Product Id"
+            },
+            "functional_need": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000,
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Functional Need"
+            },
+            "quantity_sales_units": {
+              "type": "number",
+              "maximum": 1000000.0,
+              "exclusiveMinimum": 0.0,
+              "title": "Quantity Sales Units"
+            },
+            "essential": {
+              "type": "boolean",
+              "title": "Essential",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "quantity_sales_units"
+          ],
+          "title": "IntentLine"
+        },
+        "ConsumptionWindow": {
+          "properties": {
+            "start": {
+              "type": "string",
+              "format": "date",
+              "title": "Start"
+            },
+            "end": {
+              "type": "string",
+              "format": "date",
+              "title": "End"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "start",
+            "end"
+          ],
+          "title": "ConsumptionWindow"
+        },
+        "FulfilmentPolicy": {
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "all_or_nothing",
+                "allow_partial"
+              ],
+              "title": "Mode",
+              "default": "all_or_nothing"
+            },
+            "minimum_share": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Minimum Share",
+              "default": 1
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "title": "FulfilmentPolicy"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Amend V1 Intents  Id  Amendments Post"
+    }
+  },
+  "resume": {
+    "description": "REST capability POST /v1/intents/{id}/resume. resume Use this tool when you need to resume. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "Revision": {
+          "properties": {
+            "expected_version": {
+              "type": "integer",
+              "minimum": 1.0,
+              "title": "Expected Version"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "expected_version"
+          ],
+          "title": "Revision"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Resume V1 Intents  Id  Resume Post"
+    }
+  },
+  "quote": {
+    "description": "REST capability POST /v1/intents/{id}/quote. quote Use this tool when you need to quote. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/QuoteRequest"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "QuoteRequest": {
+          "properties": {
+            "customer_id": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Customer Id",
+              "description": "Required non-blank Valio customer identifier."
+            },
+            "deliver_by": {
+              "type": "string",
+              "format": "date",
+              "title": "Deliver By",
+              "description": "Delivery date between today and today + 60 days, Europe/Helsinki."
+            },
+            "intent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Id"
+            },
+            "intent_version": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent Version"
+            },
+            "basket_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BasketRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Quote the selected, deduplicated lines of a stored recipe basket; mutually exclusive with lines and plan_ref."
+            },
+            "lines": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/QuoteLineRequest"
+                  },
+                  "type": "array",
+                  "maxItems": 10,
+                  "minItems": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lines"
+            },
+            "plan_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PlanRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recheck a stored plan live. Exactly one of lines, plan_ref or basket_ref is required."
+            },
+            "need_ref": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Need Ref",
+              "description": "Required with explicit lines: stored lookup_id binding fit, preferences and current customer constraints. Otherwise 422 NEED_REF_REQUIRED."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "customer_id",
+            "deliver_by"
+          ],
+          "title": "QuoteRequest"
+        },
+        "BasketRef": {
+          "properties": {
+            "basket_lookup_id": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Basket Lookup Id"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "basket_lookup_id"
+          ],
+          "title": "BasketRef"
+        },
+        "QuoteLineRequest": {
+          "properties": {
+            "product_id": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Product Id"
+            },
+            "quantity_sales_units": {
+              "type": "number",
+              "maximum": 1000000.0,
+              "exclusiveMinimum": 0.0,
+              "title": "Quantity Sales Units",
+              "description": "Explicit whole sales quantity, at most 1,000,000, in allowedLotSize steps (minimum one), including KG; fractional lots return INVALID_LOT_SIZE."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "product_id",
+            "quantity_sales_units"
+          ],
+          "title": "QuoteLineRequest"
+        },
+        "PlanRef": {
+          "properties": {
+            "lookup_id": {
+              "type": "string",
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Lookup Id"
+            },
+            "plan_index": {
+              "type": "integer",
+              "minimum": 0.0,
+              "title": "Plan Index",
+              "description": "Zero-based index in the stored lookup's plans."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "lookup_id",
+            "plan_index"
+          ],
+          "title": "PlanRef"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Quote V1 Intents  Id  Quote Post"
+    }
+  },
+  "submit_v1_intents_id_submit": {
+    "description": "REST capability POST /v1/intents/{id}/submit. submit_v1_intents_id_submit Use this tool when you need to submit v1 intents id submit. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "Revision": {
+          "properties": {
+            "expected_version": {
+              "type": "integer",
+              "minimum": 1.0,
+              "title": "Expected Version"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "expected_version"
+          ],
+          "title": "Revision"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Submit V1 Intents  Id  Submit Post"
+    }
+  },
+  "transition": {
+    "description": "REST capability POST /v1/intents/{id}/transitions. transition Use this tool when you need to transition. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/Transition"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "Transition": {
+          "properties": {
+            "expected_version": {
+              "type": "integer",
+              "minimum": 1.0,
+              "title": "Expected Version"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "CANCELLED",
+                "CONFIRMED",
+                "CLOSED",
+                "EXPIRED"
+              ],
+              "title": "State"
+            },
+            "confirmed_lines": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confirmed Lines"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "expected_version",
+            "state"
+          ],
+          "title": "Transition"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Transition V1 Intents  Id  Transitions Post"
     }
   },
   "compare_plans": {

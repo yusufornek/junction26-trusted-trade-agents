@@ -190,9 +190,11 @@ def test_contract_all_routes_have_response_schema():
                                     "/oauth/register", "/v1/oauth/clients", "/v1/oauth/requests/{request_id}",
                                     "/v1/oauth/requests/{request_id}/decision"}
     legacy_paths.update({"/v1/stockout-watch/run", "/v1/stockout-watch/inbox", "/v1/proposals/suggest"})
+    legacy_paths.update({"/v1/intents", "/v1/intents/{id}"})
     assert legacy_paths <= set(schema["paths"])
     assert all(path.startswith(("/v1/auth/", "/v1/tenant/", "/v1/operator/", "/v1/connect/", "/v1/oauth/", "/oauth/",
-                               "/.well-known/oauth-", "/a2a/tenant", "/a2a/operator")) for path in set(schema["paths"]) - legacy_paths)
+                               "/.well-known/oauth-", "/a2a/tenant", "/a2a/operator", "/v1/intents/",
+                               "/v1/connections/")) for path in set(schema["paths"]) - legacy_paths)
     for path in schema["paths"].values():
         for operation in path.values():
             success = operation["responses"].get("200", operation["responses"].get("201"))

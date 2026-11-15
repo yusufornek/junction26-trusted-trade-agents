@@ -160,7 +160,8 @@ def test_ac_8_registry_labels_synthetic_nordfood(gateway):
     rows = {r["supplier_id"]: r for r in response.json()}
     assert response.status_code == 200 and rows["nordfood"]["synthetic"] is True
     assert rows["valio"]["synthetic"] is False
-    assert rows["nordfood"]["capabilities"]["execution"] == {"mode": "supplier_backed", "atomicity": "atomic", "partial_acceptance": False}
+    assert rows["nordfood"]["capabilities"]["execution"] == {"mode": "supplier_backed", "atomicity": "atomic", "partial_acceptance": False,
+                                                           "consistency_window_seconds": 0}
 
 
 @pytest.mark.parametrize("requested,expected", [(1, 2), (25, 3)])
@@ -223,7 +224,12 @@ def test_review_dispatch_rechecks_authority(gateway, need, upstream, nordfood, m
             from app.auth import Credentials
             gateway.settings.keys = Credentials("operator", "external:replacement" if withdrawal == "rotated" else "other:replacement")
         if withdrawal != "suspended":
-            gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Operator"))
+            # The operator changes authority independently of the buyer's command.
+            operator_token = PRINCIPAL.set(None)
+            try:
+                gateway.policy.update(PolicyUpdateRequest(policy=policy, updated_by="Operator"))
+            finally:
+                PRINCIPAL.reset(operator_token)
         monkeypatch.setattr(nordfood[1].client, "request", original)
         try:
             final = gateway.orders.place_order(quote.id, "dispatch-authority")

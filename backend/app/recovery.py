@@ -68,6 +68,11 @@ RECOVERY.update(UNKNOWN_ARGUMENT=(False, "FIX_REQUEST"), ARGUMENT_REQUIRED=(Fals
                 CONTRACT_STALE=(False, "FIX_REQUEST"), REEVALUATION_REQUIRED=(False, "FIX_REQUEST"),
                 DRIVING_TEST_REQUIRED=(False, "CONTACT_ADMIN"), CONNECTION_REQUIRED=(False, "CONTACT_ADMIN"),
                 DRIVING_TEST_NOT_FOUND=(False, "STOP"))
+RECOVERY.update(INTENT_NOT_FOUND=(False, "STOP"),
+                INTENT_AMENDMENT_REQUIRED=(False, "REVIEW_UPDATED_EVIDENCE"),
+                INTENT_VERSION_CONFLICT=(False, "REVIEW_UPDATED_EVIDENCE"),
+                POSSIBLE_DUPLICATE_DEMAND=(False, "FIX_REQUEST"),
+                INTENT_RESPONSE_DROPPED=(True, "RETRY_SAME_COMMAND"))
 
 # Keep the published version-1 vocabulary stable. Contract-aware failures use
 # version 2, which adds an explicit refresh transition instead of changing v1.

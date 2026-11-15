@@ -74,6 +74,8 @@ async def enrich_agent_card(card, gateway, audience):
     schemas = {}
     from .connection_contract import manager
     toolmap = {tool.name: tool for tool in tools}
+    if audience == "tenant" and "agents" in toolmap:
+        aliases["register"] = "agents"
     for name in [*toolmap, *(name for name, target in aliases.items() if target in toolmap)]:
         tool = toolmap.get(name) or toolmap[aliases[name]]
         sample = {"version": 1, "command": "tool", "skill": tool.name, "arguments": example(tool.input_schema)}

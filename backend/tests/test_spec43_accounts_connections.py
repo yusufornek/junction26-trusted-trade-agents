@@ -408,6 +408,14 @@ def test_AC_1_OpenAPI_GET_POST_route_isolation(http, gateway, need, upstream, me
             elif template == "/v1/quotes":
                 body = {"customer_id": "1", "deliver_by": str(need.deliver_by), "need_ref": lookup["lookup_id"],
                         "lines": [{"product_id": "1", "quantity_sales_units": 200}]}
+            elif template == "/v1/intents/{id}/amendments":
+                body = {"expected_version": 1, "request": {"client_intent_id": "foreign-amendment",
+                    "customer_id": "2", "deliver_by": str(need.deliver_by),
+                    "lines": [{"product_id": "1", "quantity_sales_units": 1}]}}
+            elif template == "/v1/intents/{id}/quote":
+                body = {"customer_id": "2", "deliver_by": str(need.deliver_by), "need_ref": lookup["lookup_id"],
+                    "intent_id": "foreign-target", "intent_version": 1,
+                    "lines": [{"product_id": "1", "quantity_sales_units": 1}]}
             kwargs["json"] = body
             has_target |= template in {"/v1/offers", "/v1/quotes", "/v1/orders"}
         protocol = "a2a" if url.startswith("/a2a") else "mcp" if url.startswith("/mcp") else "rest"

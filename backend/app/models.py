@@ -510,6 +510,8 @@ class BasketRef(Model):
 
 
 class QuoteRequest(RequestScope):
+    intent_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    intent_version: int | None = Field(default=None, ge=1, exclude_if=lambda v: v is None)
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None, description="Quote the selected, deduplicated lines of a stored recipe basket; mutually exclusive with lines and plan_ref.")
     lines: list[QuoteLineRequest] | None = Field(default=None, min_length=1, max_length=10)
     plan_ref: PlanRef | None = Field(default=None, description="Recheck a stored plan live. Exactly one of lines, plan_ref or basket_ref is required.")
@@ -517,6 +519,8 @@ class QuoteRequest(RequestScope):
 
     @model_validator(mode="after")
     def unique_lines(self):
+        if (self.intent_id is None) != (self.intent_version is None):
+            raise ValueError("intent_id and intent_version must be supplied together")
         if sum(x is not None for x in (self.lines, self.plan_ref, self.basket_ref)) != 1:
             raise ValueError("Exactly one of lines, plan_ref or basket_ref is required")
         if self.basket_ref:
@@ -534,6 +538,8 @@ class QuoteRequest(RequestScope):
 
 
 class Quote(Model):
+    intent_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    intent_version: int | None = Field(default=None, exclude_if=lambda v: v is None)
     anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Spec 45 checks, including insufficient_history and one-step proposed fixes.")
     policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used by this quote.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -578,6 +584,10 @@ class Execution(Model):
 
 
 class Order(Model):
+    intent_state: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    delivery_notice: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    intent_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    intent_version: int | None = Field(default=None, exclude_if=lambda v: v is None)
     anomalies: list[AnomalyCheck] = Field(default_factory=list, exclude_if=lambda v: not v, description="Anomaly evidence rechecked under the placement lock; warnings require human approval.")
     policy_version_id: str | None = Field(default=None, exclude_if=lambda v: v is None, description="Immutable effective governance policy version used at placement.")
     basket_ref: BasketRef | None = Field(default=None, exclude_if=lambda v: v is None)

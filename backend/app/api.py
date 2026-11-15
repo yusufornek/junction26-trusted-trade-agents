@@ -36,7 +36,11 @@ from starlette.routing import Route
 logger = logging.getLogger(__name__)
 
 
-def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
+def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True, include_purchase_intents=True):
+    """Build the gateway with purchase intents in OpenAPI and MCP by default.
+
+    Intent routes remain callable for cross-protocol recovery with either view.
+    """
     settings = settings or (gateway.settings if gateway is not None else Settings.from_env())
     keys = keys or settings.keys or Credentials()
     keys.require_operator()
@@ -54,6 +58,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     with service.activate():
                         try:
                             service.orders.dispatch_pending()
+                            service.intents.dispatch_pending()
                         except Exception:
                             logger.exception("Supplier execution awaits durable retry")
                         service.outbox.dispatch()
@@ -83,7 +88,7 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
                     service.close()
             return
         from .mcp_server import create_server
-        app.state.mcp_server = create_server(service, agent_id=None)
+        app.state.mcp_server = create_server(service, agent_id=None, include_purchase_intents=include_purchase_intents)
         app.state.mcp_server.keys = keys
         from mcp.server.transport_security import TransportSecuritySettings
         from urllib.parse import urlsplit
@@ -570,6 +575,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True):
     install_connection_contract(app)
     from .agent_surface import install as install_agent_surface
     install_agent_surface(app)
+    from .purchase_intent_surfaces import router as intent_router
+    app.include_router(intent_router, include_in_schema=include_purchase_intents)
 
     original_openapi = app.openapi
     def problem_openapi():
