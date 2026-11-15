@@ -89,8 +89,8 @@ class ClientMetadata(BaseModel):
     redirect_uris: list[str] = Field(min_length=1, max_length=10)
     application_type: Literal["web", "native"] | None = None
     token_endpoint_auth_method: Literal["none", "client_secret_post", "client_secret_basic"] = "none"
-    grant_types: list[Literal["authorization_code", "refresh_token"]] = Field(
-        default_factory=lambda: ["authorization_code"])
+    # Unknown grant types (claude.ai also lists jwt-bearer) are ignored, not rejected; only these two are ever issued.
+    grant_types: list[str] = Field(default_factory=lambda: ["authorization_code"], max_length=10)
     response_types: list[Literal["code"]] = Field(default_factory=lambda: ["code"])
 
 
@@ -189,6 +189,7 @@ TOKEN_FORM_SCHEMA = {"requestBody": {"required": True, "content": {"application/
 def validate_metadata(value, *, dcr=False):
     try:
         model = (Registration if dcr else ClientMetadata).model_validate(value)
+        model.grant_types = [g for g in model.grant_types if g in {"authorization_code", "refresh_token"}]
         if (any(ord(c) < 32 for c in model.client_name) or "authorization_code" not in model.grant_types or
                 "code" not in model.response_types):
             raise ValueError()
