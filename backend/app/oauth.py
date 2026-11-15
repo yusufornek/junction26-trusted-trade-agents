@@ -636,7 +636,7 @@ def authorization_server(request: Request):
             "registration_endpoint": issuer + "/oauth/register", "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"], "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
-            "scopes_supported": ["mcp", *AUDIENCE_SCOPES, "offline_access"], "client_id_metadata_document_supported": True,
+            "scopes_supported": ["mcp", *AUDIENCE_SCOPES, "offline_access"], "client_id_metadata_document_supported": False,
             "authorization_response_iss_parameter_supported": True}
 
 
