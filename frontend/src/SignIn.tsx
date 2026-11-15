@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Building2, KeyRound, Sparkles } from "lucide-react";
-import { LuotsiWordmark } from "./brand";
+import { ArrowLeft, Building2, CircleHelp, KeyRound, LogIn, Mail, Sparkles } from "lucide-react";
+import { LuotsiMark, LuotsiWordmark } from "./brand";
 import { ErrorNote } from "./ui";
 
 type Props = {
@@ -14,111 +14,158 @@ type Props = {
   onClearError: () => void;
 };
 
-const BUTTON = "flex h-14 w-full items-center justify-center gap-2.5 rounded-xl text-[17px] font-medium transition-colors disabled:opacity-60";
-const PRIMARY = `${BUTTON} bg-rail text-white hover:bg-brand-strong`;
-const QUIET = `${BUTTON} bg-ink/[0.07] text-ink hover:bg-ink/[0.11]`;
+// The same rows, radii and white-on-teal levels as the console's rail, so signing in already looks like the console.
+const ROW = "flex h-10 w-full shrink-0 items-center gap-3 rounded-2xl px-[11px] text-left text-[14px] font-medium transition-colors";
+const IDLE = "text-white/75 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white";
 const FIELD =
-  "h-14 w-full rounded-xl border-2 border-transparent bg-ink/[0.07] px-4 text-[17px] text-ink outline-none placeholder:text-ink-soft focus:border-ink focus:bg-surface";
+  "h-11 w-full rounded-2xl border border-white/15 bg-white/10 px-4 text-[15px] text-white outline-none transition-colors placeholder:text-white/45 focus:border-white/60 focus:bg-white/[0.14]";
+const WIDTH = "w-[min(380px,calc(100vw-2rem))]";
 
-/** Signed-out screen: one question at a time, other ways in below it. */
+/** Signed-out screen in the rail's design: it opens as the 72 px icon rail and widens to show every way in. */
 export default function SignIn({ demoToken, signingIn, error, onToken, onEmail, onClearError }: Props) {
-  const [step, setStep] = useState<"email" | "password" | "token">("email");
+  const [open, setOpen] = useState(false);
+  const [method, setMethod] = useState<"email" | "token">("email");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [token, setTokenValue] = useState("");
 
-  const go = (next: typeof step) => {
+  // One orchestrated moment: the rail widens just after the first paint, like the console rail on hover.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const pick = (next: typeof method) => {
     onClearError();
-    setStep(next);
+    setMethod(next);
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (step === "email") return go("password");
-    if (step === "token") {
+    if (method === "token") {
       onToken(token);
       setTokenValue("");
-      return;
+    } else {
+      onEmail(email.trim(), password);
+      setPassword("");
     }
-    onEmail(email.trim(), password);
-    setPassword("");
   };
 
-  const question = step === "email" ? "What's your e-mail?" : step === "password" ? "Enter your password" : "Enter your operator token";
-
   return (
-    <div className="flex min-h-dvh flex-col bg-surface">
-      <header className="bg-rail px-5 py-4 sm:px-12 sm:py-6">
-        <LuotsiWordmark className="block h-6 w-auto text-white sm:h-7" />
-      </header>
+    <div className="grid min-h-dvh place-items-center bg-page p-4">
+      <div
+        className={`overflow-hidden rounded-[26px] bg-rail shadow-[0_24px_60px_rgba(0,67,87,0.22)] transition-[width] duration-500 ease-out motion-reduce:transition-none ${
+          open ? WIDTH : "w-[72px]"
+        }`}
+      >
+        <div className={`flex ${WIDTH} flex-col px-4 py-4 text-white`}>
+          <div className="flex h-10 shrink-0 items-center gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-white text-rail">
+              <LuotsiMark className="block h-6 w-auto" />
+            </span>
+            <Label open={open}>
+              <LuotsiWordmark className="block h-[18px] w-auto text-white" />
+            </Label>
+          </div>
 
-      <main className="flex w-full flex-1 justify-center px-5 pb-10 pt-10 sm:pt-24">
-        <div className="flex w-full max-w-[480px] flex-col">
-          {step !== "email" ? (
-            <button type="button" onClick={() => go("email")} className="-ml-2 mb-4 grid size-10 place-items-center rounded-full hover:bg-ink/[0.07]" aria-label="Back">
-              <ArrowLeft size={22} />
-            </button>
-          ) : null}
-          <form className="flex flex-col gap-4" onSubmit={submit}>
-            <label htmlFor="sign-in-field" className="text-[26px] font-medium leading-tight tracking-tight sm:text-[30px]">
-              {question}
-            </label>
-            {step === "password" ? <p className="-mt-2 text-[15px] text-ink-muted">{email}</p> : null}
-            {step === "email" ? (
-              <input id="sign-in-field" className={FIELD} type="email" autoComplete="username" required placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-            ) : step === "password" ? (
-              <input id="sign-in-field" className={FIELD} type="password" autoComplete="current-password" required autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
-            ) : (
-              <input id="sign-in-field" className={FIELD} type="password" autoComplete="off" required autoFocus value={token} onChange={(e) => setTokenValue(e.target.value)} />
-            )}
-            {step === "token" ? <p className="-mt-2 text-[13px] text-ink-muted">Kept in memory only, so a reload asks again.</p> : null}
-            <button className={`${PRIMARY} mt-2`} disabled={signingIn}>
-              {signingIn ? "Signing in…" : step === "email" ? "Continue" : "Log in"}
-            </button>
+          <form className="mt-6 flex flex-col gap-2.5" onSubmit={submit}>
+            <div className="mb-1 flex h-10 items-center gap-3 px-[11px]">
+              {method === "email" ? <Mail size={18} className="shrink-0" aria-hidden /> : <KeyRound size={18} className="shrink-0" aria-hidden />}
+              <Label open={open} className="text-[15px] font-semibold">
+                {method === "email" ? "Sign in with e-mail" : "Sign in with an operator token"}
+              </Label>
+            </div>
+            <Fade open={open}>
+              {method === "email" ? (
+                <>
+                  <input className={FIELD} type="email" autoComplete="username" required placeholder="E-mail" aria-label="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
+                  <input
+                    className={FIELD}
+                    type="password"
+                    autoComplete="current-password"
+                    required
+                    placeholder="Password"
+                    aria-label="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </>
+              ) : (
+                <>
+                  <input className={FIELD} type="password" autoComplete="off" required autoFocus placeholder="Operator token" aria-label="Operator token" value={token} onChange={(e) => setTokenValue(e.target.value)} />
+                  <span className="px-1 text-[12px] text-white/60">Kept in memory only, so a reload asks again.</span>
+                </>
+              )}
+              <button className="mt-1 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-white text-[15px] font-semibold text-rail transition-colors hover:bg-white/90 disabled:opacity-60" disabled={signingIn}>
+                <LogIn size={17} aria-hidden /> {signingIn ? "Signing in…" : "Log in"}
+              </button>
+              {error ? <ErrorNote error={error} /> : null}
+            </Fade>
           </form>
 
-          {error ? (
-            <div className="mt-4">
-              <ErrorNote error={error} />
-            </div>
-          ) : null}
+          <div className="my-4 h-px bg-white/15" />
 
-          {step === "email" ? (
-            <>
-              <Divider />
-              <div className="flex flex-col gap-3">
-                {demoToken ? (
-                  <button className={QUIET} disabled={signingIn} onClick={() => onToken(demoToken)}>
-                    <Sparkles size={20} className="shrink-0 text-rail" aria-hidden />
-                    <span className="truncate">
-                      {/* Phones fit the account name on one line only without the verb. */}
-                      <span className="hidden sm:inline">Continue with </span>Junction 2026 Special Account
-                    </span>
-                  </button>
-                ) : null}
-                <button className={QUIET} onClick={() => go("token")}>
-                  <KeyRound size={19} className="shrink-0" aria-hidden /> Use an operator token
-                </button>
-              </div>
-              <Divider />
-              <Link to="/signup" className="flex items-center justify-center gap-2.5 py-2 text-[17px] font-medium hover:underline">
-                <Building2 size={19} aria-hidden /> Create an organisation account
-              </Link>
-            </>
-          ) : null}
+          <div className="flex flex-col gap-1">
+            {demoToken ? (
+              <Row icon={<Sparkles size={18} />} open={open} onClick={() => onToken(demoToken)} disabled={signingIn}>
+                Junction 2026 Special Account
+              </Row>
+            ) : null}
+            {method === "email" ? (
+              <Row icon={<KeyRound size={18} />} open={open} onClick={() => pick("token")}>
+                Use an operator token
+              </Row>
+            ) : (
+              <Row icon={<ArrowLeft size={18} />} open={open} onClick={() => pick("email")}>
+                Use e-mail instead
+              </Row>
+            )}
+            <Link to="/signup" className={`${ROW} ${IDLE}`}>
+              <Building2 size={18} className="shrink-0" />
+              <Label open={open}>Create an organisation account</Label>
+            </Link>
+          </div>
 
-          <p className="mt-10 text-[14px] leading-relaxed text-ink-muted">For the best experience, use a computer.</p>
+          <div className="mt-8 flex flex-col gap-1">
+            <a href="/docs" target="_blank" rel="noreferrer" className={`${ROW} ${IDLE}`}>
+              <CircleHelp size={18} className="shrink-0" />
+              <Label open={open}>API reference</Label>
+            </a>
+            <Fade open={open}>
+              <p className="px-[11px] pt-1 text-[12px] text-white/55">For the best experience, use a computer.</p>
+            </Fade>
+          </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
 
-function Divider() {
+function Row({ icon, open, onClick, disabled, children }: { icon: ReactNode; open: boolean; onClick: () => void; disabled?: boolean; children: ReactNode }) {
   return (
-    <div className="my-6 flex items-center gap-4 text-[15px] text-ink-soft">
-      <span className="h-px flex-1 bg-line" />
-      or
-      <span className="h-px flex-1 bg-line" />
+    <button type="button" onClick={onClick} disabled={disabled} className={`${ROW} ${IDLE} disabled:opacity-60`}>
+      <span className="shrink-0">{icon}</span>
+      <Label open={open}>{children}</Label>
+    </button>
+  );
+}
+
+/** Names slide in after the rail has started to widen, as on the console rail. */
+function Label({ open, className = "", children }: { open: boolean; className?: string; children: ReactNode }) {
+  return (
+    <span
+      className={`whitespace-nowrap transition-[opacity,transform] duration-300 motion-reduce:transition-none ${
+        open ? "translate-x-0 opacity-100 delay-200" : "-translate-x-1 opacity-0"
+      } ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Fade({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <div className={`flex flex-col gap-2.5 transition-opacity duration-300 motion-reduce:transition-none ${open ? "opacity-100 delay-300" : "opacity-0"}`}>
+      {children}
     </div>
   );
 }
