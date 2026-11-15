@@ -577,6 +577,8 @@ def create_app(gateway=None, *, settings=None, keys=None, serve_mcp=True, includ
     install_agent_surface(app)
     from .purchase_intent_surfaces import router as intent_router
     app.include_router(intent_router, include_in_schema=include_purchase_intents)
+    from .handoff_delegated_surfaces import router as handoff_router
+    app.include_router(handoff_router, include_in_schema=include_purchase_intents)
 
     original_openapi = app.openapi
     def problem_openapi():

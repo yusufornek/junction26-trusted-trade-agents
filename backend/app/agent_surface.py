@@ -299,8 +299,11 @@ class AgentSurface:
             "client": ("mcp", 0)})
 
         async def authenticated():
-            self.gateway.accounts.guard(p, target, cap.method)
+            from .handoff_delegated_surfaces import scope_path
+            self.gateway.accounts.guard(p, scope_path(target), cap.method)
             self.gateway.accounts.guard_target(request, p)
+            from .handoff_delegated_surfaces import rest_principal
+            rest_principal(self.gateway, p, request)
             if p.kind == "agent":
                 self.gateway.governance.check_active(p.id)
             request.state.principal = p

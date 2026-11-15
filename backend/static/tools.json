@@ -456,6 +456,220 @@
       "type": "object"
     }
   },
+  "handoff_intent": {
+    "description": "Create a single-use handoff for the current holder. may_commit waits for the authenticated human owner's confirmed decision; preparation never grants order authority. Use this tool when you need to handoff intent. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "$defs": {
+        "Handoff": {
+          "additionalProperties": false,
+          "properties": {
+            "to_agent_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "To Agent Id",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "mode": {
+              "default": "prepare_only",
+              "enum": [
+                "prepare_only",
+                "may_commit"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "confirmation_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confirmation Token"
+            }
+          },
+          "required": [
+            "to_agent_id",
+            "expires_at"
+          ],
+          "title": "Handoff",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/Handoff"
+        }
+      },
+      "required": [
+        "intent_id",
+        "request"
+      ],
+      "title": "handoff_intentArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "handoff_intentDictOutput",
+      "type": "object"
+    }
+  },
+  "accept_handoff": {
+    "description": "Accept a single-use handoff using this recipient's own agent credential; atomically move the exclusive holder and preserve the work context. Use this tool when you need to accept handoff. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "accept_handoffArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "accept_handoffDictOutput",
+      "type": "object"
+    }
+  },
+  "delegate_task": {
+    "description": "Issue an attenuated, intent-bound helper credential. Defaults to read-only research; order requires human owner approval and further hops require remaining depth. Use this tool when you need to delegate task. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "$defs": {
+        "Delegation": {
+          "additionalProperties": false,
+          "properties": {
+            "to_agent_id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "To Agent Id",
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "date-time",
+              "title": "Expires At",
+              "type": "string"
+            },
+            "intent_id": {
+              "title": "Intent Id",
+              "type": "string"
+            },
+            "operations": {
+              "items": {
+                "enum": [
+                  "lookup",
+                  "product_detail",
+                  "rfq_read",
+                  "quote",
+                  "order",
+                  "delegate"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Operations",
+              "type": "array"
+            },
+            "max_depth": {
+              "default": 1,
+              "maximum": 16,
+              "minimum": 1,
+              "title": "Max Depth",
+              "type": "integer"
+            },
+            "confirmation_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confirmation Token"
+            }
+          },
+          "required": [
+            "to_agent_id",
+            "expires_at",
+            "intent_id"
+          ],
+          "title": "Delegation",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/Delegation"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "title": "delegate_taskArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "delegate_taskDictOutput",
+      "type": "object"
+    }
+  },
+  "get_intent_checkpoint": {
+    "description": "Read the transport-independent intent checkpoint with pending actions and artifact references, without credentials. Use this tool when you need to get intent checkpoint. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {
+        "intent_id": {
+          "title": "Intent Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id"
+      ],
+      "title": "get_intent_checkpointArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "get_intent_checkpointDictOutput",
+      "type": "object"
+    }
+  },
+  "list_open_intents": {
+    "description": "Find open intents held by this agent across all its connections and sessions. Use this tool when you need to list open intents. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "properties": {},
+      "title": "list_open_intentsArguments",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "additionalProperties": true,
+      "title": "list_open_intentsDictOutput",
+      "type": "object"
+    }
+  },
   "get_agent_context": {
     "description": "Read your authenticated principal, customer scope, mandate summary, effective per-order and rolling 24-hour limits, remaining budget, environment, rate limits, standing constraints and supported operations. Profiled tenants also receive guardrail_profile with business profile, initial tenant guardrails, threshold, four-eyes, anomaly sensitivity and per-field preset sources. Advisory snapshot: authority is revalidated on each mutation. No other customer's authority is exposed. Use this tool when you need to get agent context. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
     "inputSchema": {
@@ -29890,6 +30104,72 @@
       "type": "object",
       "additionalProperties": true,
       "title": "Response Transition V1 Intents  Id  Transitions Post"
+    }
+  },
+  "approve_handoff": {
+    "description": "REST capability POST /v1/intents/handoffs/{id}/approve. approve_handoff Use this tool when you need to approve handoff. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "body": {
+          "$ref": "#/$defs/Confirmation"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "Confirmation": {
+          "properties": {
+            "confirmation_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confirmation Token"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "title": "Confirmation"
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Approve Handoff V1 Intents Handoffs  Id  Approve Post"
+    }
+  },
+  "revoke_delegation": {
+    "description": "REST capability POST /v1/intents/delegations/{id}/revoke. revoke_delegation Use this tool when you need to revoke delegation. Next call get_agent_context to review current authority before further actions. Recovery codes: VALIDATION_ERROR (correct fields), INSUFFICIENT_SCOPE or WRONG_AUDIENCE (reconnect with consent), ORDER_NOT_FOUND/LOOKUP_NOT_FOUND/QUOTE_NOT_FOUND (check your own reference), MANDATE_INVALID/AGENT_PAUSED (contact administrator), RATE_LIMITED/UPSTREAM_BUSY (retry after supplied interval), EVIDENCE_CHANGED (review refreshed evidence), EXPIRED_QUOTE (create_quote again), IDEMPOTENCY_CONFLICT (restore original payload). Follow next_action on every domain error.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "title": "Response Revoke Delegation V1 Intents Delegations  Id  Revoke Post"
     }
   },
   "compare_plans": {

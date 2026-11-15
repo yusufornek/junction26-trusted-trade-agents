@@ -8,6 +8,7 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 
 from .agent_surface import PRIVATE, canonical_origin, effective_audience
 from .auth import admit_credential
+from .connection_contract import manager as connection_contract
 from .foundation import PRINCIPAL
 
 EXTENSION = "urn:luotsi:agent-surface:v1"
@@ -106,6 +107,9 @@ async def enrich_agent_card(card, gateway, audience):
                 "oauthResource": card.supported_interfaces[0].url,
                 "mcpResource": base + "/mcp" + ("" if audience == "buyer" else "/" + audience),
                 "documentationLinks": [base + "/developers", base + "/openapi.json", base + "/.well-known/jwks.json"]})
+    card.capabilities.extensions.add(uri="urn:luotsi:connection-contract:v1",
+        description="Published trading contract and recovery version",
+        params=connection_contract(gateway).public())
     for uri, description in (
         ("urn:luotsi:signed-receipts:v1", "Detached EdDSA receipts; verify with independently trusted gateway JWKS"),
         ("urn:luotsi:verifiable-mandate:v1", "Buyer-issued verifiable mandate; gateway policy may only tighten authority"),
@@ -131,6 +135,7 @@ async def mcp_card(gateway, audience="buyer"):
         card["name"], card["title"] = server.name, server._lowlevel_server.title
     card["_meta"][MCP_EXTENSION].update({"canonicalOrigin": base,
         "discovery": discovery_context(gateway, audience),
+        "contract": connection_contract(gateway).public(),
         "tools": [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools],
         "resources": [r.model_dump(mode="json", by_alias=True, exclude_none=True) for r in await server.list_resources()],
         "resourceTemplates": [r.model_dump(mode="json", by_alias=True, exclude_none=True) for r in await server.list_resource_templates()],

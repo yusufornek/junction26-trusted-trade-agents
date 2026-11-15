@@ -13,7 +13,7 @@ from .foundation import PRINCIPAL
 
 ECHO = ContextVar("connection_contract_echo", default=None)
 CONTRACT_META = "luotsi/contract"
-DEMO_AGENTS = {"hotel-chain-agent", "web-console"}
+DEMO_AGENTS = {"hotel-chain-agent", "hospital-kitchen-agent", "web-console"}
 
 
 def manager(gateway):

@@ -106,7 +106,8 @@ def bounded_summary(value):
 @global_chain
 def append(conn, actor, action, summary, *, order_id=None, quote_id=None, data=None):
     from .foundation import CORRELATION, TRACE, emit
-    data = dict(data or {})
+    from .handoff_delegated_hooks import audit_data
+    data = audit_data(data)
     if action.endswith(("_FAILED", "_REFUSED", "_RATE_LIMITED")) or action == "RATE_LIMITED":
         data = bounded_summary(data)
         summary = summary[:2000]
@@ -230,10 +231,7 @@ def read(db, order_id=None, quote_id=None):
 
 def read_timeline(conn, order_id, quote_id, lookup_id):
     # OR joins the complete chain without duplicating events carrying both IDs.
-    rows = conn.execute(
-        """SELECT * FROM audit WHERE order_id=? OR quote_id=?
-           OR (action='LOOKUP' AND json_extract(data, '$.lookup_id')=?)""",
-        (order_id, quote_id, lookup_id),
-    )
+    from .handoff_delegated_hooks import timeline_rows
+    rows = timeline_rows(conn, order_id, quote_id, lookup_id)
     events = [AuditEntry(**{**{k: row[k] for k in AuditEntry.model_fields if k in row.keys()}, "data": json.loads(row["data"])}) for row in rows]
     return sorted(events, key=lambda event: (datetime.fromisoformat(event.ts), event.id))

@@ -301,7 +301,8 @@ def test_AC_6_demo_464306_1010_confirmed_and_seeded_passing_results(gateway, nee
             lines=[{"product_id": "464306", "quantity_sales_units": 1000}]), p.id)
         order = gateway.orders.place_order(quote.id, "contract-demo", p.id)
         assert order.total == 1010 and order.status == "CONFIRMED"
-        for agent in (p, gateway.accounts.bind(Principal("web-console", customer_ids=("1",)))):
+        for agent in (p, gateway.accounts.bind(Principal("web-console", customer_ids=("1",))),
+                      gateway.accounts.bind(Principal("hospital-kitchen-agent", customer_ids=("2",)))):
             status = driving(gateway).status(agent)
             assert status["valid"] and "order" in status["enabled_operations"]
             assert set(status["result"]["payload"]["checks"].values()) == {"passed"}
