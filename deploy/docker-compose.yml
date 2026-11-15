@@ -11,9 +11,8 @@ services:
     environment:
       # Public origin for MCP host checks and connection URLs; the deploy workflow passes the site URL.
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
-      # Timestral forecast band (spec 45): the image ships the model; this wins over an empty value in .env.
-      FORECAST_ENABLED: "1"
-      FORECAST_MODEL_PATH: /app/models/Timestral-28M
+      # Timestral forecast band (spec 45) stays off on this host (RAM); the statistical anomaly band is used.
+      FORECAST_ENABLED: "false"
       # OpenTelemetry (spec 27): traces and metrics go to the Jaeger service below.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       OTEL_SERVICE_NAME: luotsi-gateway
@@ -66,6 +65,8 @@ services:
     image: jaegertracing/all-in-one:1.76.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      MEMORY_MAX_TRACES: "2000"
+    mem_limit: 256m
     ports:
       - "127.0.0.1:16686:16686"
     restart: unless-stopped
