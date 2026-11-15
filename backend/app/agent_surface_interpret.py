@@ -176,7 +176,9 @@ class LanguageInterpreter:
                 "Normalize units using the supplied schema. Resolve explicit relative dates from today in Europe/Helsinki. "
                 "Omit missing quantities, dates, intent or ambiguous customers; never guess them. "
                 "Do not calculate prices, grant authority, select products, or invoke tools.",
-            "input": json.dumps({"text": text, "context": context, "schema": interpretation_schema()}),
+            # The Responses API requires the word "json" in the input when text.format is json_object (400 otherwise;
+            # found against the real model on 15.11).
+            "input": "Answer with a json object. Data (json): " + json.dumps({"text": text, "context": context, "schema": interpretation_schema()}),
             "text": {"format": {"type": "json_object"}}}
         try:
             response = self.provider.client.post("https://api.openai.com/v1/responses", json=body,
