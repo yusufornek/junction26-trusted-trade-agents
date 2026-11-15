@@ -474,7 +474,8 @@ function installLink(client: "cursor" | "vscode", url: string, header: string) {
 }
 
 function GatewaySetup({ client, setup, agentKey, mcpLive }: { client: Client; setup: ClientSetup; agentKey?: string; mcpLive: boolean }) {
-  const oauth = setup.auth.method === "oauth";
+  // claude.ai connects with OAuth even when the gateway returns the generic MCP setup for it.
+  const oauth = setup.auth.method === "oauth" || !!client.oauth;
   const placeholder = setup.secret_placeholder;
   // The gateway's snippet names the key as a placeholder. Once step 1 made a key it goes straight in, so the
   // copy works as pasted. Claude Desktop keeps its env indirection (mcp-remote reads the header from env).
@@ -500,7 +501,7 @@ function GatewaySetup({ client, setup, agentKey, mcpLive }: { client: Client; se
           reason={!mcpLive ? "Available once this address serves MCP." : "Create a key in step 1 first."}
         />
       ) : null}
-      {oauth ? <CopyBlock label="Server address" value={setup.url} /> : <CopyBlock label={SETUP[client.id]!.file} value={snippet} />}
+      {oauth ? <CopyBlock label="Server address" value={setup.url} /> : <CopyBlock label={SETUP[client.id]?.file ?? "Configuration"} value={snippet} />}
       <p className="text-[12px] text-ink-muted">Configuration from the gateway for {setup.url}.</p>
     </>
   );
