@@ -34,8 +34,9 @@ export default function SignIn({ demoToken, signingIn, error, onToken, onEmail, 
 
   // One orchestrated moment: the rail widens just after the first paint, like the console rail on hover.
   useEffect(() => {
-    const id = requestAnimationFrame(() => setOpen(true));
-    return () => cancelAnimationFrame(id);
+    // A timer, not requestAnimationFrame: background tabs never paint, and the rail stayed shut until shown.
+    const id = setTimeout(() => setOpen(true), 60);
+    return () => clearTimeout(id);
   }, []);
 
   const pick = (next: typeof method) => {
